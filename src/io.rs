@@ -4,17 +4,6 @@ use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-pub fn assert_not_stdout(path: &Path) -> Result<()> {
-    if path == Path::new("-") {
-        bail!("stdout is not supported; provide a real file path.");
-    }
-    Ok(())
-}
-
-pub fn looks_like_dir(path: &Path) -> bool {
-    path.extension().is_none() && !path.exists()
-}
-
 /// Write-then-rename wrapper for atomic big-file outputs
 pub struct PendingWrite {
     target: PathBuf,

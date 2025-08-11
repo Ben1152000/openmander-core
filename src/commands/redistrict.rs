@@ -1,10 +1,15 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use crate::cli::RedistrictArgs;
-use crate::io::{assert_not_stdout, finalize_big_write, open_for_big_write};
+use crate::io::{finalize_big_write, open_for_big_write};
 use std::io::Write;
+use std::path::{Path};
+
 
 pub fn run(cli: &crate::cli::Cli, args: &RedistrictArgs) -> Result<()> {
-    assert_not_stdout(&args.output)?;
+
+    // Assert output path is not stdout
+    if args.output == Path::new("-") { bail!("stdout is not supported."); }
+
     let mut sink = open_for_big_write(&args.output, args.force)?;
 
     if cli.verbose > 0 {

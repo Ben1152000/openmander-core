@@ -1,34 +1,37 @@
-use anyhow::Result;
-use std::path::PathBuf;
-
-use crate::cli::{DownloadArgs, OutputFormat};
-use crate::io::{assert_not_stdout, finalize_big_write, looks_like_dir, open_for_big_write};
+use anyhow::{bail, Context, Result};
+use crate::cli::{DownloadArgs};
+use crate::download::census::{download_geometries};
+use crate::download::daves::{download_demographic_data, download_election_data};
+use std::path::Path;
 
 pub fn run(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
-    let ext = match args.format {
-        OutputFormat::Geojson => "geojson",
-        OutputFormat::Parquet => "parquet",
-        OutputFormat::Shapefile => "shp",
-    };
 
-    let out_path: PathBuf = if args.out.is_dir() || looks_like_dir(&args.out) {
-        let fname = format!("{}.{}", args.state.to_ascii_lowercase(), ext);
-        args.out.join(fname)
-    } else {
-        args.out.clone()
-    };
+    // Assert output path is not stdout
+    if args.out == Path::new("-") { bail!("stdout is not supported."); }
 
-    assert_not_stdout(&out_path)?;
-    let sink = open_for_big_write(&out_path, args.force)?;
-
-    if cli.verbose > 0 {
-        eprintln!("[download] state={} -> {}", args.state, out_path.display());
+    // If the directory doesn't exist, create it
+    if args.out.extension().is_none() && !args.out.exists() {
+        std::fs::create_dir_all(&args.out)
+            .with_context(|| format!("create dir {}", args.out.display()))?;
     }
 
-    // TODO: stream network response into `sink`
-    // std::io::copy(&mut network_reader, &mut sink)?;
+    if !args.out.is_dir() { bail!("output path must be a directory."); }
 
-    finalize_big_write(sink)?;
-    println!("Downloaded {} -> {}", args.state, out_path.display());
-    Ok(())
+
+    if cli.verbose > 0 {
+        eprintln!("[download] state={}", &args.state);
+        eprintln!("[download] -> dir {}", &args.out.display());
+    }
+
+    download_geometries(&args.out, &args.state, cli.verbose)?;
+
+    download_demographic_data(&args.out, &args.state, cli.verbose)?;
+
+    download_election_data(&args.out, &args.state, cli.verbose)?;
+
+    if cli.verbose > 0 {
+        println!("Downloaded files for {} into {}", &args.state, &args.out.display());
+    }
+
+    return Ok(());
 }

@@ -27,15 +27,11 @@ pub struct DownloadArgs {
     /// Two/three-letter code, e.g. IL, CA, PR
     pub state: String,
 
-    /// Output location (file or directory). If a directory, the file name is derived.
-    #[arg(value_hint = ValueHint::AnyPath)]
+    /// Output location (directory).
+    #[arg(value_hint = ValueHint::DirPath)]
     pub out: PathBuf,
 
-    /// Output format (controls default extension)
-    #[arg(long, value_enum, default_value_t = OutputFormat::Geojson)]
-    pub format: OutputFormat,
-
-    /// Overwrite if the file exists (off by default)
+    /// Overwrite if the directory already exists (off by default)
     #[arg(long)]
     pub force: bool,
 }

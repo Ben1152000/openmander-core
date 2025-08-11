@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 /// Write-then-rename wrapper for atomic big-file outputs
-pub struct PendingWrite {
+struct PendingWrite {
     target: PathBuf,
     tmp: Option<(NamedTempFile, bool)>, // (file, need_fsync_dir)
 }
 
-pub fn open_for_big_write(target: &Path, force: bool) -> Result<PendingWrite> {
+fn open_for_big_write(target: &Path, force: bool) -> Result<PendingWrite> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
@@ -39,7 +39,7 @@ impl Seek for PendingWrite {
     }
 }
 
-pub fn finalize_big_write(mut pending: PendingWrite) -> Result<()> {
+fn finalize_big_write(mut pending: PendingWrite) -> Result<()> {
     let (tmp, need_fsync_dir) = pending.tmp.take().expect("not finalized");
     tmp.as_file().sync_all().ok(); // best-effort fsync file
     tmp.persist(&pending.target)
@@ -49,5 +49,21 @@ pub fn finalize_big_write(mut pending: PendingWrite) -> Result<()> {
             let _ = File::open(dir).and_then(|f| f.sync_all());
         }
     }
+    Ok(())
+}
+
+pub fn download_big_file(file_url: String, out_path: &PathBuf, force: bool) -> Result<()> {
+
+    // Safe big-file write (tempfile -> atomic rename), no accidental overwrite unless --force
+    let mut sink = open_for_big_write(&out_path, force)?;
+
+    let mut resp = reqwest::blocking::get(&file_url)
+        .with_context(|| format!("GET {file_url}"))?
+        .error_for_status()
+        .with_context(|| format!("GET {file_url} returned error status"))?;
+
+    std::io::copy(&mut resp, &mut sink).with_context(|| format!("write {}", out_path.display()))?;
+
+    finalize_big_write(sink)?;
     Ok(())
 }

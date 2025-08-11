@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use crate::io::{finalize_big_write, open_for_big_write};
+use crate::io::{download_big_file};
 use std::path::PathBuf;
 
 /// Return (two-digit FIPS code string, UPPER_SNAKE name) for a USPS postal code.
@@ -62,30 +62,17 @@ fn state_info(code: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// Build the Census TIGER 2020 PL directory URL for a given postal code.
-/// Example: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
-fn tiger2020pl_state_url(code: &str) -> Result<String> {
-    let p = code.to_ascii_uppercase();
-    let (fips, name) = state_info(&p)
-        .with_context(|| format!("Unknown state/territory postal code: {p}"))?;
-    Ok(format!(
-        "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/{}_{}_{}/{}/",
-        fips, name, "", fips
-    )
-    // previous line built ".../FIPS_NAME_/FIPS", but Census path has no trailing underscore after NAME.
-    // Let's fix that properly:
-    .replace("__", "_") // no-op safeguard
-    .replace("_/", "/") // drop accidental extra underscore before slash
-    .replace("_ ", "_")) // just-in-case spacing
-}
-
 /// Download geometry data from US Census website
-pub fn download_geometries(out_dir: &PathBuf, state: &String, verbose: u8) -> Result<()> {
-    // Build base URL dir and derive FIPS (e.g., "31")
+pub fn download_tiger_geometries(out_dir: &PathBuf, state: &String, verbose: u8) -> Result<()> {
 
-    let base = tiger2020pl_state_url(&state)?;
-    let (fips, _name) = state_info(&state.to_ascii_uppercase())
-        .context("Unknown state/territory postal code")?;
+    // Build the Census TIGER 2020 PL directory URL for a given postal code.
+    // Example: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
+    let code = state.to_ascii_uppercase();
+
+    let (fips, name) = state_info(&code)
+        .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
+
+    let base = format!("https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/{}_{}/{}/", fips, name, fips);
 
     // Filenames we need for TIGER 2020 (state/county/tract/bg/vtd/block)
     let files = [
@@ -101,23 +88,10 @@ pub fn download_geometries(out_dir: &PathBuf, state: &String, verbose: u8) -> Re
         let file_url = format!("{base}{name}");
         let out_path = out_dir.join(&name);
 
-        if verbose > 0 {
-            eprintln!("[download:{label}] {file_url} -> {}", out_path.display());
-        }
+        if verbose > 0 { eprintln!("[download:{label}] {file_url} -> {}", out_path.display()); }
 
-        // Safe big-file write (tempfile -> atomic rename), no accidental overwrite unless --force
-        let mut sink = open_for_big_write(&out_path, true)?;
-
-        let mut resp = reqwest::blocking::get(&file_url)
-            .with_context(|| format!("GET {file_url}"))?
-            .error_for_status()
-            .with_context(|| format!("GET {file_url} returned error status"))?;
-
-        std::io::copy(&mut resp, &mut sink)
-            .with_context(|| format!("write {}", out_path.display()))?;
-
-        finalize_big_write(sink)?;
+        download_big_file(file_url, &out_path, true)?;
     }
 
-    return Ok(());
+    Ok(())
 }

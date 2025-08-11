@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use crate::cli::{DownloadArgs};
-use crate::download::census::{download_geometries};
-use crate::download::daves::{download_demographic_data, download_election_data};
+use crate::download::{tiger::download_tiger_geometries, daves::download_daves_demographics, daves::download_daves_elections};
 use std::path::Path;
 
 pub fn run(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
@@ -23,11 +22,11 @@ pub fn run(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
         eprintln!("[download] -> dir {}", &args.out.display());
     }
 
-    download_geometries(&args.out, &args.state, cli.verbose)?;
+    download_tiger_geometries(&args.out, &args.state, cli.verbose)?;
 
-    download_demographic_data(&args.out, &args.state, cli.verbose)?;
+    download_daves_demographics(&args.out, &args.state, cli.verbose)?;
 
-    download_election_data(&args.out, &args.state, cli.verbose)?;
+    download_daves_elections(&args.out, &args.state, cli.verbose)?;
 
     if cli.verbose > 0 {
         println!("Downloaded files for {} into {}", &args.state, &args.out.display());

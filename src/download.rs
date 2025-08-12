@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::common::{
     fs::extract_zip, 
     fs::ensure_dir_exists, 
-    geography::{state_abbr_to_fips, state_abbr_to_name}, 
+    geo::{state_abbr_to_fips, state_abbr_to_name}, 
     io::download_big_file
 };
 

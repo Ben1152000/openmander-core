@@ -7,7 +7,7 @@ use openmander_core::commands::{download, redistrict};
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
-        Commands::Download(args) => download::run(&cli, args),
-        Commands::Redistrict(args) => redistrict::run(&cli, args),
+        Commands::Download(args) => download(&cli, args),
+        Commands::Redistrict(args) => redistrict(&cli, args),
     }
 }

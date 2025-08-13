@@ -1,7 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use geo::{MultiPolygon, Point};
-
+use geo::{Point};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntityType {
@@ -9,7 +8,7 @@ pub enum EntityType {
     County,     // County -> State
     Tract,      // Tract -> County
     Group,      // Group -> Tract
-    Vtd,        // VTD -> County
+    VTD,        // VTD -> County
     Block,      // Lowest-level entity
 }
 
@@ -18,56 +17,91 @@ pub enum EntityType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EntityKey {
     pub ty: EntityType,
-    pub geoid: Arc<str>, // e.g., "31001" for county, "310010001001001" for block
+    pub id: Arc<str>, // e.g., "31001" for county, "310010001001001" for block
 }
 
-/// Minimal row kept in the “all-entities” table.
-/// Geometry + adjacency live in level stores.
+/// Quick way to access parent entities across levels.
+#[derive(Debug, Clone, Default)]
+pub struct ParentRefs {
+    pub state: Option<EntityKey>,
+    pub county: Option<EntityKey>,
+    pub tract: Option<EntityKey>,
+    pub group: Option<EntityKey>,
+    pub vtd: Option<EntityKey>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Entity {
     pub key: EntityKey,
+    pub parents: ParentRefs,
 
-    // Optional human-friendly names (store only what exists for the level)
-    pub name: Option<Arc<str>>,        // common name (state/county/VTD etc.)
-    pub state_name: Option<Arc<str>>,
-    pub county_name: Option<Arc<str>>,
+    // Common name (state/county/VTD etc.)
+    pub name: Option<Arc<str>>,
 
-    // Parent pointer (immediate parent only), or None for top level.
-    pub parent: Option<EntityKey>,
-
-    // Optional derived metrics (all in meters / m²)
+    // Optional derived metrics
     pub area_m2: Option<f64>,
-    pub water_m2: Option<f64>,
-    pub perimeter_m: Option<f64>,
 
-    // Interior point (lon, lat).
+    // Interior point (lon, lat)
     pub centroid: Option<Point<f64>>,
-}
-
-/// Maps between global entity keys and per-level contiguous indices.
-#[derive(Debug)]
-pub struct EntityIndex {
-    pub ty: EntityType,
-    pub keys: Vec<EntityKey>,               // index -> key
-    pub inv_keys: HashMap<EntityKey, u32>   // key -> index
-}
-
-/// Per-level geometry store, separate from the entity table.
-/// Index order must align with a level-specific index mapping (see EntityIndex).
-#[derive(Debug)]
-pub struct LevelGeometry {
-    pub ty: EntityType,
-    /// CRS for the stored geometry.
-    /// must be computed after reprojection.
-    pub crs_epsg: i32,
-    /// Entity index -> geometry
-    pub geoms: Vec<MultiPolygon<f64>>,
 }
 
 /// Compact CSR adjacency for a single level.
 /// All indices are into a per-level contiguous array of entities (no strings).
-#[derive(Debug, Default, Clone)]
-pub struct CsrAdjacency {
+#[derive(Debug, Clone)]
+pub struct Adjacency {
+    pub ty: EntityType,
     pub indptr: Vec<u32>,  // len = n_entities + 1
     pub indices: Vec<u32>, // concatenated neighbor lists
+}
+
+
+#[derive(Debug)]
+pub struct MapLayer {
+    pub ty: EntityType,
+    pub entities: Vec<Entity>,
+    // pub demographics: (),
+    // pub elections: (),
+
+    // Maps between global entity keys and per-level contiguous indices.
+    pub index: HashMap<EntityKey, u32>,
+
+    // Per-level geometry store, indexed by entities.
+    pub geoms: Vec<shapefile::Polygon>,
+
+    // CSR adjacency within the layer.
+    // pub adj: (),
+}
+
+impl MapLayer {
+    pub fn new(ty: EntityType) -> Self {
+        Self {
+            ty,
+            entities: Vec::new(),
+            index: HashMap::new(),
+            geoms: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct MapData {
+    pub states: MapLayer,
+    pub counties: MapLayer,
+    pub tracts: MapLayer,
+    pub groups: MapLayer,
+    pub vtds: MapLayer,
+    pub blocks: MapLayer,
+}
+
+impl Default for MapData {
+    fn default() -> Self {
+        Self {
+            states: MapLayer::new(EntityType::State),
+            counties: MapLayer::new(EntityType::County),
+            tracts: MapLayer::new(EntityType::Tract),
+            groups: MapLayer::new(EntityType::Group),
+            vtds: MapLayer::new(EntityType::VTD),
+            blocks: MapLayer::new(EntityType::Block),
+        }
+    }
 }

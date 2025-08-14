@@ -1,14 +1,97 @@
-use std::{path::Path, str::FromStr, sync::Arc};
+use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
-use anyhow::{bail, Context, Ok, Result};
+use anyhow::{anyhow, bail, Ok, Result};
 use geo::{Point};
+use polars::{frame::DataFrame, prelude::{col, lit, DataType, IntoLazy, NamedFromOwned, NewChunkedArray, PlSmallStr, SortMultipleOptions, StringChunked}, series::{IntoSeries, Series}};
 use shapefile::{Shape, dbase::{Record, FieldValue}};
 
 use crate::{common::{data::*, fs::*}, types::*};
 
+fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {
+    let geoid_str: StringChunked = df
+        .column("GEOID")?
+        .i64()?
+        .into_iter()
+        .map(|opt| opt.map(|v| format!("{:015}", v)))
+        .collect();
+    df.replace("GEOID", geoid_str)?;
+    Ok(df)
+}
+
+fn sort_df_by_index(mut df: DataFrame, index: &HashMap<GeoId, u32>) -> Result<DataFrame> {
+    // Build the index values for each row
+    let idx_values: Vec<u32> = df.column("GEOID")?
+        .str()?
+        .into_iter()
+        .map(|opt| match opt {
+            Some(s) => match index.get(&GeoId { ty: GeoType::Block, id: Arc::from(s) }).copied() {
+                Some(i) => Ok(i),
+                None => bail!("GEOID {} not found in index", s)
+            },
+            None => bail!("Null GEOID in DataFrame"),
+        })
+        .collect::<Result<_>>()?;
+
+    // Add the index column (will stay in the DataFrame) and sort by index
+    Ok(
+        df.insert_column(0, Series::from_vec("__idx".into(), idx_values))?
+            .sort(["__idx"], SortMultipleOptions::default())?
+    )
+}
+
+fn aggregate_df_to_layer(df: &DataFrame, parents: &Vec<ParentRefs>, layer: &MapLayer) -> Result<DataFrame> {
+    // 1) Compute parent index per row (new __idx)
+    let idxs: Vec<u32> = df.column("__idx")?.u32()?
+        .into_no_null_iter()
+        .map(|i| {
+            let geo_id = parents
+                .get(i as usize)
+                .ok_or_else(|| anyhow!("row {} out of bounds (parents len = {})", i, parents.len()))?
+                .get(layer.ty)?
+                .clone()
+                .ok_or_else(|| anyhow!("parent reference {:?} not defined at row {}", layer.ty, i))?;
+            layer.index
+                .get(&geo_id)
+                .copied()
+                .ok_or_else(|| anyhow!("geoid {:?} not found in index", geo_id))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // 2) Names of numeric columns (everything after "__idx", "GEOID")
+    let cols: Vec<&str> = df.get_column_names()
+        .iter()
+        .skip(2)
+        .map(|s| s.as_str())
+        .collect();
+
+    // 3) Lazy replace __idx with parent_idx and aggregate numerics by parent __idx
+    let series = Series::from_vec("__idx".into(), idxs);
+    let mut out = df.clone()
+        .lazy()
+        .with_columns([lit(series).alias("__idx")]) // replace, not append
+        .group_by([col("__idx")])
+        .agg(cols.iter()
+            .map(|&c| col(c).sum().alias(c)) // keep original names
+            .collect::<Vec<_>>(),
+        )
+        .collect()?;
+
+    // 4) Add parent GEOID only for parent groups
+    let geoids: Vec<&str> = out.column("__idx".into())?.u32()?
+        .into_no_null_iter()
+        .map(|i| Ok(layer.entities.get(i as usize)
+            .ok_or_else(|| anyhow!("parent idx {} out of bounds (entities len = {})", i, layer.entities.len()))?
+            .geo_id.id.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
+
+    out.insert_column(1, StringChunked::from_iter_values("GEOID".into(), geoids.into_iter()).into_series())?;
+
+    Ok(out)
+}
+
 impl Entity {
     /// Convert a single (Shape, Record) into an Entity.
-    pub fn from_record(record: &Record, entity_type: EntityType) -> Self {
+    pub fn from_record(record: &Record, geo_type: GeoType) -> Self {
         /// Get the value of a character field from a Record
         fn get_character_field(record: &Record, field: &str) -> Option<String> {
             match record.get(field) {
@@ -25,46 +108,13 @@ impl Entity {
             }
         }
 
-        let geo_id: Arc<str> = Arc::from(get_character_field(record, "GEOID20").unwrap());
-
         Self {
-            key: EntityKey {
-                ty: entity_type,
-                id: geo_id.clone(),
+            geo_id: GeoId {
+                ty: geo_type,
+                id: Arc::from(get_character_field(record, "GEOID20").unwrap()),
             },
-            parents: ParentRefs {
-                state: match entity_type {
-                    EntityType::State => None,
-                    _ => Some(EntityKey {
-                        ty: EntityType::State,
-                        id: Arc::from(&geo_id[..2]),
-                    }),
-                },
-                county: match entity_type {
-                    EntityType::State | EntityType::County => None,
-                    _ => Some(EntityKey {
-                        ty: EntityType::County,
-                        id: Arc::from(&geo_id[..5]),
-                    }),
-                },
-                tract: match entity_type {
-                    EntityType::Group | EntityType::Block => Some(EntityKey {
-                        ty: EntityType::Tract,
-                        id: Arc::from(&geo_id[..11]),
-                    }),
-                    _ => None
-                },
-                group: match entity_type {
-                    EntityType::Block => Some(EntityKey {
-                        ty: EntityType::Group,
-                        id: Arc::from(&geo_id[..12]),
-                    }),
-                    _ => None,
-                },
-                vtd: None,
-            },
-            name: match entity_type {
-                EntityType::County | EntityType::Group => Some(Arc::from(get_character_field(record, "NAMELSAD20").unwrap())),
+            name: match geo_type {
+                GeoType::County | GeoType::Group => Some(Arc::from(get_character_field(record, "NAMELSAD20").unwrap())),
                 _ => Some(Arc::from(get_character_field(record, "NAME20").unwrap())),
             },
             area_m2: match (
@@ -90,7 +140,7 @@ impl Entity {
 }
 
 impl MapLayer {
-    fn insert(&mut self, shapes: Vec<(Shape, Record)>) -> Result<()> {
+    fn insert_shapes(&mut self, shapes: Vec<(Shape, Record)>) -> Result<()> {
         /// Coerce a generic shape into an owned polygon, raising error if different shape
         fn expect_polygon(shape: Shape) -> Result<shapefile::Polygon> {
             match shape {
@@ -103,15 +153,53 @@ impl MapLayer {
             .map(|(_, record)| Entity::from_record(record, self.ty))
             .collect();
 
-        self.geoms = shapes.into_iter()
-            .map(|(shape, _)| expect_polygon(shape))
-            .collect::<Result<_>>()?;
+        self.parents.resize(shapes.len(), ParentRefs::default());
+
+        self.geoms = Some(
+            shapes.into_iter()
+                .map(|(shape, _)| expect_polygon(shape))
+                .collect::<Result<_>>()?
+        );
 
         self.index = self.entities.iter().enumerate()
-            .map(|(i, entity)| (entity.key.clone(), i as u32))
+            .map(|(i, entity)| (entity.geo_id.clone(), i as u32))
             .collect();
 
         Ok(())
+    }
+
+    fn insert_df(&mut self, df: DataFrame) -> Result<()> {
+        todo!()
+    }
+
+    fn compute_parents(&mut self, parent_ty: GeoType) -> Result<()> {
+        self.entities.iter()
+            .enumerate()
+            .map(|(i, entity)| self.parents[i].set(parent_ty,Some(entity.geo_id.to_parent(parent_ty))))
+            .collect()
+    }
+}
+
+impl MapData {
+    fn compute_parents(&mut self) -> Result<()> {
+        self.counties.compute_parents(GeoType::State)?;
+
+        self.tracts.compute_parents(GeoType::County)?;
+        self.tracts.compute_parents(GeoType::State)?;
+
+        self.groups.compute_parents(GeoType::Tract)?;
+        self.groups.compute_parents(GeoType::County)?;
+        self.groups.compute_parents(GeoType::State)?;
+
+        self.vtds.compute_parents(GeoType::County)?;
+        self.vtds.compute_parents(GeoType::State)?;
+
+        self.blocks.compute_parents(GeoType::Group)?;
+        self.blocks.compute_parents(GeoType::Tract)?;
+        self.blocks.compute_parents(GeoType::County)?;
+        self.blocks.compute_parents(GeoType::State)?;
+
+        Ok(()) // todo: compute block -> vtd
     }
 }
 
@@ -123,20 +211,30 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, _verbose: u8) -> Result<()> 
 
     let mut map_data = MapData::default();
 
-    map_data.states.insert(read_shapefile(&input_dir.join("tl_2020_31_state20/tl_2020_31_state20.shp"))?)?;
-    map_data.counties.insert(read_shapefile(&input_dir.join("tl_2020_31_county20/tl_2020_31_county20.shp"))?)?;
-    map_data.tracts.insert(read_shapefile(&input_dir.join("tl_2020_31_tract20/tl_2020_31_tract20.shp"))?)?;
-    map_data.groups.insert(read_shapefile(&input_dir.join("tl_2020_31_bg20/tl_2020_31_bg20.shp"))?)?;
-    map_data.vtds.insert(read_shapefile(&input_dir.join("tl_2020_31_vtd20/tl_2020_31_vtd20.shp"))?)?;
+    map_data.states.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_state20/tl_2020_31_state20.shp"))?)?;
+    map_data.counties.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_county20/tl_2020_31_county20.shp"))?)?;
+    map_data.tracts.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_tract20/tl_2020_31_tract20.shp"))?)?;
+    map_data.groups.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_bg20/tl_2020_31_bg20.shp"))?)?;
+    map_data.vtds.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_vtd20/tl_2020_31_vtd20.shp"))?)?;
+    map_data.blocks.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_tabblock20/tl_2020_31_tabblock20.shp"))?)?;
 
-    let election_data = read_from_csv(&input_dir.join("Election_Data_Block_NE/election_data_block_NE.v06.csv"))?;
+    map_data.compute_parents()?;
 
-    let demographic_data = read_from_csv(&input_dir.join("Demographic_Data_Block_NE/demographic_data_block_NE.v06.csv"))?;
+    let mut election_data = read_from_csv(&input_dir.join("Election_Data_Block_NE/election_data_block_NE.v06.csv"))?;
+    election_data = ensure_geoid_is_str(election_data)?;
+    election_data = sort_df_by_index(election_data, &map_data.blocks.index)?;
+
+    let mut demographic_data = read_from_csv(&input_dir.join("Demographic_Data_Block_NE/demographic_data_block_NE.v06.csv"))?;
+    demographic_data = ensure_geoid_is_str(demographic_data)?;
+    demographic_data = sort_df_by_index(demographic_data, &map_data.blocks.index)?;
 
     println!("{:?}", election_data);
 
     println!("{:?}", demographic_data);
 
+    println!("{:?}", aggregate_df_to_layer(&election_data, &map_data.blocks.parents, &map_data.counties)?);
+
+    
 
     /*
     NE_2020_pack/
@@ -188,7 +286,8 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, _verbose: u8) -> Result<()> 
             }
     */
 
-    // write_to_parquet(election_data, &out_dir.join("test.parquet"))?;
+    // Load elections & demographic data (block level)
+    // Calculate aggregate data for higher levels
 
     // Load all shapefiles (one from each level)
     // Compute dense index for each level
@@ -198,8 +297,8 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, _verbose: u8) -> Result<()> 
     // Compute block -> vtd relation using geometry
     // Write csr adjacency matrices for each level
     // Write geometry layers (fgb) for each level
-    // Load elections & demographic data (block level)
-    // Calculate aggregate data for higher levels
+    
+    
     // Write elections & demographic data (parquet)
     // Validate & Write Metadata
 

@@ -1,9 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
+use anyhow::{bail, Result};
 use geo::{Point};
+use polars::frame::DataFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EntityType {
+pub enum GeoType {
     State,      // Highest-level entity
     County,     // County -> State
     Tract,      // Tract -> County
@@ -15,41 +17,83 @@ pub enum EntityType {
 /// Stable key for any entity across levels.
 /// Keep the original GEOID text (with leading zeros) but avoid repeated owned Strings.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EntityKey {
-    pub ty: EntityType,
+pub struct GeoId {
+    pub ty: GeoType,
     pub id: Arc<str>, // e.g., "31001" for county, "310010001001001" for block
+}
+
+impl GeoId {
+    /// Returns a new `GeoId` corresponding to the higher-level `GeoType`
+    /// by truncating this GeoId's string to the correct prefix length.
+    pub fn to_parent(&self, parent_ty: GeoType) -> GeoId {
+        let len = match parent_ty {
+            GeoType::State  => 2,
+            GeoType::County => 5,
+            GeoType::Tract  => 11,
+            GeoType::Group  => 12,
+            GeoType::VTD    => 11,
+            GeoType::Block  => 15,
+        };
+
+        // If the id is shorter than expected, just take the full id.
+        let prefix: Arc<str> = Arc::from(&self.id[..self.id.len().min(len)]);
+
+        GeoId {
+            ty: parent_ty,
+            id: prefix,
+        }
+    }
+}
+
+
+#[derive(Debug, Clone)]
+pub struct Entity {
+    pub geo_id: GeoId,
+    pub name: Option<Arc<str>>,  // Common name
+    pub area_m2: Option<f64>,
+    pub centroid: Option<Point<f64>>,  // Interior point (lon, lat)
 }
 
 /// Quick way to access parent entities across levels.
 #[derive(Debug, Clone, Default)]
 pub struct ParentRefs {
-    pub state: Option<EntityKey>,
-    pub county: Option<EntityKey>,
-    pub tract: Option<EntityKey>,
-    pub group: Option<EntityKey>,
-    pub vtd: Option<EntityKey>,
+    pub state: Option<GeoId>,
+    pub county: Option<GeoId>,
+    pub tract: Option<GeoId>,
+    pub group: Option<GeoId>,
+    pub vtd: Option<GeoId>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Entity {
-    pub key: EntityKey,
-    pub parents: ParentRefs,
+impl ParentRefs {
+    pub fn get(&self, ty: GeoType) -> Result<&Option<GeoId>> {
+        match ty {
+            GeoType::State => Ok(&self.state),
+            GeoType::County => Ok(&self.county),
+            GeoType::Tract => Ok(&self.tract),
+            GeoType::Group => Ok(&self.group),
+            GeoType::VTD => Ok(&self.vtd),
+            GeoType::Block => bail!("Blocks cannot be a parent reference")
+        }
+    }
 
-    // Common name (state/county/VTD etc.)
-    pub name: Option<Arc<str>>,
-
-    // Optional derived metrics
-    pub area_m2: Option<f64>,
-
-    // Interior point (lon, lat)
-    pub centroid: Option<Point<f64>>,
+    pub fn set(&mut self, ty: GeoType, value: Option<GeoId>) -> Result<()> {
+        match ty {
+            GeoType::State => self.state = value,
+            GeoType::County => self.county = value,
+            GeoType::Tract => self.tract = value,
+            GeoType::Group => self.group = value,
+            GeoType::VTD => self.vtd = value,
+            GeoType::Block => bail!("Blocks cannot be a parent reference")
+        }
+        Ok(())
+    }
 }
 
 /// Compact CSR adjacency for a single level.
 /// All indices are into a per-level contiguous array of entities (no strings).
 #[derive(Debug, Clone)]
 pub struct Adjacency {
-    pub ty: EntityType,
+    pub ty: GeoType,
     pub indptr: Vec<u32>,  // len = n_entities + 1
     pub indices: Vec<u32>, // concatenated neighbor lists
 }
@@ -57,28 +101,32 @@ pub struct Adjacency {
 
 #[derive(Debug)]
 pub struct MapLayer {
-    pub ty: EntityType,
+    pub ty: GeoType,
     pub entities: Vec<Entity>,
-    // pub demographics: (),
-    // pub elections: (),
+    pub parents: Vec<ParentRefs>,
+    pub demo_data: Option<DataFrame>, // Demographic data
+    pub elec_data: Option<DataFrame>, // Election data
 
     // Maps between global entity keys and per-level contiguous indices.
-    pub index: HashMap<EntityKey, u32>,
+    pub index: HashMap<GeoId, u32>,
 
     // Per-level geometry store, indexed by entities.
-    pub geoms: Vec<shapefile::Polygon>,
+    pub geoms: Option<Vec<shapefile::Polygon>>,
 
     // CSR adjacency within the layer.
     // pub adj: (),
 }
 
 impl MapLayer {
-    pub fn new(ty: EntityType) -> Self {
+    pub fn new(ty: GeoType) -> Self {
         Self {
             ty,
             entities: Vec::new(),
+            parents: Vec::new(),
+            demo_data: None,
+            elec_data: None,
             index: HashMap::new(),
-            geoms: Vec::new(),
+            geoms: None,
         }
     }
 }
@@ -96,12 +144,12 @@ pub struct MapData {
 impl Default for MapData {
     fn default() -> Self {
         Self {
-            states: MapLayer::new(EntityType::State),
-            counties: MapLayer::new(EntityType::County),
-            tracts: MapLayer::new(EntityType::Tract),
-            groups: MapLayer::new(EntityType::Group),
-            vtds: MapLayer::new(EntityType::VTD),
-            blocks: MapLayer::new(EntityType::Block),
+            states: MapLayer::new(GeoType::State),
+            counties: MapLayer::new(GeoType::County),
+            tracts: MapLayer::new(GeoType::Tract),
+            groups: MapLayer::new(GeoType::Group),
+            vtds: MapLayer::new(GeoType::VTD),
+            blocks: MapLayer::new(GeoType::Block),
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{bail, Result};
-use geo::{Point};
+use geo::{MultiPolygon, Point};
 use polars::frame::DataFrame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,29 +89,17 @@ impl ParentRefs {
     }
 }
 
-/// Compact CSR adjacency for a single level.
-/// All indices are into a per-level contiguous array of entities (no strings).
-#[derive(Debug, Clone)]
-pub struct Adjacency {
-    pub ty: GeoType,
-    pub indptr: Vec<u32>,  // len = n_entities + 1
-    pub indices: Vec<u32>, // concatenated neighbor lists
-}
-
-
 #[derive(Debug)]
 pub struct MapLayer {
     pub ty: GeoType,
+    pub index: HashMap<GeoId, u32>, // Map between geo_id and per-level contiguous indices.
     pub entities: Vec<Entity>,
     pub parents: Vec<ParentRefs>,
     pub demo_data: Option<DataFrame>, // Demographic data
     pub elec_data: Option<DataFrame>, // Election data
 
-    // Maps between global entity keys and per-level contiguous indices.
-    pub index: HashMap<GeoId, u32>,
-
     // Per-level geometry store, indexed by entities.
-    pub geoms: Option<Vec<shapefile::Polygon>>,
+    pub geoms: Option<Vec<MultiPolygon<f64>>>,
 
     // CSR adjacency within the layer.
     // pub adj: (),

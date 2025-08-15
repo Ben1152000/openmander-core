@@ -1,11 +1,11 @@
 use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
 use anyhow::{anyhow, bail, Ok, Result};
-use geo::{Point};
+use geo::{MultiPolygon, Point};
 use polars::{frame::DataFrame, prelude::{col, lit, DataType, IntoLazy, NamedFromOwned, NewChunkedArray, PlSmallStr, SortMultipleOptions, StringChunked}, series::{IntoSeries, Series}};
 use shapefile::{Shape, dbase::{Record, FieldValue}};
 
-use crate::{common::{data::*, fs::*}, types::*};
+use crate::{common::{data::*, fs::*, polygon::shp_to_geo}, types::*};
 
 fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {
     let geoid_str: StringChunked = df
@@ -156,9 +156,10 @@ impl MapLayer {
         self.parents.resize(shapes.len(), ParentRefs::default());
 
         self.geoms = Some(
-            shapes.into_iter()
-                .map(|(shape, _)| expect_polygon(shape))
-                .collect::<Result<_>>()?
+            shapes
+                .into_iter()
+                .map(|(shape, _)| Ok(shp_to_geo(&expect_polygon(shape)?)))
+                .collect::<Result<Vec<_>>>()?
         );
 
         self.index = self.entities.iter().enumerate()
@@ -234,7 +235,12 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, _verbose: u8) -> Result<()> 
 
     println!("{:?}", aggregate_df_to_layer(&election_data, &map_data.blocks.parents, &map_data.counties)?);
 
-    
+    // Compute adjacency matrices for each level
+    // Compute perimeter & edge weights using geometry
+    // Compute block -> vtd relation using geometry
+    // Write csr adjacency matrices for each level
+    // Validate & Write Metadata
+
 
     /*
     NE_2020_pack/
@@ -285,23 +291,6 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, _verbose: u8) -> Result<()> 
                 "files":{"geometries/blocks.fgb":{"sha256":"…"}}
             }
     */
-
-    // Load elections & demographic data (block level)
-    // Calculate aggregate data for higher levels
-
-    // Load all shapefiles (one from each level)
-    // Compute dense index for each level
-    // Construct entities df from records
-    // Compute adjacency matrices for each level
-    // Compute perimeter & edge weights using geometry
-    // Compute block -> vtd relation using geometry
-    // Write csr adjacency matrices for each level
-    // Write geometry layers (fgb) for each level
-    
-    
-    // Write elections & demographic data (parquet)
-    // Validate & Write Metadata
-
 
     // 1. Load VTD shapefile → build dense index (VTD) → write geometry (FGB)
     //   - Read VTDs first (much fewer than blocks).

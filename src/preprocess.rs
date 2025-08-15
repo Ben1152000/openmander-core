@@ -1,23 +1,27 @@
-use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
+use std::{collections::HashMap, hash::Hash, path::Path, str::FromStr, sync::Arc};
 
 use anyhow::{anyhow, bail, Ok, Result};
 use geo::{MultiPolygon, Point};
-use polars::{frame::DataFrame, prelude::{col, lit, DataType, IntoLazy, NamedFromOwned, NewChunkedArray, PlSmallStr, SortMultipleOptions, StringChunked}, series::{IntoSeries, Series}};
+use polars::{frame::DataFrame, prelude::*, series::{IntoSeries, Series}};
 use shapefile::{Shape, dbase::{Record, FieldValue}};
 
-use crate::{common::{data::*, fs::*, polygon::shp_to_geo}, types::*};
+use crate::{common::{data::*, fs::*, polygon::shp_to_geo}, geometry::PlanarPartition, types::*};
 
+/// Convert GEOID column from i64 to String type
 fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {
-    let geoid_str: StringChunked = df
-        .column("GEOID")?
-        .i64()?
-        .into_iter()
-        .map(|opt| opt.map(|v| format!("{:015}", v)))
-        .collect();
-    df.replace("GEOID", geoid_str)?;
+    if *df.column("GEOID")?.dtype() != DataType::String {
+        let geoid_str: StringChunked = df
+            .column("GEOID")?
+            .i64()?
+            .into_iter()
+            .map(|opt| opt.map(|v| format!("{:015}", v)))
+            .collect();
+        df.replace("GEOID", geoid_str)?;
+    }
     Ok(df)
 }
 
+/// Create __idx column and sort DataFrame by __idx
 fn sort_df_by_index(mut df: DataFrame, index: &HashMap<GeoId, u32>) -> Result<DataFrame> {
     // Build the index values for each row
     let idx_values: Vec<u32> = df.column("GEOID")?
@@ -39,6 +43,7 @@ fn sort_df_by_index(mut df: DataFrame, index: &HashMap<GeoId, u32>) -> Result<Da
     )
 }
 
+/// Aggregate values in DataFrame by parent layer
 fn aggregate_df_to_layer(df: &DataFrame, parents: &Vec<ParentRefs>, layer: &MapLayer) -> Result<DataFrame> {
     // 1) Compute parent index per row (new __idx)
     let idxs: Vec<u32> = df.column("__idx")?.u32()?
@@ -84,9 +89,22 @@ fn aggregate_df_to_layer(df: &DataFrame, parents: &Vec<ParentRefs>, layer: &MapL
             .geo_id.id.as_ref()))
         .collect::<Result<Vec<_>>>()?;
 
-    out.insert_column(1, StringChunked::from_iter_values("GEOID".into(), geoids.into_iter()).into_series())?;
+    Ok(
+        out.insert_column(1, StringChunked::from_iter_values("GEOID".into(), geoids.into_iter()).into_series())?
+            .sort(["__idx"], SortMultipleOptions::default())?
+    )
+}
 
-    Ok(out)
+/// Convert a crosswalk DataFrame to a map of GeoIds
+fn get_map_from_crosswalk_df(df: &DataFrame, geo_types: (GeoType, GeoType), col_names: (&str, &str)) -> Result<HashMap<GeoId, GeoId>> {
+    Ok(df.column(col_names.0.into())?.str()?
+        .into_iter()
+        .zip(df.column(col_names.1.into())?.str()?)
+        .filter_map(|(b, d)| Some((
+            GeoId { ty: geo_types.0, id: Arc::from(b?) },
+            GeoId { ty: geo_types.1, id: Arc::from(format!("{}{}", &b?[..5], d?)) },
+        )))
+        .collect())
 }
 
 impl Entity {
@@ -155,12 +173,12 @@ impl MapLayer {
 
         self.parents.resize(shapes.len(), ParentRefs::default());
 
-        self.geoms = Some(
-            shapes
-                .into_iter()
-                .map(|(shape, _)| Ok(shp_to_geo(&expect_polygon(shape)?)))
-                .collect::<Result<Vec<_>>>()?
-        );
+        let polygons: Vec<MultiPolygon> = shapes
+            .into_iter()
+            .map(|(shape, _)| Ok(shp_to_geo(&expect_polygon(shape)?)))
+            .collect::<Result<Vec<_>>>()?;
+
+        self.geoms = Some(PlanarPartition::new(polygons));
 
         self.index = self.entities.iter().enumerate()
             .map(|(i, entity)| (entity.geo_id.clone(), i as u32))
@@ -169,78 +187,132 @@ impl MapLayer {
         Ok(())
     }
 
-    fn insert_df(&mut self, df: DataFrame) -> Result<()> {
-        todo!()
-    }
-
-    fn compute_parents(&mut self, parent_ty: GeoType) -> Result<()> {
+    fn assign_parents(&mut self, parent_ty: GeoType) -> Result<()> {
         self.entities.iter()
             .enumerate()
-            .map(|(i, entity)| self.parents[i].set(parent_ty,Some(entity.geo_id.to_parent(parent_ty))))
+            .map(|(i, e)| self.parents[i].set(parent_ty,Some(e.geo_id.to_parent(parent_ty))))
             .collect()
+    }
+
+    fn assign_parents_from_map(&mut self, parent_ty: GeoType, parent_map: HashMap<GeoId, GeoId>) -> Result<()> {
+        self.entities.iter()
+            .enumerate()
+            .map(|(i, e)| parent_map
+                .get(&e.geo_id)
+                .ok_or_else(|| anyhow!("No parent found for entity with geo_id: {:?}", e.geo_id))
+                .map(|p| self.parents[i].set(parent_ty, Some(p.clone()))))
+            .collect::<Result<_>>()?
     }
 }
 
 impl MapData {
     fn compute_parents(&mut self) -> Result<()> {
-        self.counties.compute_parents(GeoType::State)?;
+        self.counties.assign_parents(GeoType::State)?;
+        self.tracts.assign_parents(GeoType::County)?;
+        self.tracts.assign_parents(GeoType::State)?;
+        self.groups.assign_parents(GeoType::Tract)?;
+        self.groups.assign_parents(GeoType::County)?;
+        self.groups.assign_parents(GeoType::State)?;
+        self.vtds.assign_parents(GeoType::County)?;
+        self.vtds.assign_parents(GeoType::State)?;
+        self.blocks.assign_parents(GeoType::Group)?;
+        self.blocks.assign_parents(GeoType::Tract)?;
+        self.blocks.assign_parents(GeoType::County)?;
+        self.blocks.assign_parents(GeoType::State)?;
+        Ok(())
+    }
 
-        self.tracts.compute_parents(GeoType::County)?;
-        self.tracts.compute_parents(GeoType::State)?;
+    fn insert_demo_data(&mut self, block_demo_df: DataFrame) -> Result<()> {
+        let df = sort_df_by_index(ensure_geoid_is_str(block_demo_df)?, &self.blocks.index)?;
+        self.states.demo_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.states)?);
+        self.counties.demo_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.counties)?);
+        self.tracts.demo_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.tracts)?);
+        self.groups.demo_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.groups)?);
+        self.vtds.demo_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.vtds)?);
+        self.blocks.demo_data = Some(df);
+        Ok(())
+    }
 
-        self.groups.compute_parents(GeoType::Tract)?;
-        self.groups.compute_parents(GeoType::County)?;
-        self.groups.compute_parents(GeoType::State)?;
-
-        self.vtds.compute_parents(GeoType::County)?;
-        self.vtds.compute_parents(GeoType::State)?;
-
-        self.blocks.compute_parents(GeoType::Group)?;
-        self.blocks.compute_parents(GeoType::Tract)?;
-        self.blocks.compute_parents(GeoType::County)?;
-        self.blocks.compute_parents(GeoType::State)?;
-
-        Ok(()) // todo: compute block -> vtd
+    fn insert_elec_data(&mut self, block_elec_df: DataFrame) -> Result<()> {
+        let df = sort_df_by_index(ensure_geoid_is_str(block_elec_df)?, &self.blocks.index)?;
+        self.states.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.states)?);
+        self.counties.demo_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.counties)?);
+        self.tracts.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.tracts)?);
+        self.groups.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.groups)?);
+        self.vtds.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.vtds)?);
+        self.blocks.elec_data = Some(df);
+        Ok(())
     }
 }
 
 /// End-to-end: read raw downloads → write pack files.
 /// Keep this thin; all work lives in submodules.
-pub fn build_pack(input_dir: &Path, out_dir: &Path, _verbose: u8) -> Result<()> {
+pub fn build_pack(input_dir: &Path, out_dir: &Path, verbose: u8) -> Result<()> {
     require_dir_exists(input_dir)?;
     ensure_dir_exists(out_dir)?;
 
     let mut map_data = MapData::default();
 
-    map_data.states.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_state20/tl_2020_31_state20.shp"))?)?;
-    map_data.counties.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_county20/tl_2020_31_county20.shp"))?)?;
-    map_data.tracts.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_tract20/tl_2020_31_tract20.shp"))?)?;
-    map_data.groups.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_bg20/tl_2020_31_bg20.shp"))?)?;
-    map_data.vtds.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_vtd20/tl_2020_31_vtd20.shp"))?)?;
-    map_data.blocks.insert_shapes(read_shapefile(&input_dir.join("tl_2020_31_tabblock20/tl_2020_31_tabblock20.shp"))?)?;
+    if verbose > 0 { eprintln!("Loading shapefiles"); }
+    let state_shapes_path = "tl_2020_31_state20/tl_2020_31_state20.shp";
+    let county_shapes_path = "tl_2020_31_county20/tl_2020_31_county20.shp";
+    let tract_shapes_path = "tl_2020_31_tract20/tl_2020_31_tract20.shp";
+    let group_shapes_path = "tl_2020_31_bg20/tl_2020_31_bg20.shp";
+    let vtd_shapes_path = "tl_2020_31_vtd20/tl_2020_31_vtd20.shp";
+    let block_shapes_path = "tl_2020_31_tabblock20/tl_2020_31_tabblock20.shp";
 
+    if verbose > 0 { eprintln!("[preprocess] loading {state_shapes_path}"); }
+    map_data.states.insert_shapes(read_shapefile(&input_dir.join(state_shapes_path))?)?;
+
+    if verbose > 0 { eprintln!("[preprocess] loading {county_shapes_path}"); }
+    map_data.counties.insert_shapes(read_shapefile(&input_dir.join(county_shapes_path))?)?;
+
+    if verbose > 0 { eprintln!("[preprocess] loading {tract_shapes_path}"); }
+    map_data.tracts.insert_shapes(read_shapefile(&input_dir.join(tract_shapes_path))?)?;
+
+    if verbose > 0 { eprintln!("[preprocess] loading {group_shapes_path}"); }
+    map_data.groups.insert_shapes(read_shapefile(&input_dir.join(group_shapes_path))?)?;
+
+    if verbose > 0 { eprintln!("[preprocess] loading {vtd_shapes_path}"); }
+    map_data.vtds.insert_shapes(read_shapefile(&input_dir.join(vtd_shapes_path))?)?;
+
+    if verbose > 0 { eprintln!("[preprocess] loading {block_shapes_path}"); }
+    map_data.blocks.insert_shapes(read_shapefile(&input_dir.join(block_shapes_path))?)?;
+
+    if verbose > 0 { eprintln!("Computing crosswalks"); }
+    let block_assign_path = "BlockAssign_ST31_NE/BlockAssign_ST31_NE_VTD.txt";
     map_data.compute_parents()?;
 
-    let mut election_data = read_from_csv(&input_dir.join("Election_Data_Block_NE/election_data_block_NE.v06.csv"))?;
-    election_data = ensure_geoid_is_str(election_data)?;
-    election_data = sort_df_by_index(election_data, &map_data.blocks.index)?;
+    if verbose > 0 { eprintln!("[preprocess] loading {block_assign_path}"); }
+    map_data.blocks.assign_parents_from_map(
+        GeoType::VTD,
+        get_map_from_crosswalk_df(
+            &read_from_pipe_delimited_txt(&input_dir.join(block_assign_path))?, 
+            (GeoType::Block, GeoType::VTD), 
+            ("BLOCKID", "DISTRICT")
+        )?
+    )?;
 
-    let mut demographic_data = read_from_csv(&input_dir.join("Demographic_Data_Block_NE/demographic_data_block_NE.v06.csv"))?;
-    demographic_data = ensure_geoid_is_str(demographic_data)?;
-    demographic_data = sort_df_by_index(demographic_data, &map_data.blocks.index)?;
+    if verbose > 0 { eprintln!("Loading datasets"); }
+    let demo_data_path = "Demographic_Data_Block_NE/demographic_data_block_NE.v06.csv";
+    let elec_data_path: &'static str = "Election_Data_Block_NE/election_data_block_NE.v06.csv";
 
-    println!("{:?}", election_data);
+    if verbose > 0 { eprintln!("[preprocess] loading {demo_data_path}"); }
+    map_data.insert_demo_data(read_from_csv(&input_dir.join(demo_data_path))?)?;
 
-    println!("{:?}", demographic_data);
+    if verbose > 0 { eprintln!("[preprocess] loading {elec_data_path}"); }
+    map_data.insert_elec_data(read_from_csv(&input_dir.join(elec_data_path))?)?;
 
-    println!("{:?}", aggregate_df_to_layer(&election_data, &map_data.blocks.parents, &map_data.counties)?);
+    // println!("{:?}", map_data.counties.geoms.unwrap().find_overlaps(1e-8));
+
+    if verbose > 0 { eprintln!("Computing adjacencies"); }
+    map_data.blocks.compute_adjacencies()?;
 
     // Compute adjacency matrices for each level
     // Compute perimeter & edge weights using geometry
-    // Compute block -> vtd relation using geometry
-    // Write csr adjacency matrices for each level
-    // Validate & Write Metadata
 
+    // Write data files
+    // Validate & Write Metadata
 
     /*
     NE_2020_pack/

@@ -2,9 +2,8 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use crate::common::{
-    fs::extract_zip, 
-    fs::ensure_dir_exists, 
-    geo::{state_abbr_to_fips, state_abbr_to_name}, 
+    fs::extract_zip,
+    geo::{state_abbr_to_fips, state_abbr_to_name},
     io::download_big_file
 };
 
@@ -43,19 +42,17 @@ pub fn download_daves_elections(out_dir: &PathBuf, state: &String, verbose: u8) 
     Ok(())
 }
 
-/// Download geometry data from US Census website
+/// Download geometry data from US Census TIGER 2020 PL directory
+/// Example URL: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
 pub fn download_tiger_geometries(out_dir: &PathBuf, state: &String, verbose: u8) -> Result<()> {
-    // Build the Census TIGER 2020 PL directory URL for a given postal code.
-    // Example: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
     let code = state.to_ascii_uppercase();
-
+    let fips = state_abbr_to_fips(&code)
+        .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
     let name = state_abbr_to_name(&code)
         .with_context(|| format!("Unknown state/territory postal code: {code}"))?
         .to_ascii_uppercase();
-    let fips = state_abbr_to_fips(&code)
-        .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
 
-    let base = format!("https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/{}_{}/{}/", fips, name, fips);
+    let base = format!("https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/{fips}_{name}/{fips}/");
 
     // Filenames we need for TIGER 2020 (state/county/tract/bg/vtd/block)
     let files = ["state20", "county20", "tract20", "bg20", "vtd20", "tabblock20"];
@@ -75,24 +72,23 @@ pub fn download_tiger_geometries(out_dir: &PathBuf, state: &String, verbose: u8)
     Ok(())
 }
 
-/// Download all map files for the given state (specificied by state_code) into the output directory
-pub fn download_all_files(out_dir: &PathBuf, state_code: &String, verbose: u8) -> Result<()> {
-    ensure_dir_exists(out_dir)?;
+/// Download block-level crosswalks from the US Census website
+/// Example URL: "NE" -> "https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST31_NE.zip"
+pub fn download_census_crosswalks(out_dir: &PathBuf, state: &String, verbose: u8) -> Result<()> {
+    let code = state.to_ascii_uppercase();
+    let fips = state_abbr_to_fips(&code)
+        .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
 
-    if verbose > 0 {
-        eprintln!("[download] state={}", state_code);
-        eprintln!("[download] -> dir {}", out_dir.display());
-    }
+    let file_url = format!("https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST{fips}_{code}.zip");
 
-    download_tiger_geometries(out_dir, state_code, verbose)?;
+    let zip_path = out_dir.join(format!("BlockAssign_ST{fips}_{code}.zip"));
+    let out_path = out_dir.join(format!("BlockAssign_ST{fips}_{code}"));
 
-    download_daves_demographics(out_dir, state_code, verbose)?;
+    if verbose > 0 { eprintln!("[download] {file_url} -> {}", zip_path.display()); }
+    download_big_file(file_url, &zip_path, true)?;
 
-    download_daves_elections(out_dir, state_code, verbose)?;
-
-    if verbose > 0 {
-        println!("Downloaded files for {} into {}", state_code, out_dir.display());
-    }
+    if verbose > 0 { eprintln!("[extract] {} -> {}", zip_path.display(), out_path.display()); }
+    extract_zip(&zip_path, &out_path, true)?;
 
     Ok(())
 }

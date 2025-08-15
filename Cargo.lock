@@ -1709,6 +1709,7 @@ dependencies = [
  "geo",
  "polars",
  "reqwest",
+ "rstar",
  "shapefile",
  "tempfile",
  "walkdir",

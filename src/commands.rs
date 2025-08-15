@@ -2,7 +2,7 @@ use anyhow::{Result};
 
 use crate::cli::{DownloadArgs, RedistrictArgs};
 use crate::common::fs::ensure_dir_exists;
-use crate::download::download_all_files;
+use crate::download::*;
 use crate::preprocess::build_pack;
 
 pub fn download(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
@@ -15,7 +15,23 @@ pub fn download(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
     ensure_dir_exists(&download_dir)?;
 
     if false { // remove when done testing
-        download_all_files(download_dir, state_code, cli.verbose)?;
+        // Download all map files for the given state (specificied by state_code) into the output directory
+        if cli.verbose > 0 {
+            eprintln!("[download] state={}", state_code);
+            eprintln!("[download] -> dir {}", download_dir.display());
+        }
+
+        download_tiger_geometries(download_dir, state_code, cli.verbose)?;
+
+        download_daves_demographics(download_dir, state_code, cli.verbose)?;
+
+        download_daves_elections(download_dir, state_code, cli.verbose)?;
+
+        download_census_crosswalks(download_dir, state_code, cli.verbose)?;
+
+        if cli.verbose > 0 {
+            println!("Downloaded files for {} into {}", state_code, download_dir.display());
+        }
     }
 
     build_pack(download_dir, out_dir, cli.verbose)?;

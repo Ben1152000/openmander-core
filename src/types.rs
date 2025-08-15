@@ -1,8 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{bail, Result};
-use geo::{MultiPolygon, Point};
+use anyhow::{anyhow, bail, Result};
 use polars::frame::DataFrame;
+
+use crate::geometry::PlanarPartition;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GeoType {
@@ -51,7 +52,7 @@ pub struct Entity {
     pub geo_id: GeoId,
     pub name: Option<Arc<str>>,  // Common name
     pub area_m2: Option<f64>,
-    pub centroid: Option<Point<f64>>,  // Interior point (lon, lat)
+    pub centroid: Option<geo::Point<f64>>,  // Interior point (lon, lat)
 }
 
 /// Quick way to access parent entities across levels.
@@ -99,7 +100,7 @@ pub struct MapLayer {
     pub elec_data: Option<DataFrame>, // Election data
 
     // Per-level geometry store, indexed by entities.
-    pub geoms: Option<Vec<MultiPolygon<f64>>>,
+    pub geoms: Option<PlanarPartition>,
 
     // CSR adjacency within the layer.
     // pub adj: (),
@@ -116,6 +117,14 @@ impl MapLayer {
             index: HashMap::new(),
             geoms: None,
         }
+    }
+
+    pub fn compute_adjacencies(&mut self) -> Result<()> { 
+        self.geoms
+            .as_mut()
+            .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?
+            .compute_adjacencies()?;
+        Ok(())
     }
 }
 

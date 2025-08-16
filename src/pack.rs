@@ -1,63 +1,10 @@
-use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
+use std::{collections::BTreeMap, fs::File, path::Path};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::{common::{data::*, fs::*}, types::*};
-
-/*
-Pack format:
-
-NE_2020_pack/
-  download/ (temp dir)
-  entities/
-    state.parquet
-    county.parquet
-    tract.parquet
-    group.parquet
-    vtd.parquet
-    block.parquet
-  elections/
-    state.parquet
-    county.parquet
-    tract.parquet
-    group.parquet
-    vtd.parquet
-    block.parquet
-  demographics/
-    state.parquet
-    county.parquet
-    tract.parquet
-    group.parquet
-    vtd.parquet
-    block.parquet
-  relations/
-    county.csr.bin
-    tract.csr.bin
-    group.csr.bin
-    vtd.csr.bin
-    block.csr.bin
-    block_to_vtd.parquet
-  geometries/
-    state.fgb
-    counties.fgb
-    tracts.fgb
-    groups.fgb
-    vtds.fgb
-    blocks.fgb
-  meta/
-    manifest.json
-        { 
-            "pack_id":"NE-2020", 
-            "version":"1", 
-            "crs":"EPSG:4269", 
-            "levels":["state","county","tract","blockgroup","vtd","block"], 
-            "counts":{"block":123456}, 
-            "files":{"geometries/blocks.fgb":{"sha256":"…"}}
-        }
-*/
 
 
 #[derive(Serialize, Deserialize)]
@@ -75,75 +22,8 @@ struct FileHash {
     sha256: String,
 }
 
-fn level_str(ty: GeoType) -> &'static str {
-    match ty {
-        GeoType::State => "state",
-        GeoType::County => "county",
-        GeoType::Tract => "tract",
-        GeoType::Group => "group",
-        GeoType::VTD => "vtd",
-        GeoType::Block => "block",
-    }
-}
-
-fn levels_in_order() -> [GeoType; 6] {
-    [
-        GeoType::State,
-        GeoType::County,
-        GeoType::Tract,
-        GeoType::Group,
-        GeoType::VTD,
-        GeoType::Block,
-    ]
-}
-
-fn layer_pair<'a>(md: &'a MapData, ty: GeoType) -> (&'a MapLayer, &'static str) {
-    let s = level_str(ty);
-    let l = match ty {
-        GeoType::State => &md.states,
-        GeoType::County => &md.counties,
-        GeoType::Tract => &md.tracts,
-        GeoType::Group => &md.groups,
-        GeoType::VTD => &md.vtds,
-        GeoType::Block => &md.blocks,
-    };
-    (l, s)
-}
-
-fn layer_pair_mut<'a>(md: &'a mut MapData, ty: GeoType) -> (&'a mut MapLayer, &'static str) {
-    let s = level_str(ty);
-    let l = match ty {
-        GeoType::State => &mut md.states,
-        GeoType::County => &mut md.counties,
-        GeoType::Tract => &mut md.tracts,
-        GeoType::Group => &mut md.groups,
-        GeoType::VTD => &mut md.vtds,
-        GeoType::Block => &mut md.blocks,
-    };
-    (l, s)
-}
-
-fn sha256_file(rel_path: &str, root: &Path) -> Result<(String, String)> {
-    let full = root.join(rel_path);
-    let mut file = File::open(&full)
-        .with_context(|| format!("open for hash {}", full.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 1 << 16];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    let hex = hex::encode(hasher.finalize());
-    Ok((rel_path.to_string(), hex))
-}
-
 fn entities_to_df(layer: &MapLayer) -> Result<DataFrame> {
-    let n = layer.entities.len();
-
-    let geotype: Vec<&str> = (0..n).map(|_| level_str(layer.ty)).collect();
+    let geotype: Vec<&str> = (0..layer.entities.len()).map(|_| layer.ty.to_str()).collect();
     let geoid: Vec<String> = layer.entities.iter()
         .map(|e| e.geo_id.id.to_string())
         .collect();
@@ -244,14 +124,35 @@ fn df_to_entities(df: &DataFrame, ty: GeoType) -> Result<(Vec<Entity>, Vec<Paren
 }
 
 pub fn write_pack(path: &Path, map_data: &MapData) -> Result<()> {
+    // Pack format:
+    //   NE_2020_pack/
+    //     download/ (temp dir)
+    //     entities/
+    //       <layer>.parquet
+    //     elections/
+    //       <layer>.parquet
+    //     demographics/
+    //       <layer>.parquet
+    //     geometries/
+    //       <layer>.fgb
+    //     relations/
+    //       county.csr.bin
+    //       tract.csr.bin
+    //       group.csr.bin
+    //       vtd.csr.bin
+    //       block.csr.bin
+    //       block_to_vtd.parquet
+    //     meta/
+    //       manifest.json
     ensure_dirs(path, &["entities", "elections", "demographics", "relations", "geometries", "meta"])?;
 
     let mut files_written: BTreeMap<String, FileHash> = BTreeMap::new();
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
 
     // Entities / Elections / Demographics / Geometries
-    for ty in levels_in_order() {
-        let (layer, name) = layer_pair(map_data, ty);
+    for ty in GeoType::order() {
+        let layer = map_data.get_layer(ty);
+        let name = ty.to_str();
 
         // entities
         let ent_df = entities_to_df(layer)?;
@@ -315,7 +216,7 @@ pub fn write_pack(path: &Path, map_data: &MapData) -> Result<()> {
             .to_string(),
         version: "1".into(),
         crs: "EPSG:4269".into(),
-        levels: levels_in_order().iter().map(|ty| level_str(*ty).to_string()).collect(),
+        levels: GeoType::order().iter().map(|ty| (*ty.to_str()).to_string()).collect(),
         counts: counts.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
         files: files_written,
     };
@@ -330,8 +231,9 @@ pub fn read_pack(path: &Path) -> Result<MapData> {
     let mut md = MapData::default();
 
     // Load per-level content
-    for ty in levels_in_order() {
-        let (layer, name) = layer_pair_mut(&mut md, ty);
+    for ty in GeoType::order() {
+        let layer = md.get_layer_mut(ty);
+        let name = ty.to_str();
 
         // entities
         let ent_p = path.join(format!("entities/{}.parquet", name));

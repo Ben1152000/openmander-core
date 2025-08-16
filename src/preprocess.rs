@@ -1,11 +1,11 @@
-use std::{collections::{HashMap, HashSet}, hash::Hash, path::Path, str::FromStr, sync::Arc};
+use std::{collections::{HashMap, HashSet}, path::Path, str::FromStr, sync::Arc};
 
 use anyhow::{anyhow, bail, Ok, Result};
 use geo::{MultiPolygon, Point};
 use polars::{frame::DataFrame, prelude::*, series::{IntoSeries, Series}};
 use shapefile::{Shape, dbase::{Record, FieldValue}};
 
-use crate::{common::{data::*, fs::*, polygon::shp_to_geo}, geometry::PlanarPartition, pack::write_pack, types::*};
+use crate::{common::{data::*, fs::*, polygon::*}, geometry::PlanarPartition, pack::*, types::*};
 
 /// Convert GEOID column from i64 to String type
 fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {

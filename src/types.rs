@@ -15,6 +15,30 @@ pub enum GeoType {
     Block,      // Lowest-level entity
 }
 
+impl GeoType {
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            GeoType::State => "state",
+            GeoType::County => "county",
+            GeoType::Tract => "tract",
+            GeoType::Group => "group",
+            GeoType::VTD => "vtd",
+            GeoType::Block => "block",
+        }
+    }
+
+    pub fn order() -> [GeoType; 6] {
+        [
+            GeoType::State,
+            GeoType::County,
+            GeoType::Tract,
+            GeoType::Group,
+            GeoType::VTD,
+            GeoType::Block,
+        ]
+    }
+}
+
 /// Stable key for any entity across levels.
 /// Keep the original GEOID text (with leading zeros) but avoid repeated owned Strings.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -99,11 +123,8 @@ pub struct MapLayer {
     pub demo_data: Option<DataFrame>, // Demographic data
     pub elec_data: Option<DataFrame>, // Election data
 
-    // Per-level geometry store, indexed by entities.
+    // Per-level geometry store, indexed by entities (incl. adjacency).
     pub geoms: Option<PlanarPartition>,
-
-    // CSR adjacency within the layer.
-    // pub adj: (),
 }
 
 impl MapLayer {
@@ -147,6 +168,30 @@ impl Default for MapData {
             groups: MapLayer::new(GeoType::Group),
             vtds: MapLayer::new(GeoType::VTD),
             blocks: MapLayer::new(GeoType::Block),
+        }
+    }
+}
+
+impl MapData {
+    pub fn get_layer(&self, ty: GeoType) -> &MapLayer {
+        match ty {
+            GeoType::State => &self.states,
+            GeoType::County => &self.counties,
+            GeoType::Tract => &self.tracts,
+            GeoType::Group => &self.groups,
+            GeoType::VTD => &self.vtds,
+            GeoType::Block => &self.blocks,
+        }
+    }
+
+    pub fn get_layer_mut(&mut self, ty: GeoType) -> &mut MapLayer {
+        match ty {
+            GeoType::State => &mut self.states,
+            GeoType::County => &mut self.counties,
+            GeoType::Tract => &mut self.tracts,
+            GeoType::Group => &mut self.groups,
+            GeoType::VTD => &mut self.vtds,
+            GeoType::Block => &mut self.blocks,
         }
     }
 }

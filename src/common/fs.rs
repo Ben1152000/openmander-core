@@ -14,6 +14,13 @@ pub fn ensure_dir_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn ensure_dirs(base: &Path, dirs: &[&str]) -> Result<()> {
+    for &dir in dirs {
+        ensure_dir_exists(&base.join(dir))?;
+    }
+    Ok(())
+}
+
 /// Error unless the directory already exists.
 pub fn require_dir_exists(path: &Path) -> Result<()> {
     if !path.exists() { bail!("Directory does not exist: {}", path.display()); }

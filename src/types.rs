@@ -123,7 +123,7 @@ impl MapLayer {
         self.geoms
             .as_mut()
             .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?
-            .compute_adjacencies()?;
+            .compute_adjacencies_fast(1e8)?;
         Ok(())
     }
 }

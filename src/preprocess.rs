@@ -1,11 +1,11 @@
-use std::{collections::HashMap, hash::Hash, path::Path, str::FromStr, sync::Arc};
+use std::{collections::{HashMap, HashSet}, hash::Hash, path::Path, str::FromStr, sync::Arc};
 
 use anyhow::{anyhow, bail, Ok, Result};
 use geo::{MultiPolygon, Point};
 use polars::{frame::DataFrame, prelude::*, series::{IntoSeries, Series}};
 use shapefile::{Shape, dbase::{Record, FieldValue}};
 
-use crate::{common::{data::*, fs::*, polygon::shp_to_geo}, geometry::PlanarPartition, types::*};
+use crate::{common::{data::*, fs::*, polygon::shp_to_geo}, geometry::PlanarPartition, pack::write_pack, types::*};
 
 /// Convert GEOID column from i64 to String type
 fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {
@@ -203,6 +203,59 @@ impl MapLayer {
                 .map(|p| self.parents[i].set(parent_ty, Some(p.clone()))))
             .collect::<Result<_>>()?
     }
+
+    fn aggregate_adjacencies(&self, parent_layer: &mut MapLayer) -> Result<()> {
+        let get_parent_index = |i: usize| -> Result<&u32> {
+            let geoid = self.parents.get(i)
+                .ok_or_else(|| anyhow!("Index {i} out of bounds in parents"))?
+                .get(parent_layer.ty)?.as_ref()
+                .ok_or_else(|| anyhow!("Parent with type {:?} is not defined", parent_layer.ty))?;
+            parent_layer.index.get(&geoid)
+                .ok_or_else(|| anyhow!("Index does not contain {:?}", geoid.id))
+        };
+    
+        // Child adjacency (must exist)
+        let child_adj = &self.geoms
+            .as_ref()
+            .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?
+            .adj_list;
+    
+        // Prepare per-parent neighbor sets (for dedup)
+        let n_parents = parent_layer.entities.len();
+        let mut parent_sets: Vec<HashSet<u32>> =
+            (0..n_parents).map(|_| HashSet::new()).collect();
+    
+        // Aggregate child edges -> parent edges
+        child_adj.iter().enumerate()
+            .map(|(i, nbrs)| -> Result<()> {
+                let pi = *get_parent_index(i)? as u32;
+                for &j in nbrs {
+                    let pj = *get_parent_index(j as usize)? as u32;
+                    if pi != pj {
+                        parent_sets[pi as usize].insert(pj);
+                        parent_sets[pj as usize].insert(pi);
+                    }
+                }
+                Ok(())
+            })
+            .collect::<Result<()>>()?;
+    
+        // Write back into parent's adjacency list
+        let parent_geoms = parent_layer.geoms
+            .as_mut()
+            .ok_or_else(|| anyhow!("Parent layer has no geometry store to receive adjacencies"))?;
+    
+        if parent_geoms.adj_list.len() != n_parents {
+            parent_geoms.adj_list = vec![Vec::new(); n_parents];
+        }
+        for (p, set) in parent_sets.into_iter().enumerate() {
+            let mut v: Vec<u32> = set.into_iter().collect();
+            v.sort_unstable(); // deterministic order
+            parent_geoms.adj_list[p] = v;
+        }
+    
+        Ok(())
+    }
 }
 
 impl MapData {
@@ -307,93 +360,20 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, verbose: u8) -> Result<()> {
 
     if verbose > 0 { eprintln!("Computing adjacencies"); }
     map_data.blocks.compute_adjacencies()?;
+    map_data.blocks.aggregate_adjacencies(&mut map_data.states)?;
+    map_data.blocks.aggregate_adjacencies(&mut map_data.counties)?;
+    map_data.blocks.aggregate_adjacencies(&mut map_data.tracts)?;
+    map_data.blocks.aggregate_adjacencies(&mut map_data.groups)?;
+    map_data.blocks.aggregate_adjacencies(&mut map_data.vtds)?;
 
-    // Compute adjacency matrices for each level
+    if verbose > 0 { eprintln!("Writing pack"); }
+    write_pack(out_dir, &map_data)?;
+
     // Compute perimeter & edge weights using geometry
-
     // Write data files
     // Validate & Write Metadata
 
     /*
-    NE_2020_pack/
-      download/ (temp dir)
-      entities/
-        state.parquet
-        county.parquet
-        tract.parquet
-        group.parquet
-        vtd.parquet
-        block.parquet
-      elections/
-        state.parquet
-        county.parquet
-        tract.parquet
-        group.parquet
-        vtd.parquet
-        block.parquet
-      demographics/
-        state.parquet
-        county.parquet
-        tract.parquet
-        group.parquet
-        vtd.parquet
-        block.parquet
-      relations/
-        county.csr.bin
-        tract.csr.bin
-        group.csr.bin
-        vtd.csr.bin
-        block.csr.bin
-        block_to_vtd.parquet
-      geometries/
-        state.fgb
-        counties.fgb
-        tracts.fgb
-        groups.fgb
-        vtds.fgb
-        blocks.fgb
-      meta/
-        manifest.json
-            { 
-                "pack_id":"NE-2020", 
-                "version":"1", 
-                "crs":"EPSG:4269", 
-                "levels":["state","county","tract","blockgroup","vtd","block"], 
-                "counts":{"block":123456}, 
-                "files":{"geometries/blocks.fgb":{"sha256":"…"}}
-            }
-    */
-
-    // 1. Load VTD shapefile → build dense index (VTD) → write geometry (FGB)
-    //   - Read VTDs first (much fewer than blocks).
-    //   - While streaming features:
-    //       assign vtd_idx (dense u32),
-    //       compute/store cheap per‑feature stats (area, bbox) if helpful,
-    //       append geometry directly to an .fgb writer (no need to keep all geoms in RAM).
-    //   - Persist: vtd_idx ↔ vtd_geoid (parquet/csv), VTD .fgb
-
-    // 2. Load County, State shapefiles (each) → build dense index → write geometry (FGB)
-    //   - Same per‑level streaming pattern as VTDs.
-    //   - Persist: county_idx map, state_idx map, and their .fgb
-
-    // 3. Load Tract and Block Group shapefiles (each) → build dense index → write geometry (FGB)
-    //   - Still modest sizes—stream and flush.
-    //   - Persist: tract_idx, bg_idx, .fgb files
-
-    // 4. Load Block shapefile (streamed in chunks) → build dense index (Block)
-    //   - Don’t keep all blocks in memory.
-    //   - If you want a single “entities df”, only store columns you actually need (ids + parent refs + names); postpone geometry.
-    //   - Persist: block_idx map (dense u32 ↔ GEOID15). (You can also spill a minimal “entities df” per level now, if you want.)
-    
-    /*
-    5. Build Block → VTD relation (geometry)
-      - Build an in‑RAM spatial index for VTDs only (already read in step 1). Keep VTD geometries in memory (small), or memory‑map the .fgb and build an R‑tree of their bboxes.
-      - Stream Blocks in chunks:
-          read a chunk of block geometries,
-          query VTD index → exact polygon overlay to pick containing/intersecting VTD,
-          emit (block_idx, vtd_idx) pairs and flush to disk (parquet/arrow) in batches.
-      - Free block chunk before loading the next one; never hold all blocks.
-
     6. Compute per‑level adjacency (CSR) + edge weights (shared boundary)
       - Do this per level, one at a time, using its .fgb:
           Load geometries level‑by‑level (VTD → County → Tract → BG → Block (chunked if necessary)).

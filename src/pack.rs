@@ -1,11 +1,13 @@
-use std::{collections::BTreeMap, fs::File, path::Path};
+use std::{collections::BTreeMap, fs::File, io::{BufReader, BufWriter}, path::Path};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Ok, Result};
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
+use flatgeobuf::{FallibleStreamingIterator, FgbCrs, FgbReader, FgbWriter, FgbWriterOptions, GeometryType};
+use geozero::{FeatureProcessor, geo_types::process_geom, ToGeo};
+use geo::{Geometry, MultiPolygon};
 
-use crate::{common::{data::*, fs::*}, types::*};
-
+use crate::{common::{data::*, fs::*}, geometry::PlanarPartition, types::*};
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -17,53 +19,143 @@ struct Manifest {
     files: BTreeMap<String, FileHash>,
 }
 
+impl Manifest {
+    pub fn new() -> Self {
+        todo!()
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct FileHash {
     sha256: String,
 }
 
-fn entities_to_df(layer: &MapLayer) -> Result<DataFrame> {
-    let geotype: Vec<&str> = (0..layer.entities.len()).map(|_| layer.ty.to_str()).collect();
-    let geoid: Vec<String> = layer.entities.iter()
-        .map(|e| e.geo_id.id.to_string())
-        .collect();
-    let name: Vec<Option<String>> = layer.entities.iter()
-        .map(|e| e.name.as_ref().map(|s| s.to_string()))
-        .collect();
-    let area_m2: Vec<Option<f64>> = layer.entities.iter().map(|e| e.area_m2).collect();
-    let lon: Vec<Option<f64>> = layer.entities.iter()
-        .map(|e| e.centroid.as_ref().map(|p| p.x()))
-        .collect();
-    let lat: Vec<Option<f64>> = layer.entities.iter()
-        .map(|e| e.centroid.as_ref().map(|p| p.y()))
-        .collect();
+impl PlanarPartition {
+    /// Write as a FlatGeobuf (MultiPolygon layer, EPSG:4269).
+    fn write_fgb(&self, path: &Path) -> Result<()> {
+        let mut fgb = FgbWriter::create_with_options(
+            "geoms",
+            GeometryType::MultiPolygon,
+            FgbWriterOptions {
+                crs: FgbCrs { code: 4269, ..Default::default() },
+                ..Default::default()
+            },
+        )?;
 
+        for (i, mp) in self.geoms.iter().enumerate() {
+            fgb.feature_begin(i as u64)?;
+            let g: Geometry<f64> = Geometry::MultiPolygon(mp.clone());
+            process_geom(&g, &mut fgb)?; // stream geo-types coords into writer
+            fgb.feature_end(i as u64)?;
+        }
+
+        let mut out = BufWriter::new(std::fs::File::create(path)?);
+        fgb.write(&mut out)?;
+        Ok(())
+    }
+
+    /// Read a FlatGeobuf (MultiPolygon/Polygon) into a PlanarPartition.
+    fn read_fgb(path: &Path) -> Result<Self> {
+        let file = std::fs::File::open(path)?;
+        let mut feat_iter = FgbReader::open(BufReader::new(file))?.select_all()?;
+
+        let mut polys: Vec<MultiPolygon<f64>> = Vec::new();
+        while let Some(feat) = feat_iter.next()? {
+            let geom: geo::Geometry<f64> = feat.to_geo()?; // convert feature to geo-types
+            match geom {
+                geo::Geometry::MultiPolygon(mp) => polys.push(mp),
+                geo::Geometry::Polygon(p) => polys.push(MultiPolygon(vec![p])), // be lenient
+                other => return Err(anyhow!("Unexpected geometry type in FGB: {:?}", other)),
+            }
+        }
+
+        Ok(PlanarPartition::new(polys))
+    }
+
+
+}
+
+impl MapLayer {
+    fn write_pack(&self, path: &Path,
+        counts: &mut BTreeMap<&'static str, usize>,
+        hashes: &mut BTreeMap<String, FileHash>
+    ) -> Result<()> {
+        let name: &'static str = self.ty.to_str();
+
+        #[inline]
+        fn write_to_parquet_with_hash(root: &Path, rel_path: &str, df: &DataFrame, 
+            hashes: &mut BTreeMap<String, FileHash>
+        ) -> Result<()> {
+            write_to_parquet(&root.join(rel_path), df)?;
+            let (k, h) = sha256_file(rel_path, root)?;
+            hashes.insert(k, FileHash { sha256: h });
+            Ok(())
+        }
+
+        // entities
+        write_to_parquet_with_hash(
+            path,
+            &format!("entities/{}.parquet", name),
+            &entities_to_df(self)?,
+            hashes
+        )?;
+
+        counts.insert(name.into(), self.entities.len());
+
+        // elections
+        if let Some(df) = &self.elec_data {
+            write_to_parquet_with_hash(path, &format!("elections/{name}.parquet"), df, hashes)?;
+        }
+
+        // demographics
+        if let Some(df) = &self.demo_data {
+            write_to_parquet_with_hash(path, &format!("demographics/{name}.parquet"), df, hashes)?;
+        }
+
+        // geometries
+        if let Some(geom) = &self.geoms {
+            let rel = &format!("geometries/{name}.fgb");
+            geom.write_fgb(&path.join(rel))?;
+            let (k, h) = sha256_file(rel, path)?;
+            hashes.insert(k, FileHash { sha256: h });
+        }
+
+        // relations (CSR) — uncomment when you have adjacency IO
+        // if let Some(adj_path_rel) = maybe_write_layer_csr(self, name, path)? {
+        //     let (k, h) = sha256_file(&adj_path_rel, path)?;
+        //     file_hashes.insert(adj_path_rel, FileHash { sha256: h });
+        // }
+        Ok(())
+    }
+
+    fn read_pack(path: &Path) -> Result<Self> { todo!() }
+}
+
+impl MapData {
+    fn write_pack(&self, path: &Path) -> Result<()> { todo!() }
+    fn read_pack(path: &Path) -> Result<Self> { todo!() }
+}
+
+fn entities_to_df(layer: &MapLayer) -> Result<DataFrame> {
     let parent = |pick: fn(&ParentRefs) -> Result<&Option<GeoId>>| -> Vec<Option<String>> {
         layer.parents.iter()
             .map(|p| pick(p).ok().and_then(|g| g.as_ref().map(|x| x.id.to_string())))
             .collect()
     };
 
-    let parent_state = parent(|p| p.get(GeoType::State));
-    let parent_county = parent(|p| p.get(GeoType::County));
-    let parent_tract = parent(|p| p.get(GeoType::Tract));
-    let parent_group = parent(|p| p.get(GeoType::Group));
-    let parent_vtd = parent(|p| p.get(GeoType::VTD));
-
-    let df = df![
-        "geotype" => geotype,
-        "geoid" => geoid,
-        "name" => name,
-        "area_m2" => area_m2,
-        "lon" => lon,
-        "lat" => lat,
-        "parent_state" => parent_state,
-        "parent_county" => parent_county,
-        "parent_tract" => parent_tract,
-        "parent_group" => parent_group,
-        "parent_vtd" => parent_vtd,
-    ]?;
-    Ok(df)
+    Ok(df![
+        "geotype" => (0..layer.entities.len()).map(|_| layer.ty.to_str()).collect::<Vec<_>>(),
+        "geoid" => layer.entities.iter().map(|e| e.geo_id.id.to_string()).collect::<Vec<_>>(),
+        "name" => layer.entities.iter().map(|e| e.name.as_ref().map(|s| s.to_string())).collect::<Vec<_>>(),
+        "area_m2" => layer.entities.iter().map(|e| e.area_m2).collect::<Vec<_>>(),
+        "lon" => layer.entities.iter().map(|e| e.centroid.as_ref().map(|p| p.x())).collect::<Vec<_>>(),
+        "lat" => layer.entities.iter().map(|e| e.centroid.as_ref().map(|p| p.y())).collect::<Vec<_>>(),
+        "parent_state" => parent(|p| p.get(GeoType::State)),
+        "parent_county" => parent(|p| p.get(GeoType::County)),
+        "parent_tract" => parent(|p| p.get(GeoType::Tract)),
+        "parent_group" => parent(|p| p.get(GeoType::Group)),
+        "parent_vtd" => parent(|p| p.get(GeoType::VTD)),
+    ]?)
 }
 
 fn df_to_entities(df: &DataFrame, ty: GeoType) -> Result<(Vec<Entity>, Vec<ParentRefs>)> {
@@ -123,85 +215,32 @@ fn df_to_entities(df: &DataFrame, ty: GeoType) -> Result<(Vec<Entity>, Vec<Paren
     Ok((entities, parents))
 }
 
-pub fn write_pack(path: &Path, map_data: &MapData) -> Result<()> {
-    // Pack format:
-    //   NE_2020_pack/
-    //     download/ (temp dir)
-    //     entities/
-    //       <layer>.parquet
-    //     elections/
-    //       <layer>.parquet
-    //     demographics/
-    //       <layer>.parquet
-    //     geometries/
-    //       <layer>.fgb
-    //     relations/
-    //       county.csr.bin
-    //       tract.csr.bin
-    //       group.csr.bin
-    //       vtd.csr.bin
-    //       block.csr.bin
-    //       block_to_vtd.parquet
-    //     meta/
-    //       manifest.json
-    ensure_dirs(path, &["entities", "elections", "demographics", "relations", "geometries", "meta"])?;
+// Pack format:
+//   NE_2020_pack/
+//     download/ (temp dir)
+//     entities/<layers>.parquet
+//     elections/<layers>.parquet
+//     demographics/<layers>.parquet
+//     geometries/<layers>.fgb
+//     relations/
+//       county.csr.bin
+//       tract.csr.bin
+//       group.csr.bin
+//       vtd.csr.bin
+//       block.csr.bin
+//       block_to_vtd.parquet
+//     meta/
+//       manifest.json
 
-    let mut files_written: BTreeMap<String, FileHash> = BTreeMap::new();
+pub fn write_pack(path: &Path, map_data: &MapData) -> Result<()> {
+    let dirs = ["entities", "elections", "demographics", "relations", "geometries", "meta"];
+    ensure_dirs(path, &dirs)?;
+
+    let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
 
-    // Entities / Elections / Demographics / Geometries
     for ty in GeoType::order() {
-        let layer = map_data.get_layer(ty);
-        let name = ty.to_str();
-
-        // entities
-        let ent_df = entities_to_df(layer)?;
-        let ent_rel = format!("entities/{}.parquet", name);
-        write_to_parquet(&path.join(&ent_rel), &ent_df)?;
-        let (k, h) = sha256_file(&ent_rel, path)?;
-        files_written.insert(k, FileHash { sha256: h });
-
-        counts.insert(name, layer.entities.len());
-
-        // elections
-        if let Some(df) = &layer.elec_data {
-            let rel = format!("elections/{}.parquet", name);
-            write_to_parquet(&path.join(&rel), df)?;
-            let (k, h) = sha256_file(&rel, path)?;
-            files_written.insert(k, FileHash { sha256: h });
-        }
-
-        // demographics
-        if let Some(df) = &layer.demo_data {
-            let rel = format!("demographics/{}.parquet", name);
-            write_to_parquet(&path.join(&rel), df)?;
-            let (k, h) = sha256_file(&rel, path)?;
-            files_written.insert(k, FileHash { sha256: h });
-        }
-
-/*
-        // geometry
-        if let Some(geom) = &layer.geoms {
-            let rel = match ty {
-                GeoType::State => "geometries/state.fgb",
-                GeoType::County => "geometries/counties.fgb",
-                GeoType::Tract => "geometries/tracts.fgb",
-                GeoType::Group => "geometries/groups.fgb",
-                GeoType::VTD => "geometries/vtds.fgb",
-                GeoType::Block => "geometries/blocks.fgb",
-            };
-            // adjust to your IO function
-            geom.write_fgb(&path.join(rel))?;
-            let (k, h) = sha256_file(rel, path)?;
-            files_written.insert(k, FileHash { sha256: h });
-        }
-*/
-
-        // relations (CSR) — uncomment when you have adjacency IO
-        // if let Some(adj_path_rel) = maybe_write_layer_csr(layer, name, path)? {
-        //     let (k, h) = sha256_file(&adj_path_rel, path)?;
-        //     files_written.insert(adj_path_rel, FileHash { sha256: h });
-        // }
+        map_data.get_layer(ty).write_pack(path, &mut counts, &mut file_hashes)?;
     }
 
     // Example: block_to_vtd.parquet if you maintain that mapping as a DF somewhere
@@ -216,9 +255,9 @@ pub fn write_pack(path: &Path, map_data: &MapData) -> Result<()> {
             .to_string(),
         version: "1".into(),
         crs: "EPSG:4269".into(),
-        levels: GeoType::order().iter().map(|ty| (*ty.to_str()).to_string()).collect(),
-        counts: counts.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
-        files: files_written,
+        levels: GeoType::order().iter().map(|ty| ty.to_str().into()).collect(),
+        counts: counts.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        files: file_hashes,
     };
 
     let meta_path = path.join("meta/manifest.json");
@@ -251,33 +290,23 @@ pub fn read_pack(path: &Path) -> Result<MapData> {
         }
 
         // elections
-        let el_p = path.join(format!("elections/{}.parquet", name));
+        let el_p = path.join(format!("elections/{name}.parquet"));
         if el_p.exists() {
             layer.elec_data = Some(read_from_parquet(&el_p)?);
         }
 
         // demographics
-        let dm_p = path.join(format!("demographics/{}.parquet", name));
+        let dm_p = path.join(format!("demographics/{name}.parquet"));
         if dm_p.exists() {
             layer.demo_data = Some(read_from_parquet(&dm_p)?);
         }
 
-/*
-        // geometry
-        let geom_rel = match ty {
-            GeoType::State => "geometries/state.fgb",
-            GeoType::County => "geometries/counties.fgb",
-            GeoType::Tract => "geometries/tracts.fgb",
-            GeoType::Group => "geometries/groups.fgb",
-            GeoType::VTD => "geometries/vtds.fgb",
-            GeoType::Block => "geometries/blocks.fgb",
-        };
+        // geometries
+        let geom_rel = &format!("geometries/{name}.fgb");
         let gp = path.join(geom_rel);
         if gp.exists() {
-            // adjust to your IO function
             layer.geoms = Some(crate::geometry::PlanarPartition::read_fgb(&gp)?);
         }
-*/
 
         // relations (CSR) — add when available
         // read_layer_csr_into(layer, path)?;

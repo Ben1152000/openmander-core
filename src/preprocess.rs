@@ -289,7 +289,7 @@ impl MapData {
     fn insert_elec_data(&mut self, block_elec_df: DataFrame) -> Result<()> {
         let df = sort_df_by_index(ensure_geoid_is_str(block_elec_df)?, &self.blocks.index)?;
         self.states.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.states)?);
-        self.counties.demo_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.counties)?);
+        self.counties.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.counties)?);
         self.tracts.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.tracts)?);
         self.groups.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.groups)?);
         self.vtds.elec_data = Some(aggregate_df_to_layer(&df, &self.blocks.parents, &self.vtds)?);

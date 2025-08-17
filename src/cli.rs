@@ -1,5 +1,9 @@
-use clap::{Args, Parser, Subcommand, ValueEnum, ValueHint};
 use std::path::PathBuf;
+
+use anyhow::{Result};
+use clap::{Args, Parser, Subcommand, ValueHint};
+
+use crate::{common::fs::*, download::*, pack::*, preprocess::*, types::MapData};
 
 /// Redistricting CLI (argument schema only)
 #[derive(Parser, Debug)]
@@ -30,30 +34,56 @@ pub struct DownloadArgs {
     /// Output location (directory).
     #[arg(value_hint = ValueHint::DirPath)]
     pub out: PathBuf,
-
-    /// Overwrite if the directory already exists (off by default)
-    #[arg(long)]
-    pub force: bool,
 }
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
-pub enum OutputFormat { Geojson, Parquet, Shapefile }
 
 #[derive(Args, Debug)]
 pub struct RedistrictArgs {
-    /// Input district geometry file
-    #[arg(value_hint = ValueHint::FilePath)]
-    pub districts: PathBuf,
-
     /// Input tabular data file (attributes, demographics, etc.)
-    #[arg(value_hint = ValueHint::FilePath)]
-    pub data: PathBuf,
+    #[arg(value_hint = ValueHint::DirPath)]
+    pub pack: PathBuf,
 
-    /// Output plan file (must be a file path; "-" is rejected)
-    #[arg(short, long, value_hint = ValueHint::FilePath)]
-    pub output: PathBuf,
+    // /// Input district block assignment
+    // #[arg(value_hint = ValueHint::FilePath)]
+    // pub input: PathBuf,
 
-    /// Overwrite if the file exists
-    #[arg(long)]
-    pub force: bool,
+    // /// Output plan file (must be a file path; "-" is rejected)
+    // #[arg(short, long, value_hint = ValueHint::FilePath)]
+    // pub output: PathBuf,
+}
+
+fn download(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
+    let state_code = &args.state.to_ascii_uppercase();
+    let out_dir = &args.out.join(format!("{state_code}_2020_pack"));
+    ensure_dir_exists(out_dir)?;
+
+    let download_dir = &out_dir.join("download");
+    ensure_dir_exists(&download_dir)?;
+
+    download_files(download_dir, &state_code, cli.verbose)?;
+    if cli.verbose > 0 { eprintln!("Downloaded files for {} into {}", state_code, out_dir.display()); }
+
+    let data = build_pack(download_dir, out_dir, &state_code, cli.verbose)?;
+    data.write_pack( out_dir)?;
+    if cli.verbose > 0 { eprintln!("Wrote pack to {}", out_dir.display()); }
+
+    Ok(())
+}
+
+fn redistrict(cli: &crate::cli::Cli, args: &RedistrictArgs) -> Result<()> {
+    let map_data = MapData::read_pack(&args.pack)?;
+    map_data.write_pack(&args.pack)?;
+
+    println!("{:?}", map_data);
+
+    // if cli.verbose > 0 { eprintln!("[redistrict] districts={} data={} -> {}", args.districts.display(), args.data.display(), args.output.display()); }
+
+    Ok(())
+}
+
+pub fn entry() -> Result<()> {
+    let cli = Cli::parse();
+    match &cli.command {
+        Commands::Download(args) => download(&cli, args),
+        Commands::Redistrict(args) => redistrict(&cli, args),
+    }
 }

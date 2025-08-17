@@ -1,20 +1,13 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-use crate::common::{
-    fs::extract_zip,
-    geo::{state_abbr_to_fips, state_abbr_to_name},
-    io::download_big_file
-};
+use crate::common::{fs::extract_zip, geo::{state_abbr_to_fips, state_abbr_to_name}, io::download_big_file};
 
 /// Download demographic data from Dave's redistricting
-pub fn download_daves_demographics(out_dir: &PathBuf, state: &String, verbose: u8) -> Result<()> {
-    let code = state.to_ascii_uppercase();
-
-    let file_url = format!("https://data.dra2020.net/file/dra-block-data/Demographic_Data_Block_{code}.v06.zip");
-    let zip_path = out_dir.join(format!("Demographic_Data_Block_{code}.v06.zip"));
-    let out_path = out_dir.join(format!("Demographic_Data_Block_{code}"));
-
+pub fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+    let file_url = format!("https://data.dra2020.net/file/dra-block-data/Demographic_Data_Block_{state}.v06.zip");
+    let zip_path = out_dir.join(format!("Demographic_Data_Block_{state}.v06.zip"));
+    let out_path = out_dir.join(format!("Demographic_Data_Block_{state}"));
 
     if verbose > 0 { eprintln!("[download] {file_url} -> {}", zip_path.display()); }
     download_big_file(file_url, &zip_path, true)?;
@@ -26,12 +19,10 @@ pub fn download_daves_demographics(out_dir: &PathBuf, state: &String, verbose: u
 }
 
 /// Download election data from Dave's redistricting
-pub fn download_daves_elections(out_dir: &PathBuf, state: &String, verbose: u8) -> Result<()> {
-    let code = state.to_ascii_uppercase();
-
-    let file_url = format!("https://data.dra2020.net/file/dra-block-data/Election_Data_Block_{code}.v06.zip");
-    let zip_path = out_dir.join(format!("Election_Data_Block_{code}.v06.zip"));
-    let out_path = out_dir.join(format!("Election_Data_Block_{code}"));
+pub fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+    let file_url = format!("https://data.dra2020.net/file/dra-block-data/Election_Data_Block_{state}.v06.zip");
+    let zip_path = out_dir.join(format!("Election_Data_Block_{state}.v06.zip"));
+    let out_path = out_dir.join(format!("Election_Data_Block_{state}"));
 
     if verbose > 0 { eprintln!("[download] {file_url} -> {}", zip_path.display()); }
     download_big_file(file_url, &zip_path, true)?;
@@ -44,13 +35,12 @@ pub fn download_daves_elections(out_dir: &PathBuf, state: &String, verbose: u8) 
 
 /// Download geometry data from US Census TIGER 2020 PL directory
 /// Example URL: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
-pub fn download_tiger_geometries(out_dir: &PathBuf, state: &String, verbose: u8) -> Result<()> {
-    let code = state.to_ascii_uppercase();
-    let fips = state_abbr_to_fips(&code)
-        .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
-    let name = state_abbr_to_name(&code)
-        .with_context(|| format!("Unknown state/territory postal code: {code}"))?
-        .to_ascii_uppercase();
+pub fn download_tiger_geometries(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+    let fips = state_abbr_to_fips(&state)
+        .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
+    let name = state_abbr_to_name(&state)
+        .with_context(|| format!("Unknown state/territory postal code: {state}"))?
+        .to_ascii_uppercase().replace(' ', "_");
 
     let base = format!("https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/{fips}_{name}/{fips}/");
 
@@ -74,21 +64,33 @@ pub fn download_tiger_geometries(out_dir: &PathBuf, state: &String, verbose: u8)
 
 /// Download block-level crosswalks from the US Census website
 /// Example URL: "NE" -> "https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST31_NE.zip"
-pub fn download_census_crosswalks(out_dir: &PathBuf, state: &String, verbose: u8) -> Result<()> {
-    let code = state.to_ascii_uppercase();
-    let fips = state_abbr_to_fips(&code)
-        .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
+pub fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+    let fips = state_abbr_to_fips(&state)
+        .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
 
-    let file_url = format!("https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST{fips}_{code}.zip");
+    let file_url = format!("https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST{fips}_{state}.zip");
 
-    let zip_path = out_dir.join(format!("BlockAssign_ST{fips}_{code}.zip"));
-    let out_path = out_dir.join(format!("BlockAssign_ST{fips}_{code}"));
+    let zip_path = out_dir.join(format!("BlockAssign_ST{fips}_{state}.zip"));
+    let out_path = out_dir.join(format!("BlockAssign_ST{fips}_{state}"));
 
     if verbose > 0 { eprintln!("[download] {file_url} -> {}", zip_path.display()); }
     download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[extract] {} -> {}", zip_path.display(), out_path.display()); }
     extract_zip(&zip_path, &out_path, true)?;
+
+    Ok(())
+}
+
+/// Download all map files for the given state (specificied by state_code) into the output directory
+pub fn download_files(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+    if verbose > 0 { eprintln!("[download] state={}", state); }
+    if verbose > 0 { eprintln!("[download] -> dir {}", out_dir.display()); }
+
+    download_tiger_geometries(out_dir, state, verbose)?;
+    download_daves_demographics(out_dir, state, verbose)?;
+    download_daves_elections(out_dir, state, verbose)?;
+    download_census_crosswalks(out_dir, state, verbose)?;
 
     Ok(())
 }

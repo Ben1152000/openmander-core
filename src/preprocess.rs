@@ -1,11 +1,11 @@
 use std::{collections::{HashMap, HashSet}, path::Path, str::FromStr, sync::Arc};
 
-use anyhow::{anyhow, bail, Ok, Result};
+use anyhow::{anyhow, bail, Context, Ok, Result};
 use geo::{MultiPolygon, Point};
 use polars::{frame::DataFrame, prelude::*, series::{IntoSeries, Series}};
 use shapefile::{Shape, dbase::{Record, FieldValue}};
 
-use crate::{common::{data::*, fs::*, polygon::*}, geometry::PlanarPartition, pack::*, types::*};
+use crate::{common::{data::*, fs::*, geo::*, polygon::*}, geometry::PlanarPartition, types::*};
 
 /// Convert GEOID column from i64 to String type
 fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {
@@ -300,65 +300,66 @@ impl MapData {
 
 /// End-to-end: read raw downloads → write pack files.
 /// Keep this thin; all work lives in submodules.
-pub fn build_pack(input_dir: &Path, out_dir: &Path, verbose: u8) -> Result<()> {
+pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) -> Result<MapData> {
+    let code = state.to_ascii_uppercase();
+    let fips = state_abbr_to_fips(&code)
+        .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
+
+    let state_shapes_path = input_dir.join(format!("tl_2020_{fips}_state20/tl_2020_{fips}_state20.shp"));
+    let county_shapes_path = input_dir.join(format!("tl_2020_{fips}_county20/tl_2020_{fips}_county20.shp"));
+    let tract_shapes_path = input_dir.join(format!("tl_2020_{fips}_tract20/tl_2020_{fips}_tract20.shp"));
+    let group_shapes_path = input_dir.join(format!("tl_2020_{fips}_bg20/tl_2020_{fips}_bg20.shp"));
+    let vtd_shapes_path = input_dir.join(format!("tl_2020_{fips}_vtd20/tl_2020_{fips}_vtd20.shp"));
+    let block_shapes_path = input_dir.join(format!("tl_2020_{fips}_tabblock20/tl_2020_{fips}_tabblock20.shp"));
+    let block_assign_path = input_dir.join(format!("BlockAssign_ST{fips}_{code}/BlockAssign_ST{fips}_{code}_VTD.txt"));
+    let demo_data_path = input_dir.join(format!("Demographic_Data_Block_{code}/demographic_data_block_{code}.v06.csv"));
+    let elec_data_path = input_dir.join(format!("Election_Data_Block_{code}/election_data_block_{code}.v06.csv"));
+
     require_dir_exists(input_dir)?;
     ensure_dir_exists(out_dir)?;
 
     let mut map_data = MapData::default();
 
-    if verbose > 0 { eprintln!("Loading shapefiles"); }
-    let state_shapes_path = "tl_2020_31_state20/tl_2020_31_state20.shp";
-    let county_shapes_path = "tl_2020_31_county20/tl_2020_31_county20.shp";
-    let tract_shapes_path = "tl_2020_31_tract20/tl_2020_31_tract20.shp";
-    let group_shapes_path = "tl_2020_31_bg20/tl_2020_31_bg20.shp";
-    let vtd_shapes_path = "tl_2020_31_vtd20/tl_2020_31_vtd20.shp";
-    let block_shapes_path = "tl_2020_31_tabblock20/tl_2020_31_tabblock20.shp";
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", state_shapes_path); }
+    map_data.states.insert_shapes(read_shapefile(&state_shapes_path)?)?;
 
-    if verbose > 0 { eprintln!("[preprocess] loading {state_shapes_path}"); }
-    map_data.states.insert_shapes(read_shapefile(&input_dir.join(state_shapes_path))?)?;
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", county_shapes_path); }
+    map_data.counties.insert_shapes(read_shapefile(&county_shapes_path)?)?;
 
-    if verbose > 0 { eprintln!("[preprocess] loading {county_shapes_path}"); }
-    map_data.counties.insert_shapes(read_shapefile(&input_dir.join(county_shapes_path))?)?;
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", tract_shapes_path); }
+    map_data.tracts.insert_shapes(read_shapefile(&tract_shapes_path)?)?;
 
-    if verbose > 0 { eprintln!("[preprocess] loading {tract_shapes_path}"); }
-    map_data.tracts.insert_shapes(read_shapefile(&input_dir.join(tract_shapes_path))?)?;
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", group_shapes_path); }
+    map_data.groups.insert_shapes(read_shapefile(&group_shapes_path)?)?;
 
-    if verbose > 0 { eprintln!("[preprocess] loading {group_shapes_path}"); }
-    map_data.groups.insert_shapes(read_shapefile(&input_dir.join(group_shapes_path))?)?;
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", vtd_shapes_path); }
+    map_data.vtds.insert_shapes(read_shapefile(&vtd_shapes_path)?)?;
 
-    if verbose > 0 { eprintln!("[preprocess] loading {vtd_shapes_path}"); }
-    map_data.vtds.insert_shapes(read_shapefile(&input_dir.join(vtd_shapes_path))?)?;
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", block_shapes_path); }
+    map_data.blocks.insert_shapes(read_shapefile(&block_shapes_path)?)?;
 
-    if verbose > 0 { eprintln!("[preprocess] loading {block_shapes_path}"); }
-    map_data.blocks.insert_shapes(read_shapefile(&input_dir.join(block_shapes_path))?)?;
-
-    if verbose > 0 { eprintln!("Computing crosswalks"); }
-    let block_assign_path = "BlockAssign_ST31_NE/BlockAssign_ST31_NE_VTD.txt";
+    if verbose > 0 { eprintln!("[preprocess] computing crosswalks"); }
     map_data.compute_parents()?;
 
-    if verbose > 0 { eprintln!("[preprocess] loading {block_assign_path}"); }
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", block_assign_path); }
     map_data.blocks.assign_parents_from_map(
         GeoType::VTD,
         get_map_from_crosswalk_df(
-            &read_from_pipe_delimited_txt(&input_dir.join(block_assign_path))?, 
+            &read_from_pipe_delimited_txt(&block_assign_path)?, 
             (GeoType::Block, GeoType::VTD), 
             ("BLOCKID", "DISTRICT")
         )?
     )?;
 
-    if verbose > 0 { eprintln!("Loading datasets"); }
-    let demo_data_path = "Demographic_Data_Block_NE/demographic_data_block_NE.v06.csv";
-    let elec_data_path: &'static str = "Election_Data_Block_NE/election_data_block_NE.v06.csv";
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", demo_data_path); }
+    map_data.insert_demo_data(read_from_csv(&demo_data_path)?)?;
 
-    if verbose > 0 { eprintln!("[preprocess] loading {demo_data_path}"); }
-    map_data.insert_demo_data(read_from_csv(&input_dir.join(demo_data_path))?)?;
-
-    if verbose > 0 { eprintln!("[preprocess] loading {elec_data_path}"); }
-    map_data.insert_elec_data(read_from_csv(&input_dir.join(elec_data_path))?)?;
+    if verbose > 0 { eprintln!("[preprocess] loading {:?}", elec_data_path); }
+    map_data.insert_elec_data(read_from_csv(&elec_data_path)?)?;
 
     // println!("{:?}", map_data.counties.geoms.unwrap().find_overlaps(1e-8));
 
-    if verbose > 0 { eprintln!("Computing adjacencies"); }
+    if verbose > 0 { eprintln!("[preprocess] computing adjacencies"); }
     map_data.blocks.compute_adjacencies()?;
     map_data.blocks.aggregate_adjacencies(&mut map_data.states)?;
     map_data.blocks.aggregate_adjacencies(&mut map_data.counties)?;
@@ -366,47 +367,16 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, verbose: u8) -> Result<()> {
     map_data.blocks.aggregate_adjacencies(&mut map_data.groups)?;
     map_data.blocks.aggregate_adjacencies(&mut map_data.vtds)?;
 
-    if verbose > 0 { eprintln!("Writing pack"); }
-    write_pack(out_dir, &map_data)?;
+    if verbose > 0 { eprintln!("Built pack for {state}"); }
+
+    Ok(map_data)
 
     // Compute perimeter & edge weights using geometry
+
+    // 7. Compute simple per‑feature metrics (perimeter)
+    //   - If you didn’t already compute perimeter during adjacency, do a single streaming pass per level’s .fgb to compute perimeter (and any other per‑feature metrics).
+    //   - Persist as a slim per‑level table: (idx, perimeter_m, area_m2, …).
+
     // Write data files
     // Validate & Write Metadata
-
-    /*
-    6. Compute per‑level adjacency (CSR) + edge weights (shared boundary)
-      - Do this per level, one at a time, using its .fgb:
-          Load geometries level‑by‑level (VTD → County → Tract → BG → Block (chunked if necessary)).
-          Build an R‑tree on bboxes for the level.
-          For each feature, candidate‑probe neighbors via bbox, then boundary‑intersect to confirm adjacency and accumulate shared‑edge length in the same pass.
-          Emit CSR (indptr, indices) and optional weights (f32/f64 for shared meters) to disk immediately for that level.
-      - Tip: For Blocks, do adjacency in tiles/chunks to avoid holding the entire level; build a temporary tile index.
-
-    7. Compute simple per‑feature metrics (perimeter)
-      - If you didn’t already compute perimeter during adjacency, do a single streaming pass per level’s .fgb to compute perimeter (and any other per‑feature metrics).
-      - Persist as a slim per‑level table: (idx, perimeter_m, area_m2, …).
-
-    8. Load block‑level elections & demographics
-      - Read once, normalize keys to block_idx.
-      - If large, stream via Polars scan and left‑join to block_idx map to replace GEOID15 with u32 indices.
-
-    9. Aggregate to higher levels
-      - You now have (block_idx → bg_idx/tract_idx/county_idx/state_idx) and (block_idx → vtd_idx) via step 5 and parent maps.
-      - Do groupby‑reduce by each parent index to produce per‑level aggregates (VTD, BG, Tract, County, State).
-      - Stream each aggregation separately (don’t hold all output levels at once).
-
-    10. Write outputs
-      - CSR per level (already written in step 6).
-      - Geometry layers (.fgb) per level (already written in steps 1–4).
-      - Attributes:
-          Block: write cleaned/normalized block attributes (elections + demo) as parquet keyed by block_idx.
-          Higher levels: write aggregated parquet per level keyed by dense index.
-      - Entities df / dictionaries: write compact lookup tables (dense index ↔ GEOID ↔ names).
-
-    11. Validate & write metadata
-      - Sanity checks: counts per level, sum of areas, CSR symmetry for undirected levels, shared‑edge totals non‑negative, parent coverage (every block has VTD, BG, etc.).
-      - Emit a small JSON/TOML manifest: file paths, counts, CRS, build hashes, schema versions.
-    */
-
-    Ok(())
 }

@@ -1,4 +1,4 @@
-use super::{geo_type::GeoType, map_layer::MapLayer};
+use super::{geo_type::GeoType, layer::MapLayer};
 
 #[derive(Debug)]
 pub struct MapData {

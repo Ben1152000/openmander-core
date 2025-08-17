@@ -5,4 +5,4 @@ pub mod geometry;
 pub mod pack;
 pub mod preprocess;
 pub mod redistrict;
-pub mod types;
+pub mod map;

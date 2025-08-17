@@ -5,7 +5,7 @@ use geo::{MultiPolygon, Point};
 use polars::{frame::DataFrame, prelude::*, series::{IntoSeries, Series}};
 use shapefile::{Shape, dbase::{Record, FieldValue}};
 
-use crate::{common::{data::*, fs::*, geo::*, polygon::*}, geometry::PlanarPartition, types::*};
+use crate::{common::{data::*, fs::*, geo::*, polygon::*}, geometry::PlanarPartition, map::*};
 
 /// Convert GEOID column from i64 to String type
 fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {

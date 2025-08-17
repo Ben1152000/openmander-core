@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Result};
 use clap::{Args, Parser, Subcommand, ValueHint};
 
-use crate::{common::fs::*, download::*, pack::*, preprocess::*, types::MapData};
+use crate::{common::fs::*, download::*, pack::*, preprocess::*, map::MapData};
 
 /// Redistricting CLI (argument schema only)
 #[derive(Parser, Debug)]
@@ -63,15 +63,14 @@ fn download(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
     if cli.verbose > 0 { eprintln!("Downloaded files for {} into {}", state_code, out_dir.display()); }
 
     let data = build_pack(download_dir, out_dir, &state_code, cli.verbose)?;
-    data.write_pack( out_dir)?;
+    data.write_to_pack( out_dir)?;
     if cli.verbose > 0 { eprintln!("Wrote pack to {}", out_dir.display()); }
 
     Ok(())
 }
 
 fn redistrict(cli: &crate::cli::Cli, args: &RedistrictArgs) -> Result<()> {
-    let map_data = MapData::read_pack(&args.pack)?;
-    map_data.write_pack(&args.pack)?;
+    let map_data = MapData::read_from_pack(&args.pack)?;
 
     println!("{:?}", map_data);
 

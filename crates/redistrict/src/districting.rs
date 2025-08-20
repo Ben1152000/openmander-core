@@ -1,9 +1,10 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Result};
-use polars::prelude::DataType;
 
-use crate::{common::data::read_from_csv, map::{GeoId, Map}};
+use openmander_map::{GeoId, Map};
+
+use crate::{common::data::read_from_csv, };
 
 #[derive(Debug)]
 pub struct DistrictData {

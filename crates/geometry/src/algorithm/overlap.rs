@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use geo::{BoundingRect, Relate};
 use rstar::{AABB};
 
-use super::PlanarPartition;
+use crate::PlanarPartition;
 
 impl PlanarPartition {
     /// Returns true iff any two MultiPolygons overlap in area (or one contains the other).

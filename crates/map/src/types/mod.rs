@@ -1,7 +1,7 @@
-mod geo_type;
-mod geo_id;
-mod layer;
-mod map;
+pub mod geo_type;
+pub mod geo_id;
+pub mod layer;
+pub mod map;
 
 pub use geo_type::GeoType;
 pub use geo_id::GeoId;

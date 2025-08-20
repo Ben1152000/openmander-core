@@ -1,7 +1,9 @@
-use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-use crate::common::{fs::extract_zip, geo::{state_abbr_to_fips, state_abbr_to_name}, io::download_big_file};
+use anyhow::{Context, Result};
+use openmander_map::pack::preprocess::build_pack;
+
+use crate::{cli::DownloadArgs, common::{fs::{ensure_dir_exists, extract_zip}, geo::{state_abbr_to_fips, state_abbr_to_name}, io::download_big_file}};
 
 /// Download demographic data from Dave's redistricting
 pub fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
@@ -91,6 +93,24 @@ pub fn download_files(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()>
     download_daves_demographics(out_dir, state, verbose)?;
     download_daves_elections(out_dir, state, verbose)?;
     download_census_crosswalks(out_dir, state, verbose)?;
+
+    Ok(())
+}
+
+pub fn download(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
+    let state_code = &args.state.to_ascii_uppercase();
+    let out_dir = &args.out.join(format!("{state_code}_2020_pack"));
+    ensure_dir_exists(out_dir)?;
+
+    let download_dir = &out_dir.join("download");
+    ensure_dir_exists(&download_dir)?;
+
+    download_files(download_dir, &state_code, cli.verbose)?;
+    if cli.verbose > 0 { eprintln!("Downloaded files for {} into {}", state_code, out_dir.display()); }
+
+    let data = build_pack(download_dir, out_dir, &state_code, cli.verbose)?;
+    data.write_to_pack( out_dir)?;
+    if cli.verbose > 0 { eprintln!("Wrote pack to {}", out_dir.display()); }
 
     Ok(())
 }

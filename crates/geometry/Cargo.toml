@@ -1,0 +1,11 @@
+[package]
+name = "openmander-geometry"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+geo = { workspace = true }
+rstar = { workspace = true }
+smallvec = { workspace = true }
+ahash = { workspace = true }

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Ok, Result};
 use geo::{Contains, InteriorPoint};
 use rstar::{AABB};
 
-use super::PlanarPartition;
+use crate::PlanarPartition;
 
 impl PlanarPartition {
 

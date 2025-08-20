@@ -1,14 +1,10 @@
-pub mod adjacency;
-pub mod crosswalk;
-pub mod overlap;
-
 use geo::{BoundingRect, MultiPolygon, Rect};
 use rstar::{RTree, RTreeObject, AABB};
 
 #[derive(Debug, Clone)]
 pub struct BoundingBox {
-    idx: usize, // Index of corresponding MultiPolygon in geoms
-    bbox: Rect<f64>,
+    pub idx: usize, // Index of corresponding MultiPolygon in geoms
+    pub bbox: Rect<f64>,
 }
 
 impl RTreeObject for BoundingBox {

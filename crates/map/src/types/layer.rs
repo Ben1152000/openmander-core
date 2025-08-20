@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{anyhow, bail, Result};
 use polars::frame::DataFrame;
 
-use crate::geometry::PlanarPartition;
+use openmander_geometry::PlanarPartition;
 use super::{geo_type::GeoType, geo_id::GeoId};
 
 #[derive(Debug, Clone)]

@@ -1,0 +1,16 @@
+[package]
+name = "openmander-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+zip = { workspace = true }
+tempfile = { workspace = true }
+
+openmander-map = { path = "../map" }
+openmander-redistrict = { path = "../redistrict" }

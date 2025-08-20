@@ -128,9 +128,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.98"
+version = "1.0.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
+checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
 
 [[package]]
 name = "approx"
@@ -574,9 +574,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.44"
+version = "4.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c1f056bae57e3e54c3375c41ff79619ddd13460a17d7438712bd0d83fda4ff8"
+checksum = "1fc0e74a703892159f5ae7d3aac52c8e6c392f5ae5f359c70b5881d60aaac318"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -596,9 +596,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.41"
+version = "4.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef4f52386a59ca4c860f7393bcf8abd8dfd91ecccc0f774635ff68e92eeef491"
+checksum = "14cb31bb0a7d536caef2639baa7fad459e15c3144efefa6dbd1c84562c4739f6"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -2259,14 +2259,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
-name = "openmander-core"
+name = "openmander-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "openmander-map",
+ "openmander-redistrict",
+ "reqwest",
+ "sha2",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "openmander-geometry"
 version = "0.1.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "geo",
+ "rstar",
+ "smallvec",
+]
+
+[[package]]
+name = "openmander-map"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "arrow-array",
  "arrow-schema",
- "clap",
  "flatgeobuf",
  "geo",
  "geo-traits",
@@ -2276,18 +2300,26 @@ dependencies = [
  "geoparquet",
  "geozero",
  "hex",
+ "openmander-geometry",
  "parquet",
  "polars",
  "reqwest",
- "rstar",
  "serde",
  "serde_json",
  "sha2",
  "shapefile",
- "smallvec",
  "tempfile",
- "walkdir",
  "zip",
+]
+
+[[package]]
+name = "openmander-redistrict"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "openmander-map",
+ "polars",
+ "shapefile",
 ]
 
 [[package]]
@@ -3774,9 +3806,9 @@ dependencies = [
 
 [[package]]
 name = "spade"
-version = "2.14.0"
+version = "2.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a14e31a007e9f85c32784b04f89e6e194bb252a4d41b4a8ccd9e77245d901c8c"
+checksum = "fb313e1c8afee5b5647e00ee0fe6855e3d529eb863a0fdae1d60006c4d1e9990"
 dependencies = [
  "hashbrown 0.15.5",
  "num-traits",

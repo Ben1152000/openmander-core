@@ -2,7 +2,7 @@ use anyhow::{Ok, Result};
 use geo::{BoundingRect, Coord, Relate};
 use rstar::{AABB};
 
-use super::PlanarPartition;
+use crate::PlanarPartition;
 
 impl PlanarPartition {
     /// Populate `adj_list` with rook contiguity (shared edge with positive length).

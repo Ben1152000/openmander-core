@@ -1,0 +1,13 @@
+[package]
+name = "openmander-redistrict"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+# serde = { workspace = true }
+# geo = { workspace = true }
+polars = { workspace = true }
+shapefile = { workspace = true }
+
+openmander-map = { path = "../map" }

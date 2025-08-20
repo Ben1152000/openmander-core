@@ -49,10 +49,11 @@ impl ParentRefs {
     }
 }
 
+/// A single planar partition Layer of the map, containing entities and their relationships.
 #[derive(Debug)]
 pub struct MapLayer {
     pub ty: GeoType,
-    pub index: HashMap<GeoId, u32>, // Map between geo_id and per-level contiguous indices.
+    pub index: HashMap<GeoId, u32>, // Map between geo_ids and per-level contiguous indices.
     pub entities: Vec<Entity>,
     pub parents: Vec<ParentRefs>,
     pub demo_data: Option<DataFrame>, // Demographic data
@@ -66,11 +67,11 @@ impl MapLayer {
     pub fn new(ty: GeoType) -> Self {
         Self {
             ty,
+            index: HashMap::new(),
             entities: Vec::new(),
             parents: Vec::new(),
             demo_data: None,
             elec_data: None,
-            index: HashMap::new(),
             geoms: None,
         }
     }

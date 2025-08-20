@@ -258,7 +258,7 @@ impl MapLayer {
     }
 }
 
-impl MapData {
+impl Map {
     fn compute_parents(&mut self) -> Result<()> {
         self.counties.assign_parents(GeoType::State)?;
         self.tracts.assign_parents(GeoType::County)?;
@@ -300,7 +300,7 @@ impl MapData {
 
 /// End-to-end: read raw downloads → write pack files.
 /// Keep this thin; all work lives in submodules.
-pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) -> Result<MapData> {
+pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) -> Result<Map> {
     let code = state.to_ascii_uppercase();
     let fips = state_abbr_to_fips(&code)
         .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
@@ -318,7 +318,7 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) ->
     require_dir_exists(input_dir)?;
     ensure_dir_exists(out_dir)?;
 
-    let mut map_data = MapData::default();
+    let mut map_data = Map::default();
 
     if verbose > 0 { eprintln!("[preprocess] loading {:?}", state_shapes_path); }
     map_data.states.insert_shapes(read_shapefile(&state_shapes_path)?)?;

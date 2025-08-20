@@ -1,7 +1,8 @@
 use super::{geo_type::GeoType, layer::MapLayer};
 
+/// Map struct that contains geographic data and geometries for redistricting.
 #[derive(Debug)]
-pub struct MapData {
+pub struct Map {
     pub states: MapLayer,
     pub counties: MapLayer,
     pub tracts: MapLayer,
@@ -10,7 +11,7 @@ pub struct MapData {
     pub blocks: MapLayer,
 }
 
-impl Default for MapData {
+impl Default for Map {
     fn default() -> Self {
         Self {
             states: MapLayer::new(GeoType::State),
@@ -23,7 +24,7 @@ impl Default for MapData {
     }
 }
 
-impl MapData {
+impl Map {
     pub fn get_layer(&self, ty: GeoType) -> &MapLayer {
         match ty {
             GeoType::State => &self.states,

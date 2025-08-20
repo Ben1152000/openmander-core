@@ -193,7 +193,7 @@ impl MapLayer {
     }
 }
 
-impl MapData {
+impl Map {
     pub fn write_to_pack(&self, path: &Path) -> Result<()> {
         let dirs = [
             "entities",

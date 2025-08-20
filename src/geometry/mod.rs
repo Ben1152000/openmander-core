@@ -1,6 +1,6 @@
 pub mod adjacency;
 pub mod crosswalk;
-pub mod intersection;
+pub mod overlap;
 
 use geo::{BoundingRect, MultiPolygon, Rect};
 use rstar::{RTree, RTreeObject, AABB};
@@ -26,6 +26,7 @@ pub struct PlanarPartition {
     pub adj_list: Vec<Vec<u32>>,
 }
 
+/// PlanarPartition represents a collection of non-overlapping MultiPolygons with spatial relationships.
 impl PlanarPartition {
     /// Construct a PlanarPartition object from a vector of MultiPolygons
     pub fn new(polygons: Vec<MultiPolygon<f64>>) -> Self {

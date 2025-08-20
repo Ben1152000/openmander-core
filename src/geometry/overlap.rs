@@ -1,3 +1,4 @@
+use anyhow::{bail, Result};
 use geo::{BoundingRect, Relate};
 use rstar::{AABB};
 
@@ -6,7 +7,7 @@ use super::PlanarPartition;
 impl PlanarPartition {
     /// Returns true iff any two MultiPolygons overlap in area (or one contains the other).
     /// Pure boundary touches (edge or point) are NOT considered overlaps.
-    pub fn detect_overlaps(&self, tol: f64) -> bool {
+    pub fn assert_no_overlaps(&self, tol: f64) -> Result<()> {
         for i in 0..self.geoms.len() {
             let Some(rect) = self.geoms[i].bounding_rect() else { continue };
             let search = AABB::from_corners(
@@ -23,10 +24,11 @@ impl PlanarPartition {
     
                 // Overlap (including containment/equality) = intersects but not merely touching.
                 if im.is_intersects() && !im.is_touches() {
-                    return true;
+                    bail!("Overlapping geometries found: {i} and {j}");
                 }
             }
         }
-        false
+        
+        Ok(())
     }
 }

@@ -1,4 +1,4 @@
-pub mod types;
-pub mod algorithm;
+mod types;
+mod algorithm;
 
 pub use types::PlanarPartition;

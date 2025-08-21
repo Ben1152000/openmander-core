@@ -4,7 +4,7 @@ use openmander_map::Map;
 
 use crate::cli::RedistrictArgs;
 
-pub fn redistrict(cli: &crate::cli::Cli, args: &RedistrictArgs) -> Result<()> {
+pub fn run(cli: &crate::cli::Cli, args: &RedistrictArgs) -> Result<()> {
     let map_data = Map::read_from_pack(&args.pack)?;
 
     println!("{:?}", map_data);

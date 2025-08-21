@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use openmander_map::pack::preprocess::build_pack;
+use openmander_map::pack::build::build_pack;
 
 use crate::{cli::DownloadArgs, common::{fs::{ensure_dir_exists, extract_zip}, geo::{state_abbr_to_fips, state_abbr_to_name}, io::download_big_file}};
 
@@ -97,7 +97,7 @@ pub fn download_files(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()>
     Ok(())
 }
 
-pub fn download(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
+pub fn run(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
     let state_code = &args.state.to_ascii_uppercase();
     let out_dir = &args.out.join(format!("{state_code}_2020_pack"));
     ensure_dir_exists(out_dir)?;

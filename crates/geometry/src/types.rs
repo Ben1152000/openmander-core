@@ -15,27 +15,29 @@ impl RTreeObject for BoundingBox {
     }
 }
 
+/// PlanarPartition represents a collection of non-overlapping MultiPolygons with spatial relationships.
 #[derive(Debug, Clone)]
 pub struct PlanarPartition {
-    pub geoms: Vec<MultiPolygon<f64>>,
+    pub shapes: Vec<MultiPolygon<f64>>,
+    pub adjacencies: Vec<Vec<u32>>,
+    pub shared_perimeters: Vec<Vec<f64>>,
     pub rtree: RTree<BoundingBox>,
-    pub adj_list: Vec<Vec<u32>>,
 }
 
-/// PlanarPartition represents a collection of non-overlapping MultiPolygons with spatial relationships.
 impl PlanarPartition {
     /// Construct a PlanarPartition object from a vector of MultiPolygons
     pub fn new(polygons: Vec<MultiPolygon<f64>>) -> Self {
         Self {
-            adj_list: polygons.iter().map(|_| Vec::new()).collect(),
+            adjacencies: polygons.iter().map(|_| Vec::new()).collect(),
+            shared_perimeters: polygons.iter().map(|_| Vec::new()).collect(),
             rtree: RTree::bulk_load(polygons.iter().enumerate()
                 .map(|(i, poly)| BoundingBox { idx: i, bbox: poly.bounding_rect().unwrap() })
-                .collect()),
-            geoms: polygons,
+                    .collect()),
+            shapes: polygons,
         }
     }
 
-    #[inline] pub fn len(&self) -> usize { self.geoms.len() }
+    #[inline] pub fn len(&self) -> usize { self.shapes.len() }
 
-    #[inline] pub fn is_empty(&self) -> bool { self.geoms.is_empty() }
+    #[inline] pub fn is_empty(&self) -> bool { self.shapes.is_empty() }
 }

@@ -1,6 +1,10 @@
+use std::hash::{Hash, Hasher};
+
+use ahash::AHashMap;
 use anyhow::{Ok, Result};
 use geo::{BoundingRect, Coord, Relate};
 use rstar::{AABB};
+use smallvec::SmallVec;
 
 use crate::PlanarPartition;
 
@@ -9,15 +13,13 @@ impl PlanarPartition {
     /// Uses DE‑9IM string: require `touches` AND boundary∩boundary has dimension 1.
     pub fn compute_adjacencies(&mut self) -> Result<()> {
         // clear any existing adjacencies
-        for nbrs in &mut self.adj_list {
-            nbrs.clear();
-        }
+        for nbrs in &mut self.adjacencies { nbrs.clear(); }
 
         // bbox padding if you expect FP jitter; keep 0.0 if not needed
         let eps = 0.0_f64;
 
-        for i in 0..self.geoms.len() {
-            let Some(rect) = self.geoms[i].bounding_rect() else { continue };
+        for i in 0..self.shapes.len() {
+            let Some(rect) = self.shapes[i].bounding_rect() else { continue };
             let search = AABB::from_corners(
                 [rect.min().x - eps, rect.min().y - eps],
                 [rect.max().x + eps, rect.max().y + eps],
@@ -27,15 +29,15 @@ impl PlanarPartition {
                 let j = cand.idx;
                 if j <= i { continue; } // check each unordered pair once
 
-                let im = self.geoms[i].relate(&self.geoms[j]);
+                let im = self.shapes[i].relate(&self.shapes[j]);
 
                 // Rook predicate:
                 // 1) touches = true (no interior overlap)
                 // 2) boundary/boundary dimension == '1' (line segment)
                 //    In the 9-char DE‑9IM string, index 4 is Boundary/Boundary.
                 if im.is_touches() && im.matches("****1****")? {
-                    self.adj_list[i].push(j as u32);
-                    self.adj_list[j].push(i as u32);
+                    self.adjacencies[i].push(j as u32);
+                    self.adjacencies[j].push(i as u32);
                 }
             }
         }
@@ -46,10 +48,6 @@ impl PlanarPartition {
     /// Compute rook adjacencies by hashing shared edges. `scale` is the snapping factor
     /// used to quantize coordinates and defeat tiny FP mismatches (e.g., 1e7 for degrees).
     pub fn compute_adjacencies_fast(&mut self, scale: f64) -> Result<()> {
-        use std::hash::{Hash, Hasher};
-        use smallvec::SmallVec; // cargo add smallvec
-        use ahash::AHashMap;    // cargo add ahash (fast hash)
-
         #[derive(Clone, Copy, Eq)]
         struct I2 { x: i64, y: i64 }
         impl PartialEq for I2 { fn eq(&self, o: &Self) -> bool { self.x == o.x && self.y == o.y } }
@@ -79,15 +77,13 @@ impl PlanarPartition {
         }
 
         // Clear existing
-        for v in &mut self.adj_list {
-            v.clear();
-        }
+        for v in &mut self.adjacencies { v.clear(); }
 
         // Edge -> polygons that contain this edge (usually 1 or 2)
-        let mut edge_to_polys: AHashMap<EdgeKey, SmallVec<[u32; 2]>> = AHashMap::with_capacity(self.geoms.len() * 16);
+        let mut edge_to_polys: AHashMap<EdgeKey, SmallVec<[u32; 2]>> = AHashMap::with_capacity(self.shapes.len() * 16);
 
         // 1) Ingest all edges
-        for (pi, mp) in self.geoms.iter().enumerate() {
+        for (i, mp) in self.shapes.iter().enumerate() {
             // Iterate every polygon and ring
             for poly in &mp.0 {
                 // exterior + holes
@@ -100,8 +96,8 @@ impl PlanarPartition {
                         let key = edge_key(p, q);
                         let entry = edge_to_polys.entry(key).or_insert_with(|| SmallVec::new());
                         // Avoid duplicates if ring repeats an edge
-                        if entry.last().copied() != Some(pi as u32) {
-                            entry.push(pi as u32);
+                        if entry.last().copied() != Some(i as u32) {
+                            entry.push(i as u32);
                         }
                     }
                 }
@@ -115,8 +111,8 @@ impl PlanarPartition {
                 2 => {
                     let a = polys[0] as usize;
                     let b = polys[1] as usize;
-                    self.adj_list[a].push(b as u32);
-                    self.adj_list[b].push(a as u32);
+                    self.adjacencies[a].push(b as u32);
+                    self.adjacencies[b].push(a as u32);
                 }
                 k => {
                     // Rare but possible with slivers or multi-coverage: fully connect the clique
@@ -124,8 +120,8 @@ impl PlanarPartition {
                         for j in (i + 1)..k {
                             let a = polys[i] as usize;
                             let b = polys[j] as usize;
-                            self.adj_list[a].push(b as u32);
-                            self.adj_list[b].push(a as u32);
+                            self.adjacencies[a].push(b as u32);
+                            self.adjacencies[b].push(a as u32);
                         }
                     }
                 }
@@ -133,9 +129,9 @@ impl PlanarPartition {
         }
 
         // 3) Optional: dedup and sort neighbor lists for determinism
-        for nbrs in &mut self.adj_list {
-            nbrs.sort_unstable();
-            nbrs.dedup();
+        for neighbors in &mut self.adjacencies {
+            neighbors.sort_unstable();
+            neighbors.dedup();
         }
 
         Ok(())

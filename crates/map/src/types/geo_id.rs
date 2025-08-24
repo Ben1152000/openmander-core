@@ -14,7 +14,7 @@ impl GeoId {
     /// Returns a new `GeoId` corresponding to the higher-level `GeoType`
     /// by truncating this GeoId's string to the correct prefix length.
     pub fn to_parent(&self, parent_ty: GeoType) -> GeoId {
-        let len = match parent_ty {
+        let id_len = match parent_ty {
             GeoType::State  => 2,
             GeoType::County => 5,
             GeoType::Tract  => 11,
@@ -24,7 +24,7 @@ impl GeoId {
         };
 
         // If the id is shorter than expected, just take the full id.
-        let prefix: Arc<str> = Arc::from(&self.id[..self.id.len().min(len)]);
+        let prefix: Arc<str> = Arc::from(&self.id[..self.id.len().min(id_len)]);
 
         GeoId {
             ty: parent_ty,

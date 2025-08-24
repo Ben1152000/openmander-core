@@ -1,18 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap};
 
-use anyhow::{anyhow, bail, Result};
-use polars::frame::DataFrame;
-
+use anyhow::{bail, Ok, Result};
 use openmander_geometry::PlanarPartition;
-use super::{geo_type::GeoType, geo_id::GeoId};
+use polars::{frame::DataFrame};
 
-#[derive(Debug, Clone)]
-pub struct Entity {
-    pub geo_id: GeoId,
-    pub name: Option<Arc<str>>,  // Common name
-    pub area_m2: Option<f64>,
-    pub centroid: Option<geo::Point<f64>>,  // Interior point (lon, lat)
-}
+use crate::{GeoId, GeoType};
 
 /// Quick way to access parent entities across levels.
 #[derive(Debug, Clone, Default)]
@@ -53,34 +45,22 @@ impl ParentRefs {
 #[derive(Debug)]
 pub struct MapLayer {
     pub ty: GeoType,
-    pub index: HashMap<GeoId, u32>, // Map between geo_ids and per-level contiguous indices.
-    pub entities: Vec<Entity>,
-    pub parents: Vec<ParentRefs>,
-    pub demo_data: Option<DataFrame>, // Demographic data
-    pub elec_data: Option<DataFrame>, // Election data
-
-    // Per-level geometry store, indexed by entities (incl. adjacency).
-    pub geoms: Option<PlanarPartition>,
+    pub geo_ids: Vec<GeoId>,
+    pub index: HashMap<GeoId, u32>, // Map between geo_ids and per-level contiguous indices
+    pub parents: Vec<ParentRefs>, // References to parent entities (higher level types)
+    pub data: DataFrame, // Entity data (incl. name, centroid, geographic data, election data)
+    pub geoms: Option<PlanarPartition>, // Per-level geometry store, indexed by entities (incl. adjacency)
 }
 
 impl MapLayer {
     pub fn new(ty: GeoType) -> Self {
         Self {
             ty,
+            geo_ids: Vec::new(),
             index: HashMap::new(),
-            entities: Vec::new(),
             parents: Vec::new(),
-            demo_data: None,
-            elec_data: None,
+            data: DataFrame::empty(),
             geoms: None,
         }
-    }
-
-    pub fn compute_adjacencies(&mut self) -> Result<()> { 
-        self.geoms
-            .as_mut()
-            .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?
-            .compute_adjacencies_fast(1e8)?;
-        Ok(())
     }
 }

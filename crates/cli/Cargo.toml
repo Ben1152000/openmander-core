@@ -5,12 +5,13 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
 clap = { workspace = true }
+hex = { workspace = true }
+polars = { workspace = true }
 reqwest = { workspace = true }
-zip = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }
+zip = { workspace = true }
 
 openmander-map = { path = "../map" }
 openmander-redistrict = { path = "../redistrict" }

@@ -59,6 +59,7 @@ pub fn shp_to_geo(p: &shp::Polygon) -> geo::MultiPolygon<f64> {
 }
 
 /// Convert geo::MultiPolygon<f64> to shapefile::Polygon
+#[allow(dead_code)]
 pub fn geo_to_shp(mp: &geo::MultiPolygon<f64>) -> shp::Polygon {
     /// Create a shapefile::Point
     #[inline] fn shp_point(x: f64, y: f64) -> shp::Point { shp::Point { x, y } }
@@ -106,53 +107,6 @@ pub fn geo_to_shp(mp: &geo::MultiPolygon<f64>) -> shp::Polygon {
     }
 
     shp::Polygon::with_rings(rings)
-}
-
-/// Write as a FlatGeobuf (MultiPolygon layer, EPSG:4269).
-pub fn write_to_fgb(path: &Path, geoms: &Vec<geo::MultiPolygon<f64>>) -> Result<()> {
-    use geozero::{FeatureProcessor, geo_types::process_geom};
-    use flatgeobuf::{FgbCrs, FgbWriter, FgbWriterOptions, GeometryType};
-
-    let mut fgb = FgbWriter::create_with_options(
-        "geoms",
-        GeometryType::MultiPolygon,
-        FgbWriterOptions {
-            crs: FgbCrs { code: 4269, ..Default::default() },
-            ..Default::default()
-        },
-    )?;
-
-    for (i, mp) in geoms.iter().enumerate() {
-        fgb.feature_begin(i as u64)?;
-        let g: geo::Geometry<f64> = geo::Geometry::MultiPolygon(mp.clone());
-        process_geom(&g, &mut fgb)?; // stream geo-types coords into writer
-        fgb.feature_end(i as u64)?;
-    }
-
-    let mut out = BufWriter::new(std::fs::File::create(path)?);
-    fgb.write(&mut out)?;
-    Ok(())
-}
-
-/// Read a FlatGeobuf (MultiPolygon/Polygon) into a PlanarPartition.
-pub fn read_from_fgb(path: &Path) -> Result<Vec<geo::MultiPolygon<f64>>> {
-    use geozero::ToGeo;
-    use flatgeobuf::{FallibleStreamingIterator, FgbReader};
-
-    let file = std::fs::File::open(path)?;
-    let mut feat_iter = FgbReader::open(BufReader::new(file))?.select_all()?;
-
-    let mut polys: Vec<geo::MultiPolygon<f64>> = Vec::new();
-    while let Some(feat) = feat_iter.next()? {
-        let geom: geo::Geometry<f64> = feat.to_geo()?; // convert feature to geo-types
-        match geom {
-            geo::Geometry::MultiPolygon(mp) => polys.push(mp),
-            geo::Geometry::Polygon(p) => polys.push(geo::MultiPolygon(vec![p])), // be lenient
-            other => return Err(anyhow!("Unexpected geometry type in FGB: {:?}", other)),
-        }
-    }
-
-    Ok(polys)
 }
 
 /// Write geometries to a single-column GeoParquet file named `geometry`.

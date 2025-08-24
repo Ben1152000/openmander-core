@@ -1,10 +1,9 @@
 use std::{collections::HashMap};
 
 use anyhow::{bail, Ok, Result};
-use openmander_geometry::PlanarPartition;
 use polars::{frame::DataFrame};
 
-use crate::{GeoId, GeoType};
+use super::{geo_id::GeoId, geo_type::GeoType, geom::PlanarPartition};
 
 /// Quick way to access parent entities across levels.
 #[derive(Debug, Clone, Default)]

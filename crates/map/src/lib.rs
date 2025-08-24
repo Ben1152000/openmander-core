@@ -1,5 +1,6 @@
+mod geometry;
 mod common;
 mod types;
-pub mod pack;
+mod pack;
 
-pub use types::{GeoId, GeoType, MapLayer, Map};
+pub use types::{GeoId, GeoType, MapLayer, Map, PlanarPartition};

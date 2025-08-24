@@ -3,8 +3,6 @@ use std::{path::Path};
 use anyhow::{Ok, Result};
 use polars::prelude::*;
 
-use openmander_geometry::PlanarPartition;
-
 use crate::{common::{data::*, geom::*}, types::*};
 
 impl MapLayer {

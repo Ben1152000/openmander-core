@@ -2,11 +2,10 @@ use std::{collections::{HashMap, HashSet}, path::Path, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
 use geo::{MultiPolygon};
-use openmander_geometry::PlanarPartition;
 use polars::{frame::DataFrame, prelude::{col, Column, DataFrameJoinOps, IntoLazy, NamedFrom, SortMultipleOptions}, series::Series};
 use shapefile::{dbase::{FieldValue, Record}, Reader, Shape};
 
-use crate::{common::geom::shp_to_geo, types::ParentRefs, GeoId, GeoType, Map, MapLayer};
+use crate::{common::geom::*, types::*};
 
 impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.

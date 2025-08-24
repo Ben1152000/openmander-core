@@ -11,9 +11,9 @@ use crate::PlanarPartition;
 impl PlanarPartition {
     /// Populate `adj_list` with rook contiguity (shared edge with positive length).
     /// Uses DE‑9IM string: require `touches` AND boundary∩boundary has dimension 1.
-    pub fn compute_adjacencies(&mut self) -> Result<()> {
+    pub fn compute_adjacencies(&mut self) -> Result<Vec<Vec<u32>>> {
         // clear any existing adjacencies
-        for nbrs in &mut self.adjacencies { nbrs.clear(); }
+        let mut adjacencies: Vec<Vec<u32>> = vec![Vec::new(); self.len()];
 
         // bbox padding if you expect FP jitter; keep 0.0 if not needed
         let eps = 0.0_f64;
@@ -36,18 +36,18 @@ impl PlanarPartition {
                 // 2) boundary/boundary dimension == '1' (line segment)
                 //    In the 9-char DE‑9IM string, index 4 is Boundary/Boundary.
                 if im.is_touches() && im.matches("****1****")? {
-                    self.adjacencies[i].push(j as u32);
-                    self.adjacencies[j].push(i as u32);
+                    adjacencies[i].push(j as u32);
+                    adjacencies[j].push(i as u32);
                 }
             }
         }
 
-        Ok(())
+        Ok(adjacencies)
     }
 
     /// Compute rook adjacencies by hashing shared edges. `scale` is the snapping factor
     /// used to quantize coordinates and defeat tiny FP mismatches (e.g., 1e7 for degrees).
-    pub fn compute_adjacencies_fast(&mut self, scale: f64) -> Result<()> {
+    pub fn compute_adjacencies_fast(&mut self, scale: f64) -> Result<Vec<Vec<u32>>> {
         #[derive(Clone, Copy, Eq)]
         struct I2 { x: i64, y: i64 }
         impl PartialEq for I2 { fn eq(&self, o: &Self) -> bool { self.x == o.x && self.y == o.y } }
@@ -76,8 +76,7 @@ impl PlanarPartition {
             if (p.x, p.y) <= (q.x, q.y) { EdgeKey { a: p, b: q } } else { EdgeKey { a: q, b: p } }
         }
 
-        // Clear existing
-        for v in &mut self.adjacencies { v.clear(); }
+        let mut adjacencies: Vec<Vec<u32>> = vec![Vec::new(); self.len()];
 
         // Edge -> polygons that contain this edge (usually 1 or 2)
         let mut edge_to_polys: AHashMap<EdgeKey, SmallVec<[u32; 2]>> = AHashMap::with_capacity(self.shapes.len() * 16);
@@ -111,8 +110,8 @@ impl PlanarPartition {
                 2 => {
                     let a = polys[0] as usize;
                     let b = polys[1] as usize;
-                    self.adjacencies[a].push(b as u32);
-                    self.adjacencies[b].push(a as u32);
+                    adjacencies[a].push(b as u32);
+                    adjacencies[b].push(a as u32);
                 }
                 k => {
                     // Rare but possible with slivers or multi-coverage: fully connect the clique
@@ -120,8 +119,8 @@ impl PlanarPartition {
                         for j in (i + 1)..k {
                             let a = polys[i] as usize;
                             let b = polys[j] as usize;
-                            self.adjacencies[a].push(b as u32);
-                            self.adjacencies[b].push(a as u32);
+                            adjacencies[a].push(b as u32);
+                            adjacencies[b].push(a as u32);
                         }
                     }
                 }
@@ -129,11 +128,11 @@ impl PlanarPartition {
         }
 
         // 3) Optional: dedup and sort neighbor lists for determinism
-        for neighbors in &mut self.adjacencies {
+        for neighbors in &mut adjacencies {
             neighbors.sort_unstable();
             neighbors.dedup();
         }
 
-        Ok(())
+        Ok(adjacencies)
     }
 }

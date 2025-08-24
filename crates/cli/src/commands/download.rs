@@ -187,6 +187,9 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) ->
     if verbose > 0 { eprintln!("[preprocess] computing adjacencies"); }
     map_data.compute_adjacencies()?;
 
+    if verbose > 0 { eprintln!("[preprocess] computing shared perimeters"); }
+    map_data.compute_shared_perimeters()?;
+
     if verbose > 0 { eprintln!("Built pack for {state}"); }
 
     Ok(map_data)

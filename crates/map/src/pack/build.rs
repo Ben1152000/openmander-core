@@ -183,10 +183,17 @@ impl MapLayer {
 
     /// Compute adjacencies for the layer geometries, if it exists.
     pub fn compute_adjacencies(&mut self) -> Result<()> {
-        self.geoms
-            .as_mut()
-            .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?
-            .compute_adjacencies_fast(1e8)?;
+        let geoms = self.geoms.as_mut()
+            .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?;
+        geoms.adjacencies = geoms.compute_adjacencies_fast(1e8)?;
+        Ok(())
+    }
+
+    /// Compute shared perimeters for the layer geometries, if it exists.
+    pub fn compute_shared_perimeters(&mut self) -> Result<()> {
+        let geoms = self.geoms.as_mut()
+            .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
+        geoms.shared_perimeters = geoms.compute_shared_perimeters_fast(1e8);
         Ok(())
     }
 }
@@ -339,6 +346,14 @@ impl Map {
         self.aggregate_adjacencies(GeoType::Tract, GeoType::County)?;
         self.aggregate_adjacencies(GeoType::County, GeoType::State)?;
 
+        Ok(())
+    }
+
+    /// Compute shared perimeters for all layers, if geometries exist.
+    pub fn compute_shared_perimeters(&mut self) -> Result<()> {
+        for ty in GeoType::order() {
+            self.get_layer_mut(ty).compute_shared_perimeters()?;
+        }
         Ok(())
     }
 }

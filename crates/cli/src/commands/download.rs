@@ -138,7 +138,7 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) ->
     map_data.blocks = MapLayer::from_tiger_shapefile(GeoType::Block, &block_shapes_path)?;
 
     if verbose > 0 { eprintln!("[preprocess] computing crosswalks"); }
-    map_data.compute_parents()?;
+    map_data.compute_parents();
 
     /// Convert a crosswalk DataFrame to a map of GeoIds
     fn get_map_from_crosswalk_df(df: &DataFrame, geo_types: (GeoType, GeoType), col_names: (&str, &str)) -> Result<HashMap<GeoId, GeoId>> {

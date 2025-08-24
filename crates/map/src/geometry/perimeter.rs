@@ -2,18 +2,18 @@ use std::collections::HashMap;
 
 use geo::{BooleanOps, Coord, Distance, Geodesic, GeodesicArea, LineString, MultiPolygon, Point};
 
-use crate::PlanarPartition;
+use crate::Geometries;
 
-impl PlanarPartition {
+impl Geometries {
     /// For each polygon and its adjacency list, compute the shared perimeter with each neighbor.
-    pub fn compute_shared_perimeters(&mut self) -> Vec<Vec<f64>>{
+    pub fn compute_shared_perimeters(&mut self, adjacencies: &Vec<Vec<u32>>) -> Vec<Vec<f64>>{
         /// Length of shared boundary between two (mutually adjacent) multipolygons.
         fn shared_perimeter(a: &MultiPolygon<f64>, b: &MultiPolygon<f64>) -> f64 {
             (a.geodesic_perimeter() + b.geodesic_perimeter() - a.union(b).geodesic_perimeter()) / 2.0
         }
 
         let mut shared_perimeters: Vec<Vec<f64>> = vec![Vec::new(); self.len()];
-        for (i, neighbors) in self.adjacencies.iter().enumerate() {
+        for (i, neighbors) in adjacencies.iter().enumerate() {
             shared_perimeters[i] = neighbors.iter().map(|&j | {
                 shared_perimeter(&self.shapes[i], &self.shapes[j as usize])
             }).collect();
@@ -24,7 +24,7 @@ impl PlanarPartition {
 
     /// Compute shared perimeters by matching identical edges (fast; no boolean ops).
     /// `scale` controls float -> integer key rounding (e.g., 1e9 for ~1e-9°).
-    pub fn compute_shared_perimeters_fast(&self, scale: f64) -> Vec<Vec<f64>> {
+    pub fn compute_shared_perimeters_fast(&self, adjacencies: &Vec<Vec<u32>>, scale: f64) -> Vec<Vec<f64>> {
         #[derive(Clone, Copy, PartialEq, Eq, Hash)]
         struct EdgeKey { ax: i64, ay: i64, bx: i64, by: i64 }
 
@@ -85,7 +85,7 @@ impl PlanarPartition {
 
         // Build result aligned to existing adjacency lists
         let mut out: Vec<Vec<f64>> = Vec::with_capacity(n);
-        for (i, nbrs) in self.adjacencies.iter().enumerate() {
+        for (i, nbrs) in adjacencies.iter().enumerate() {
             let pid = i as u32;
             let row: Vec<f64> = nbrs.iter().map(|&j| {
                 let k = pair_key(pid, j);

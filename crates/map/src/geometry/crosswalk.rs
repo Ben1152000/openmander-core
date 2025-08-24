@@ -2,12 +2,12 @@ use anyhow::{anyhow, Ok, Result};
 use geo::{Contains, InteriorPoint};
 use rstar::{AABB};
 
-use crate::PlanarPartition;
+use crate::Geometries;
 
-impl PlanarPartition {
+impl Geometries {
     /// For each geometry in `self`, pick its interior point and find the (unique)
     /// geometry in `other` that contains it. Errors if none is found.
-    pub fn compute_crosswalks(&self, other: &PlanarPartition) -> Result<Vec<u32>> {
+    pub fn compute_crosswalks(&self, other: &Geometries) -> Result<Vec<u32>> {
         let mut map = Vec::with_capacity(self.shapes.len());
 
         for (i, a) in self.shapes.iter().enumerate() {

@@ -6,9 +6,9 @@ use geo::{BoundingRect, Coord, Relate};
 use rstar::{AABB};
 use smallvec::SmallVec;
 
-use crate::PlanarPartition;
+use crate::Geometries;
 
-impl PlanarPartition {
+impl Geometries {
     /// Populate `adj_list` with rook contiguity (shared edge with positive length).
     /// Uses DE‑9IM string: require `touches` AND boundary∩boundary has dimension 1.
     pub fn compute_adjacencies(&mut self) -> Result<Vec<Vec<u32>>> {

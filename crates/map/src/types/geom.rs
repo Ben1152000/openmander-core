@@ -15,21 +15,17 @@ impl RTreeObject for BoundingBox {
     }
 }
 
-/// PlanarPartition represents a collection of non-overlapping MultiPolygons with spatial relationships.
+/// Geometries represents a collection of non-overlapping MultiPolygons with spatial relationships.
 #[derive(Debug, Clone)]
-pub struct PlanarPartition {
+pub struct Geometries {
     pub shapes: Vec<MultiPolygon<f64>>,
-    pub adjacencies: Vec<Vec<u32>>,
-    pub shared_perimeters: Vec<Vec<f64>>,
     pub rtree: RTree<BoundingBox>,
 }
 
-impl PlanarPartition {
-    /// Construct a PlanarPartition object from a vector of MultiPolygons
+impl Geometries {
+    /// Construct a Geometries object from a vector of MultiPolygons
     pub fn new(polygons: Vec<MultiPolygon<f64>>) -> Self {
         Self {
-            adjacencies: polygons.iter().map(|_| Vec::new()).collect(),
-            shared_perimeters: polygons.iter().map(|_| Vec::new()).collect(),
             rtree: RTree::bulk_load(polygons.iter().enumerate()
                 .map(|(i, poly)| BoundingBox { idx: i, bbox: poly.bounding_rect().unwrap() })
                     .collect()),

@@ -53,6 +53,24 @@ impl MapLayer {
                         .collect::<Result<Vec<_>>>()?,
                 ),
                 Column::new(
+                    "centroid_lon".into(),
+                    records.iter()
+                        .map(|record| {
+                            let s = get_character_field(record, "INTPTLON20")?;
+                            Ok::<f64>(s.trim().parse()?)
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                Column::new(
+                    "centroid_lat".into(),
+                    records.iter()
+                        .map(|record| {
+                            let s = get_character_field(record, "INTPTLAT20")?;
+                            Ok::<f64>(s.trim().parse()?)
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                Column::new(
                     "area_m2".into(),
                     records.iter()
                         .map(|record| Ok::<f64>(
@@ -70,24 +88,6 @@ impl MapLayer {
                     "water_m2".into(),
                     records.iter()
                         .map(|record| get_numeric_field(record, "AWATER20"))
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Column::new(
-                    "centroid_lon".into(),
-                    records.iter()
-                        .map(|record| {
-                            let s = get_character_field(record, "INTPTLON20")?;
-                            Ok::<f64>(s.trim().parse()?)
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Column::new(
-                    "centroid_lat".into(),
-                    records.iter()
-                        .map(|record| {
-                            let s = get_character_field(record, "INTPTLAT20")?;
-                            Ok::<f64>(s.trim().parse()?)
-                        })
                         .collect::<Result<Vec<_>>>()?,
                 ),
             ])?)
@@ -124,7 +124,9 @@ impl MapLayer {
             index: index,
             parents: vec![ParentRefs::default(); size],
             data: data,
-            geoms: Some(PlanarPartition::new(shapes)),
+            adjacencies: vec![Vec::new(); size],
+            shared_perimeters: vec![Vec::new(); size],
+            geoms: Some(Geometries::new(shapes)),
         })
     }
 
@@ -165,7 +167,7 @@ impl MapLayer {
     }
 
     /// Assign parent references for each entity in the layer, based on their truncated geo_id.
-    pub fn assign_parents(&mut self, parent_ty: GeoType) -> Result<()> {
+    pub fn assign_parents(&mut self, parent_ty: GeoType) {
         self.geo_ids.iter().enumerate()
             .map(|(i, geo_id)| self.parents[i].set(parent_ty,Some(geo_id.to_parent(parent_ty))))
             .collect()
@@ -174,10 +176,9 @@ impl MapLayer {
     /// Assign parent references for each entity in the layer, based on a provided map of geo_id to parent geo_id.
     pub fn assign_parents_from_map(&mut self, parent_ty: GeoType, parent_map: HashMap<GeoId, GeoId>) -> Result<()> {
         self.geo_ids.iter().enumerate()
-            .map(|(i, geo_id)| parent_map
-                .get(geo_id)
+            .map(|(i, geo_id)| Ok(parent_map.get(geo_id)
                 .ok_or_else(|| anyhow!("No parent found for entity with geo_id: {:?}", geo_id))
-                .map(|p| self.parents[i].set(parent_ty, Some(p.clone()))))
+                .map(|geo_id| self.parents[i].set(parent_ty, Some(geo_id.clone())))))
             .collect::<Result<_>>()?
     }
 
@@ -185,7 +186,7 @@ impl MapLayer {
     pub fn compute_adjacencies(&mut self) -> Result<()> {
         let geoms = self.geoms.as_mut()
             .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?;
-        geoms.adjacencies = geoms.compute_adjacencies_fast(1e8)?;
+        self.adjacencies = geoms.compute_adjacencies_fast(1e8)?;
         Ok(())
     }
 
@@ -193,32 +194,30 @@ impl MapLayer {
     pub fn compute_shared_perimeters(&mut self) -> Result<()> {
         let geoms = self.geoms.as_mut()
             .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
-        geoms.shared_perimeters = geoms.compute_shared_perimeters_fast(1e8);
+        self.shared_perimeters = geoms.compute_shared_perimeters_fast(&self.adjacencies, 1e8);
         Ok(())
     }
 }
 
 impl Map {
     /// Compute parent references for all layers based on truncated geo_id.
-    pub fn compute_parents(&mut self) -> Result<()> {
-        self.counties.assign_parents(GeoType::State)?;
+    pub fn compute_parents(&mut self) {
+        self.counties.assign_parents(GeoType::State);
 
-        self.tracts.assign_parents(GeoType::County)?;
-        self.tracts.assign_parents(GeoType::State)?;
+        self.tracts.assign_parents(GeoType::County);
+        self.tracts.assign_parents(GeoType::State);
 
-        self.groups.assign_parents(GeoType::Tract)?;
-        self.groups.assign_parents(GeoType::County)?;
-        self.groups.assign_parents(GeoType::State)?;
+        self.groups.assign_parents(GeoType::Tract);
+        self.groups.assign_parents(GeoType::County);
+        self.groups.assign_parents(GeoType::State);
 
-        self.vtds.assign_parents(GeoType::County)?;
-        self.vtds.assign_parents(GeoType::State)?;
+        self.vtds.assign_parents(GeoType::County);
+        self.vtds.assign_parents(GeoType::State);
 
-        self.blocks.assign_parents(GeoType::Group)?;
-        self.blocks.assign_parents(GeoType::Tract)?;
-        self.blocks.assign_parents(GeoType::County)?;
-        self.blocks.assign_parents(GeoType::State)?;
-
-        Ok(())
+        self.blocks.assign_parents(GeoType::Group);
+        self.blocks.assign_parents(GeoType::Tract);
+        self.blocks.assign_parents(GeoType::County);
+        self.blocks.assign_parents(GeoType::State);
     }
 
     /// Aggregate a DataFrame from a child layer to a parent layer.
@@ -232,8 +231,7 @@ impl Map {
                 Ok(self.get_layer(ty).parents
                     .get(i as usize)
                     .ok_or_else(|| anyhow!("row {} out of bounds (parents len = {})", i, self.get_layer(ty).parents.len()))?
-                    .get(parent_ty)?
-                    .clone()
+                    .get(parent_ty)
                     .ok_or_else(|| anyhow!("parent reference {:?} not defined at row {}", parent_ty, i))?
                     .id.to_string())
             })
@@ -274,11 +272,7 @@ impl Map {
             let parent_layer_ro = self.get_layer(parent_ty);
 
             // Child adjacency (must exist)
-            let child_adj = &child_layer
-                .geoms
-                .as_ref()
-                .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty child geometry ({:?})", ty))?
-                .adjacencies; // assumed Vec<Vec<u32>>
+            let child_adj = &child_layer.adjacencies;
 
             // Precompute parent index for each child node
             let parent_index = &parent_layer_ro.index;
@@ -290,8 +284,7 @@ impl Map {
                         .parents
                         .get(i)
                         .ok_or_else(|| anyhow!("Index {i} out of bounds in child parents"))?
-                        .get(parent_ty)?
-                        .as_ref()
+                        .get(parent_ty)
                         .ok_or_else(|| anyhow!("Parent with type {:?} is not defined for child[{i}]", parent_ty))?;
                     parent_index
                         .get(geoid)
@@ -320,18 +313,13 @@ impl Map {
 
         // Write back into parent's adjacency list
         let parent_layer = self.get_layer_mut(parent_ty);
-        let parent_geoms = parent_layer
-            .geoms
-            .as_mut()
-            .ok_or_else(|| anyhow!("Parent layer {:?} has no geometry to receive adjacencies", parent_ty))?;
-
-        if parent_geoms.adjacencies.len() != n_parents {
-            parent_geoms.adjacencies = vec![Vec::new(); n_parents];
+        if parent_layer.adjacencies.len() != n_parents {
+            parent_layer.adjacencies = vec![Vec::new(); n_parents];
         }
         for (p, set) in parent_sets.into_iter().enumerate() {
             let mut v: Vec<u32> = set.into_iter().collect();
             v.sort_unstable(); // deterministic
-            parent_geoms.adjacencies[p] = v;
+            parent_layer.adjacencies[p] = v;
         }
 
         Ok(())

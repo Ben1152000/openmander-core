@@ -2,9 +2,9 @@ use anyhow::{bail, Result};
 use geo::{BoundingRect, Relate};
 use rstar::{AABB};
 
-use crate::PlanarPartition;
+use crate::Geometries;
 
-impl PlanarPartition {
+impl Geometries {
     /// Returns true iff any two MultiPolygons overlap in area (or one contains the other).
     /// Pure boundary touches (edge or point) are NOT considered overlaps.
     pub fn assert_no_overlaps(&self, tol: f64) -> Result<()> {

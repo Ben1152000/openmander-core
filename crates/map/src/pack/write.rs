@@ -1,29 +1,35 @@
 use std::{collections::BTreeMap, fs::File, path::Path};
 
-use anyhow::{Ok, Result};
+use anyhow::{Context, Ok, Result};
 use polars::prelude::*;
 
 use crate::{common::{data::*, fs::*, geom::*}, types::*};
 use super::manifest::{Manifest, FileHash};
 
 impl MapLayer {
-    fn entities_to_df(&self) -> Result<DataFrame> {
-        let parent = |pick: fn(&ParentRefs) -> Result<&Option<GeoId>>| -> Vec<Option<String>> {
-            self.parents.iter()
-                .map(|p| pick(p).ok().and_then(|g| g.as_ref().map(|x| x.id.to_string())))
+    /// Prepare entity data (with parent refs) for writing to a parquet file.
+    fn pack_data(&self) -> Result<DataFrame> {
+        /// Helper to extract parent IDs as strings
+        fn get_parents(parents: &Vec<ParentRefs>, ty: GeoType) -> Vec<Option<String>> {
+            parents.iter()
+                .map(|parents| parents.get(ty).map(|geo_id| geo_id.id.to_string()))
                 .collect()
-        };
+        }
 
-        let df = df![
+        let parents_df = df![
             "geo_id" => self.geo_ids.iter().map(|geo_id| geo_id.id.to_string()).collect::<Vec<_>>(),
-            "parent_state" => parent(|p| p.get(GeoType::State)),
-            "parent_county" => parent(|p| p.get(GeoType::County)),
-            "parent_tract" => parent(|p| p.get(GeoType::Tract)),
-            "parent_group" => parent(|p| p.get(GeoType::Group)),
-            "parent_vtd" => parent(|p| p.get(GeoType::VTD)),
+            "parent_state" => get_parents(&self.parents, GeoType::State),
+            "parent_county" => get_parents(&self.parents, GeoType::County),
+            "parent_tract" => get_parents(&self.parents, GeoType::Tract),
+            "parent_group" => get_parents(&self.parents, GeoType::Group),
+            "parent_vtd" => get_parents(&self.parents, GeoType::VTD),
         ]?;
 
-        Ok(self.data.inner_join(&df, ["geo_id"], ["geo_id"])?)
+        Ok(
+            self.data
+                .inner_join(&parents_df, ["geo_id"], ["geo_id"])
+                .context("inner_join on 'geo_id' failed when preparing parquet")?
+        )
     }
 
     fn write_to_pack(&self, path: &Path,
@@ -31,29 +37,29 @@ impl MapLayer {
         hashes: &mut BTreeMap<String, FileHash>
     ) -> Result<()> {
         let name: &'static str = self.ty.to_str();
-        let entity_path = &format!("entities/{name}.parquet");
-        let geom_path = &format!("geometries/{name}.geoparquet");
-        let adj_path = &format!("geometries/adjacencies/{name}.csr.bin");
+        let entity_path = &format!("data/{name}.parquet");
+        let adj_path = &format!("adj/{name}.csr.bin");
+        let geom_path = &format!("geom/{name}.geoparquet");
 
         counts.insert(name.into(), self.geo_ids.len());
 
         // entities
-        write_to_parquet(&path.join(entity_path), &self.entities_to_df()?)?;
+        write_to_parquet(&path.join(entity_path), &self.pack_data()?)?;
         let (k, h) = sha256_file(entity_path, path)?;
         hashes.insert(k, FileHash { sha256: h });
+
+        // adjacencies (CSR)
+        if self.ty != GeoType::State {
+            write_to_weighted_csr(&path.join(adj_path), &self.adjacencies, &self.shared_perimeters)?;
+            let (k, h) = sha256_file(&adj_path, path)?;
+            hashes.insert(k, FileHash { sha256: h });
+        }
 
         // geometries
         if let Some(geom) = &self.geoms {
             write_to_geoparquet(&path.join(geom_path), &geom.shapes)?;
             let (k, h) = sha256_file(geom_path, path)?;
             hashes.insert(k, FileHash { sha256: h });
-
-            // adjacencies (CSR)
-            if self.ty != GeoType::State {
-                write_to_adjacency_csr(&path.join(adj_path), &geom.adjacencies)?;
-                let (k, h) = sha256_file(&adj_path, path)?;
-                hashes.insert(k, FileHash { sha256: h });
-            }
         }
 
         Ok(())
@@ -62,11 +68,7 @@ impl MapLayer {
 
 impl Map {
     pub fn write_to_pack(&self, path: &Path) -> Result<()> {
-        let dirs = [
-            "entities",
-            "geometries",
-            "geometries/adjacencies",
-        ];
+        let dirs = ["data", "adj", "geom"];
         ensure_dirs(path, &dirs)?;
 
         let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::{Path, PathBuf}, sync::Arc};
+use std::{collections::HashMap, fs::remove_dir_all, path::{Path, PathBuf}, sync::Arc};
 
 use anyhow::{Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map, MapLayer};
@@ -195,6 +195,23 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) ->
     Ok(map_data)
 }
 
+/// Delete the `download/` directory (and all contents) under `out_dir`.
+pub fn cleanup_download_dir(out_dir: &Path, verbose: u8) -> Result<()> {
+    let download_dir = out_dir.join("download");
+    if !download_dir.exists() {
+        if verbose > 0 {
+            eprintln!("[cleanup] nothing to remove at {}", download_dir.display());
+        }
+        return Ok(());
+    }
+    if verbose > 0 {
+        eprintln!("[cleanup] removing {}", download_dir.display());
+    }
+    remove_dir_all(&download_dir)
+        .with_context(|| format!("failed to remove {}", download_dir.display()))?;
+    Ok(())
+}
+
 pub fn run(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
     let state_code = &args.state.to_ascii_uppercase();
     let out_dir = &args.out.join(format!("{state_code}_2020_pack"));
@@ -209,6 +226,8 @@ pub fn run(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
     let data = build_pack(download_dir, out_dir, &state_code, cli.verbose)?;
     data.write_to_pack( out_dir)?;
     if cli.verbose > 0 { eprintln!("Wrote pack to {}", out_dir.display()); }
+
+    cleanup_download_dir(out_dir, cli.verbose)?;
 
     Ok(())
 }

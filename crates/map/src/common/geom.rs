@@ -137,7 +137,7 @@ pub fn write_to_geoparquet(path: &Path, geoms: &Vec<geo::MultiPolygon<f64>>) -> 
     let gp_opts = GeoParquetWriterOptions::default();
     let mut gp_encoder = GeoParquetRecordBatchEncoder::try_new(schema.as_ref(), &gp_opts)?;
     let writer_props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::ZSTD(ZstdLevel::try_new(9)?))
+        .set_compression(parquet::basic::Compression::ZSTD(ZstdLevel::try_new(4)?))
         .build();
 
     let file = File::create(path)?;

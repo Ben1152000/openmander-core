@@ -328,6 +328,7 @@ impl Map {
     /// Compute adjacencies for all layers, aggregating from blocks up to states.
     pub fn compute_adjacencies(&mut self) -> Result<()> {
         self.blocks.compute_adjacencies()?;
+        self.patch_adjacencies();
         self.aggregate_adjacencies(GeoType::Block, GeoType::VTD)?;
         self.aggregate_adjacencies(GeoType::Block, GeoType::Group)?;
         self.aggregate_adjacencies(GeoType::Group, GeoType::Tract)?;

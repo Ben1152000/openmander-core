@@ -1,3 +1,3 @@
-mod districting;
+mod plan;
 
-pub use districting::Districting;
+pub use plan::Plan;

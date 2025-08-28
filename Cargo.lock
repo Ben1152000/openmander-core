@@ -2232,6 +2232,7 @@ dependencies = [
  "anyhow",
  "openmander-map",
  "polars",
+ "rand",
  "shapefile",
 ]
 

@@ -1,3 +1,5 @@
-pub mod graph;
+mod graph;
+mod partition;
 
-pub use graph::WeightedGraphPartition;
+pub use graph::{WeightType, WeightMatrix, WeightedGraph};
+pub use partition::WeightedGraphPartition;

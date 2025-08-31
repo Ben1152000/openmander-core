@@ -1,54 +1,56 @@
-use std::{collections::HashMap, fs::File, iter::once, path::Path, vec};
+use std::{collections::HashMap, fs::File, path::Path, sync::Arc, vec};
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map};
-use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{col, lit, CsvReader, CsvWriter, DataType, IntoLazy, NamedFrom}, series::Series};
-use rand::distr;
+use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
 
-use crate::graph::WeightedGraphPartition;
+use crate::graph::{WeightedGraph, WeightedGraphPartition};
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Debug)]
 pub struct Plan<'a> {
     pub map: &'a Map,
     pub num_districts: u32, // number of districts (excluding unassigned 0)
+    pub graph: Arc<WeightedGraph>,
     pub partition: WeightedGraphPartition,
 }
 
 impl<'a> Plan<'a> {
     /// Create a new empty plan with a set number of districts.
     pub fn new(map: &'a Map, num_districts: u32) -> Self {
-        Self {
-            map,
-            num_districts,
-            partition: WeightedGraphPartition::new(
-                num_districts as usize,
-                map.blocks.len(),
-                map.blocks.data.get_columns().iter()
-                    .filter(|&column| column.name() != "idx")
-                    .map(|column| (column.name().to_string(), column.as_series().unwrap()))
-                    .filter_map(|(name, series)| match series.dtype() {
-                        DataType::Int64  => Some((name, series.i64().unwrap().into_no_null_iter().collect())),
-                        DataType::Int32  => Some((name, series.i32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                        DataType::Int16  => Some((name, series.i16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                        DataType::Int8   => Some((name, series.i8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                        DataType::UInt64 => Some((name, series.u64().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                        DataType::UInt32 => Some((name, series.u32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                        DataType::UInt16 => Some((name, series.u16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                        DataType::UInt8  => Some((name, series.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                        _ => None,
-                    }).collect(),
-                map.blocks.data.get_columns().iter()
-                    .map(|column| (column.name().to_string(), column.as_series().unwrap()))
-                    .filter_map(|(name, series)| match series.dtype() {
-                        DataType::Float64 => Some((name, series.f64().unwrap().into_no_null_iter().collect())),
-                        DataType::Float32 => Some((name, series.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect())),
-                        _ => None,
-                    }).collect(),
-                map.blocks.adjacencies.clone(),
-                map.blocks.shared_perimeters.clone(),
-            )
-        }
+        let graph = Arc::new(WeightedGraph::new(
+            map.blocks.len(),
+            map.blocks.adjacencies.clone(),
+            map.blocks.shared_perimeters.clone(),
+            map.blocks.data.get_columns().iter()
+                .filter(|&column| column.name() != "idx")
+                .map(|column| (column.name().to_string(), column.as_series().unwrap()))
+                .filter_map(|(name, series)| match series.dtype() {
+                    DataType::Int64  => Some((name, series.i64().unwrap().into_no_null_iter().collect())),
+                    DataType::Int32  => Some((name, series.i32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::Int16  => Some((name, series.i16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::Int8   => Some((name, series.i8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::UInt64 => Some((name, series.u64().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::UInt32 => Some((name, series.u32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::UInt16 => Some((name, series.u16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::UInt8  => Some((name, series.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    _ => None,
+                }).collect(),
+            map.blocks.data.get_columns().iter()
+                .map(|column| (column.name().to_string(), column.as_series().unwrap()))
+                .filter_map(|(name, series)| match series.dtype() {
+                    DataType::Float64 => Some((name, series.f64().unwrap().into_no_null_iter().collect())),
+                    DataType::Float32 => Some((name, series.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect())),
+                    _ => None,
+                }).collect(),
+        ));
+
+        let partition = WeightedGraphPartition::new(
+            num_districts as usize + 1,
+            Arc::clone(&graph)
+        );
+
+        Self { map, num_districts, graph, partition }
     }
 
     /// Load a plan from a CSV block assignment file.
@@ -92,69 +94,6 @@ impl<'a> Plan<'a> {
         Ok(())
     }
 
-/*
-    /// Create a randomized plan with num districts, with approximately equal populations.
-    pub fn randomize(map: &'a Map, num_districts: u32) -> Result<Self> {
-        let mut plan = Self::empty(map, num_districts)?;
-
-        // 1) Seed districts with random starting blocks
-        for d in 1..num_districts+1 {
-            plan.set_district(&plan.random_unassigned_block(), d)?;
-        }
-
-        // 2) Expand districts until all blocks are assigned
-        // 3) Equalize populations in each district
-        todo!()
-    }
-
-    /// Select a random block from the map
-    pub fn random_block(&self) -> GeoId {
-        use rand::Rng;
-
-        self.assignments.iter()
-            .nth(rand::rng().random_range(0..self.assignments.len()))
-            .unwrap().0.clone()
-    }
-
-    fn random_unassigned_block(&self) -> GeoId {
-        use rand::Rng;
-        
-        let assigned = self.assignments.iter()
-            .filter(|&(_, &district)| district != 0)
-            .collect::<Vec<_>>();
-
-        assigned[rand::rng().random_range(0..assigned.len())].0.clone()
-    }
-
-    /// Select a random block from the map that is on a district boundary
-    fn random_boundary_block(&self) -> GeoId {
-        use rand::Rng;
-
-        let boundary_blocks: Vec<&GeoId> = self.on_boundary.iter()
-            .filter(|(_, is_boundary)| **is_boundary)
-            .map(|(geo_id, _)| geo_id)
-            .collect();
-
-        if boundary_blocks.is_empty() {
-            // If no boundary blocks, fall back to any random block
-            return self.random_block();
-        }
-
-        let idx = rand::rng().random_range(0..boundary_blocks.len());
-        boundary_blocks[idx].clone()
-    }
- */
-    /// Check if moving block to district would disconnect either the block's current district or the target district.
-    fn would_disconnect(&self, block: &GeoId, district: u32) -> bool { todo!() }
-
-    /// Equalize population (given by column) of all current districts, within a given tolerance
-    fn equalize_districts(&mut self, column: &str, tolerance: u32) { todo!() }
-
-    /// Move block to district: subtract block row from `prev`, add to `district`.
-    pub fn set_district(&mut self, block: &GeoId, district: u32) -> Result<()> {
-        todo!()
-    }
-
     /// Generate a CSV block assignment
     pub fn to_csv(&self, path: &Path) -> Result<()> {
         let assignments: HashMap<GeoId, u32> = self.map.blocks.index.clone().into_iter()
@@ -175,4 +114,5 @@ impl<'a> Plan<'a> {
 
         Ok(())
     }
+
 }

@@ -5,8 +5,10 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
+ndarray = { workspace = true }
 polars = { workspace = true }
 rand = { workspace = true }
+rayon = { workspace = true }
 shapefile = { workspace = true }
 
 openmander-map = { path = "../map" }

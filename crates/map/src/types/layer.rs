@@ -63,6 +63,8 @@ impl MapLayer {
             geoms: None,
         }
     }
+
+    #[inline] pub fn len(&self) -> usize { self.geo_ids.len() }
 }
 
 impl fmt::Debug for MapLayer {

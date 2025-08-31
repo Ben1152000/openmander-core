@@ -1,8 +1,9 @@
 use std::{collections::HashMap, fs::File, iter::once, path::Path, vec};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map};
-use polars::{frame::DataFrame, io::SerReader, prelude::{col, lit, CsvReader, DataType, IntoLazy, NamedFrom}, series::Series};
+use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{col, lit, CsvReader, CsvWriter, DataType, IntoLazy, NamedFrom}, series::Series};
+use rand::distr;
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Debug)]
@@ -77,10 +78,13 @@ impl<'a> Plan<'a> {
 
     /// Create a randomized plan with num districts, with approximately equal populations.
     pub fn randomize(map: &'a Map, num_districts: u32) -> Result<Self> {
-        let plan = Self::empty(map, num_districts)?;
+        let mut plan = Self::empty(map, num_districts)?;
 
         // 1) Seed districts with random starting blocks
-        for i in 1..num_districts+1 { }
+        for d in 1..num_districts+1 {
+            plan.set_district(&plan.random_unassigned_block(), d)?;
+        }
+
         // 2) Expand districts until all blocks are assigned
         // 3) Equalize populations in each district
         todo!()
@@ -90,9 +94,19 @@ impl<'a> Plan<'a> {
     pub fn random_block(&self) -> GeoId {
         use rand::Rng;
 
-        let n = self.assignments.len();
-        let idx = rand::rng().random_range(0..n);
-        self.assignments.iter().nth(idx).unwrap().0.clone()
+        self.assignments.iter()
+            .nth(rand::rng().random_range(0..self.assignments.len()))
+            .unwrap().0.clone()
+    }
+
+    fn random_unassigned_block(&self) -> GeoId {
+        use rand::Rng;
+        
+        let assigned = self.assignments.iter()
+            .filter(|&(_, &district)| district != 0)
+            .collect::<Vec<_>>();
+
+        assigned[rand::rng().random_range(0..assigned.len())].0.clone()
     }
 
     /// Select a random block from the map that is on a district boundary
@@ -115,6 +129,9 @@ impl<'a> Plan<'a> {
 
     /// Check if moving block to district would disconnect either the block's current district or the target district.
     fn would_disconnect(&self, block: &GeoId, district: u32) -> bool { todo!() }
+
+    /// Equalize population (given by column) of all current districts, within a given tolerance
+    fn equalize_districts(&mut self, column: &str, tolerance: u32) { todo!() }
 
     /// Move block to district: subtract block row from `prev`, add to `district`.
     pub fn set_district(&mut self, block: &GeoId, district: u32) -> Result<()> {
@@ -161,9 +178,6 @@ impl<'a> Plan<'a> {
         self.assignments.insert(block.clone(), district);
         Ok(())
     }
-
-    /// Equalize population (given by column) of all current districts, within a given tolerance
-    fn equalize_districts(&mut self, column: &str, tolerance: u32) { todo!() }
 
     /// Recompute cached data for each district
     fn compute_data(&mut self) -> Result<()> {
@@ -238,5 +252,22 @@ impl<'a> Plan<'a> {
                     .then_some(self.map.blocks.shared_perimeters[i][j]))
                 .sum::<f64>();
         }
+    }
+
+    /// Generate a CSV block assignment
+    pub fn to_csv(&self, path: &Path) -> Result<()> {
+        let (geo_ids, districts): (Vec<String>, Vec<u32>) = self.assignments.iter()
+            .filter_map(|(geo_id, &district)| (district != 0)
+                .then_some((geo_id.id.as_ref().to_string(), district)))
+            .unzip();
+
+        CsvWriter::new(File::create(path)?).finish(
+            &mut DataFrame::new(vec![
+                Series::new("geo_id".into(), geo_ids).into(),
+                Series::new("district".into(), districts).into(),
+            ])?
+        )?;
+
+        Ok(())
     }
 }

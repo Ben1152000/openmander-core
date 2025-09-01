@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs::File, path::Path, sync::Arc, vec};
 
-use anyhow::{anyhow, bail, Context, Ok, Result};
+use anyhow::{bail, Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map};
 use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
 
@@ -115,6 +115,4 @@ impl<'a> Plan<'a> {
 
         Ok(())
     }
-
-    pub fn ensure_contiguity(&mut self) -> bool { self.partition.ensure_contiguity() }
 }

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use ndarray::{Array1, Array2, Axis};
+use ndarray::{s, Array1, Array2, Axis};
 
-use crate::graph::{WeightMatrix, WeightedGraph};
+use crate::{graph::{WeightMatrix, WeightedGraph}, partition::frontier::FrontierSet};
 
 /// Partition + caches for fast incremental updates.
 #[derive(Debug)]
@@ -11,8 +11,9 @@ pub struct WeightedGraphPartition {
     pub graph: Arc<WeightedGraph>,
     pub assignments: Array1<u32>, // Current part assignment for each node, len = n
     pub boundary: Array1<bool>, // Whether each node is on a part boundary, len = n
-    pub part_weights: WeightMatrix,
+    pub frontiers: FrontierSet, // Nodes on the boundary of each part
     pub part_sizes: Vec<usize>,
+    pub part_weights: WeightMatrix,
 }
 
 impl WeightedGraphPartition {
@@ -40,9 +41,27 @@ impl WeightedGraphPartition {
             num_parts: num_parts as u32,
             assignments: Array1::<u32>::zeros(graph.len()),
             boundary: Array1::<bool>::from_elem(graph.len(), false),
-            part_weights,
+            frontiers: FrontierSet::new(num_parts, graph.len()),
             part_sizes,
+            part_weights,
             graph,
+        }
+    }
+
+    /// Clear all assignments, setting every node to unassigned (0).
+    pub fn clear_assignments(&mut self) {
+        self.assignments.fill(0);
+        self.boundary.fill(false);
+        self.frontiers.clear();
+        self.part_sizes.fill(0);
+        self.part_sizes[0] = self.graph.len();
+        if self.graph.node_weights.i64.ncols() > 0 {
+            self.part_weights.i64.row_mut(0).assign(&self.graph.node_weights.i64.sum_axis(Axis(0)));
+            self.part_weights.i64.slice_mut(s![1.., ..]).fill(0);
+        }
+        if self.graph.node_weights.f64.ncols() > 0 {
+            self.part_weights.f64.row_mut(0).assign(&self.graph.node_weights.f64.sum_axis(Axis(0)));
+            self.part_weights.f64.slice_mut(s![1.., ..]).fill(0.0);
         }
     }
 
@@ -60,6 +79,17 @@ impl WeightedGraphPartition {
                 .any(|v| self.assignments[v] != self.assignments[u]);
         });
 
+        // Recompute frontiers.
+        self.frontiers.rebuild(
+            self.assignments.as_slice().unwrap(),
+            self.boundary.as_slice().unwrap()
+        );
+
+        self.rebuild_caches();
+    }
+
+    /// Recompute all caches from scratch.
+    pub fn rebuild_caches(&mut self) {
         // Recompute per-part totals.
         self.part_weights = WeightMatrix {
             series: self.graph.node_weights.series.clone(),
@@ -108,6 +138,11 @@ impl WeightedGraphPartition {
                 .any(|v| self.assignments[v] != self.assignments[u]);
         }
 
+        // Recompute frontier sets for `node` and its neighbors.
+        for u in std::iter::once(node).chain(self.graph.edges(node)) {
+            self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
+        }
+
         // Update aggregated integer totals (subtract from old, add to new).
         if self.graph.node_weights.i64.ncols() > 0 {
             let row_i = self.graph.node_weights.i64.row(node);
@@ -124,6 +159,30 @@ impl WeightedGraphPartition {
         // Update part sizes (subtract from old, add to new).
         self.part_sizes[prev as usize] -= 1;
         self.part_sizes[part as usize] += 1;
+    }
+
+    /// Move a single node to a different part without checking contiguity, updating caches.
+    pub fn move_node_without_rebuild(&mut self, node: usize, part: u32) {
+        let prev = self.assignments[node];
+        if prev == part { return }
+
+        // Commit assignment.
+        self.assignments[node] = part;
+
+        // Recompute boundary flag for `node`.
+        self.boundary[node] = self.graph.edges(node)
+            .any(|u| self.assignments[u] != part);
+
+        // Recompute boundary flags for neighbors of `node`.
+        for u in self.graph.edges(node) {
+            self.boundary[u] = self.graph.edges(u)
+                .any(|v| self.assignments[v] != self.assignments[u]);
+        }
+
+        // Recompute frontier sets for `node` and its neighbors.
+        for u in std::iter::once(node).chain(self.graph.edges(node)) {
+            self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
+        }
     }
 
     /// Move a connected subgraph to a different part, updating caches.
@@ -151,7 +210,6 @@ impl WeightedGraphPartition {
         // Commit assignment.
         subgraph.iter().for_each(|&u| self.assignments[u] = part);
 
-        // Recompute boundary flags only where necessary.
         let mut boundary = Vec::with_capacity(subgraph.len() * 2);
         let mut in_boundary = vec![false; self.graph.len()];
         for &u in &subgraph {
@@ -161,9 +219,11 @@ impl WeightedGraphPartition {
             });
         }
 
+        // Recompute boundary flags and frontier sets only where necessary.
         for &u in &boundary {
             self.boundary[u] = self.graph.edges(u)
                 .any(|v| self.assignments[v] != self.assignments[u]);
+            self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
         }
 
         // Batch-update per-part totals.

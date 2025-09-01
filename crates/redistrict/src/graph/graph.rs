@@ -1,18 +1,8 @@
-use core::num;
 use std::collections::HashMap;
 
 use ndarray::{s, Array1, Array2};
 
-#[derive(Clone, Debug)]
-pub enum WeightType { I64, F64 }
-
-/// Node weights stored as type-separated matrices.
-#[derive(Clone, Debug)]
-pub struct WeightMatrix {
-    pub series: HashMap<String, (WeightType, usize)>, // len = k_i + k_f
-    pub i64: Array2<i64>, // (n, k_i)
-    pub f64: Array2<f64>, // (n, k_f)
-}
+use crate::graph::{WeightMatrix, WeightType};
 
 /// Compressed sparse row graph (undirected).
 #[derive(Debug)]
@@ -38,7 +28,7 @@ impl WeightedGraph {
     }
 
     #[inline]
-    pub fn edge_weights(&self, u: usize) -> impl Iterator<Item = (usize, f64)> + '_ {
+    pub fn edges_with_weights(&self, u: usize) -> impl Iterator<Item = (usize, f64)> + '_ {
         self.range(u).map(move |v| (self.edges[v] as usize, self.edge_weights[v]))
     }
 

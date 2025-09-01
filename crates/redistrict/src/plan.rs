@@ -4,7 +4,8 @@ use anyhow::{anyhow, bail, Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map};
 use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
 
-use crate::graph::{WeightedGraph, WeightedGraphPartition};
+use crate::graph::WeightedGraph;
+use crate::partition::WeightedGraphPartition;
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Debug)]
@@ -114,4 +115,6 @@ impl<'a> Plan<'a> {
 
         Ok(())
     }
+
+    pub fn ensure_contiguity(&mut self) -> bool { self.partition.ensure_contiguity() }
 }

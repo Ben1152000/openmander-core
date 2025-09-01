@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::{HashMap, VecDeque}, sync::Arc};
 
 use ndarray::{Array1, Array2, Axis};
 
@@ -130,8 +130,6 @@ impl WeightedGraphPartition {
     /// Move a connected subgraph to a different part, updating caches.
     pub fn move_subgraph(&mut self, nodes: Vec<usize>, part: u32) { todo!() }
 
-    fn check_contiguity(&self) { todo!() }
-
     /// Check if removing `node` from its current part does not break contiguity.
     fn check_node_contiguity(&self, node: usize) -> bool {
         let part = self.assignments[node];
@@ -245,6 +243,87 @@ impl WeightedGraphPartition {
         }
 
         true
+    }
+
+    /// Check if if every real district `(1..num_parts-1)` is contiguous.
+    fn check_contiguity(&self) -> bool {
+        (1..self.num_parts).all(|part| self.find_components(part).len() <= 1)
+    }
+
+    /// Find all connected components (as node lists) inside district `part`.
+    fn find_components(&self, part: u32) -> Vec<Vec<usize>> {
+        let mut components = Vec::new();
+
+        let mut visited = vec![false; self.graph.len()];
+        for u in (0..self.graph.len()).filter(|&u| self.assignments[u] == part) {
+            if !visited[u] {
+                visited[u] = true;
+                let mut component = Vec::new();
+                let mut queue = VecDeque::from([u]);
+                while let Some(v) = queue.pop_front() {
+                    component.push(v);
+                    for w in self.graph.edges(v) {
+                        if self.assignments[w] == part && !visited[w] {
+                            visited[w] = true;
+                            queue.push_back(w);
+                        }
+                    }
+                }
+                components.push(component);
+            }
+        }
+        components
+    }
+
+    /// Enforce contiguity of all parts by reassigning nodes as needed.
+    ///
+    /// Greedily fix contiguity: for any district with multiple components,
+    /// keep its largest component and move each smaller component to the
+    /// best neighboring district (by summed shared-perimeter weight).
+    /// Returns true if any changes were made.
+    pub fn ensure_contiguity(&mut self) -> bool {
+        let mut changed = false;
+
+        for part in 1..self.num_parts {
+            // Find connected components inside the part.
+            let components = self.find_components(part);
+            if components.len() <= 1 { continue }
+
+            // Keep the largest component, expel the rest.
+            let largest = components.iter().enumerate()
+                .max_by_key(|(_, c)| c.len())
+                .map(|(i, _)| i)
+                .unwrap();
+
+            for (i, component) in components.into_iter().enumerate() {
+                if i == largest { continue }
+
+                // If the component borders an unassigned node, unassign the component.
+                if component.iter().any(|&u| self.graph.edges(u).any(|v| self.assignments[v] == 0)) {
+                    self.move_subgraph(component, part);
+                    changed = true;
+                    continue;
+                }
+
+                let mut in_component = vec![false; self.graph.len()];
+                for &u in &component { in_component[u] = true; }
+
+                // Score candidate destination districts by boundary shared-perimeter weight.
+                let mut scores: HashMap<u32, f64> = HashMap::new();
+                for &u in &component {
+                    for (v, weight) in self.graph.edge_weights(u).filter(|&(v, _)| !in_component[v] && self.assignments[v] != part) {
+                        *scores.entry(self.assignments[v]).or_insert(0.0) += weight;
+                    }
+                }
+
+                // Find the part with the largest shared-perimeter.
+                self.move_subgraph(component, *scores.iter()
+                    .max_by(|(_, a), (_, b)| a.total_cmp(b)).unwrap().0);
+
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Select a random block from the map.

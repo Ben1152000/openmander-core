@@ -37,6 +37,11 @@ impl WeightedGraph {
         self.range(u).map(move |v| self.edges[v] as usize)
     }
 
+    #[inline]
+    pub fn edge_weights(&self, u: usize) -> impl Iterator<Item = (usize, f64)> + '_ {
+        self.range(u).map(move |v| (self.edges[v] as usize, self.edge_weights[v]))
+    }
+
     /// Construct a graph from adjacency lists and node weights.
     pub fn new(
         num_nodes: usize,

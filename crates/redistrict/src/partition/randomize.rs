@@ -43,7 +43,7 @@ impl WeightedGraphPartition {
             .choose(rng)
     }
 
-    /// Randomly assign all nodes to contiguous districts, updating caches.
+    /// Randomly assign all nodes to contiguous districts.
     pub fn randomize(&mut self) {
         let mut rng = rand::rng();
         self.clear_assignments();
@@ -59,8 +59,5 @@ impl WeightedGraphPartition {
         }
 
         self.rebuild_caches();
-
-        // Equalize populations in each district
-        // todo!()
     }
 }

@@ -9,6 +9,60 @@ impl WeightedGraphPartition {
         self.part_sizes[part as usize] == 0
     }
 
+    /// Determine if a node is an articulation point (cut vertex), returning the components it would create.
+    pub fn is_articulation(&self, node: usize) -> Option<Vec<usize>> {
+        assert!(node < self.graph.len(), "node {} out of range", node);
+
+        // Collect neighbors.
+        let neighbors = self.graph.edges(node).collect::<Vec<_>>();
+
+        // If fewer than 2 neighbors, node cannot be an articulation point.
+        if neighbors.len() <= 1 { return None }
+
+        // Simultaneous BFS from each neighbor, forbidding `node` (tracking component for each node).
+        let mut visited = vec![0; self.graph.len()];
+        visited[node] = node;
+        for &u in &neighbors { visited[u] = u }
+
+        let mut queues = neighbors.iter()
+            .map(|&u| (u, VecDeque::from([u])))
+            .collect::<Vec<_>>();
+        while queues.len() > 1 {
+            let mut q = 0;
+            'by_queue: while q < queues.len() {
+                if let Some(u) = queues[q].1.pop_front() {
+                    for v in self.graph.edges(u) {
+                        if v != node && visited[v] == 0 {
+                            visited[v] = queues[q].0;
+                            queues[q].1.push_back(v);
+                        } else if v != node && visited[v] != 0 {
+                            // BFS encountered another component.
+                            visited[queues[q].0] = visited[v];
+                            queues.swap_remove(q);
+                            continue 'by_queue;
+                        }
+                    }
+                } else {
+                    // Finished exploring the component.
+                    queues.swap_remove(q); 
+                    continue 'by_queue;
+                }
+                q += 1;
+            }
+        }
+
+        todo!("Fix issue where components aren't fully explored by early exit...");
+
+        // Filter all visited nodes that are not in the main component.
+        let subgraph = visited.iter()
+            .filter(|&&v| v != 0)
+            .map(|&v| visited[v])
+            .filter(|&v| v != queues[0].0)
+            .collect::<Vec<_>>();
+
+        (!subgraph.is_empty()).then_some(subgraph)
+    }
+
     /// Check if moving `node` to a new part does not break contiguity.
     pub fn check_node_contiguity(&self, node: usize, part: u32) -> bool {
         let prev = self.assignments[node];

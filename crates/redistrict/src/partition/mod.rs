@@ -1,6 +1,8 @@
+mod anneal;
+mod compactness;
 mod contiguity;
 mod frontier;
-mod heuristics;
+mod equalize;
 mod partition;
 mod randomize;
 

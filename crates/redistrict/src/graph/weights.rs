@@ -21,4 +21,12 @@ impl WeightMatrix {
             WeightType::F64 => self.f64[(u, *c)],
         })
     }
+
+    /// Get the total weight of a subgraph as f64, regardless of original type.
+    pub fn get_subgraph_weight_as_f64(&self, series: &str, subgraph: &[usize]) -> Option<f64> {
+        self.series.get(series).map(|(kind, c)| match kind {
+            WeightType::I64 => subgraph.iter().map(|&u| self.i64[(u, *c)] as f64).sum(),
+            WeightType::F64 => subgraph.iter().map(|&u| self.f64[(u, *c)]).sum(),
+        })
+    }
 }

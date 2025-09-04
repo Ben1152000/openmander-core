@@ -50,12 +50,12 @@ impl WeightedGraphPartition {
 
         // Seed districts with random starting blocks.
         for part in 1..self.num_parts {
-            self.move_node_without_rebuild(self.random_unassigned_node(&mut rng).unwrap(), part);
+            self.move_node(self.random_unassigned_node(&mut rng).unwrap(), part, false);
         }
 
         // Expand districts until all blocks are assigned.
         while let Some(u) = self.random_unassigned_boundary_node(&mut rng) {
-            self.move_node_without_rebuild(u, self.random_neighboring_part(u, &mut rng).unwrap());
+            self.move_node(u, self.random_neighboring_part(u, &mut rng).unwrap(), false);
         }
 
         self.rebuild_caches();

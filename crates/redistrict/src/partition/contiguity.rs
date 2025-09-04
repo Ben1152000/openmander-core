@@ -9,8 +9,28 @@ impl WeightedGraphPartition {
         self.part_sizes[part as usize] == 0
     }
 
+    /// Check if a node borders a given part.
+    pub fn node_borders_part(&self, node: usize, part: u32) -> bool {
+        assert!(node < self.graph.len(), "node {} out of range", node);
+        assert!(part < self.num_parts, "part must be in range [0, {})", self.num_parts);
+
+        self.graph.edges(node).any(|v| self.assignments[v] == part)
+    }
+
+    /// Check if part `a` borders part `b`.
+    pub fn part_borders_part(&self, a: u32, b: u32) -> bool {
+        assert!(a < self.num_parts && b < self.num_parts && a != b, 
+            "a and b must be distinct parts in range [0, {})", self.num_parts);
+
+        let a_frontier = self.frontiers.get(a);
+        a_frontier.iter().any(|&u| self.node_borders_part(u, b))
+    }
+
     /// Check if moving `node` to a new part does not break contiguity.
     pub fn check_node_contiguity(&self, node: usize, part: u32) -> bool {
+        assert!(node < self.graph.len(), "node {} out of range", node);
+        assert!(part < self.num_parts, "part must be in range [0, {})", self.num_parts);
+
         let prev = self.assignments[node];
 
         // Ensure that `node` is adjacent to the new part, if it exists.
@@ -186,7 +206,7 @@ impl WeightedGraphPartition {
 
                 // If the component borders an unassigned node, unassign the component.
                 if component.iter().any(|&u| self.graph.edges(u).any(|v| self.assignments[v] == 0)) {
-                    self.move_subgraph(&component, part);
+                    self.move_subgraph(&component, part, false);
                     changed = true;
                     continue;
                 }
@@ -203,12 +223,67 @@ impl WeightedGraphPartition {
                 }
 
                 // Find the part with the largest shared-perimeter.
-                self.move_subgraph(&component, *scores.iter()
-                    .max_by(|(_, a), (_, b)| a.total_cmp(b)).unwrap().0);
+                self.move_subgraph(
+                    &component, 
+                    *scores.iter()
+                        .max_by(|(_, a), (_, b)| a.total_cmp(b)).unwrap().0, 
+                    false
+                );
 
                 changed = true;
             }
         }
         changed
     }
+
+    /// If removing `u` from its current part splits it, return the smaller component(s)
+    /// of the *previous* part that become disconnected from the rest *without u*.
+    /// 
+    /// todo: optimize by ending bfs when all but one components have been reached
+    pub fn cut_subgraph_within_part(&self, node: usize) -> Vec<usize> {
+        let part = self.assignments[node];
+        if part == 0 { return vec![] }
+
+        // Collect same-part neighbors of u.
+        let neighbors = self.graph.edges(node)
+            .filter(|&v| self.assignments[v] == part)
+            .collect::<Vec<_>>();
+
+        if neighbors.len() <= 1 { return vec![] }
+
+        // Mark u as "forbidden" and BFS from each unvisited same-part neighbor,
+        // building components in prev that are reachable without going through u.
+        let mut visited = vec![false; self.graph.len()];
+        visited[node] = true;
+
+        let mut components = Vec::new();
+        for &u in &neighbors {
+            if visited[u] { continue }
+            let mut component = Vec::new();
+            let mut queue = VecDeque::from([u]);
+            visited[u] = true;
+
+            while let Some(v) = queue.pop_front() {
+                component.push(v);
+                for w in self.graph.edges(v) {
+                    if !visited[w] && w != node && self.assignments[w] == part {
+                        visited[w] = true;
+                        queue.push_back(w);
+                    }
+                }
+            }
+
+            components.push(component);
+        }
+
+        // Heuristic: move all but the largest component along with `node`
+        let largest = components.iter()
+            .max_by_key(|set| set.len()).unwrap();
+
+        components.iter()
+            .filter(|&set| !std::ptr::eq(set, largest))
+            .flat_map(|set| set.iter().copied())
+            .collect::<Vec<_>>()
+    }
+
 }

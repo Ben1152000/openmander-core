@@ -115,7 +115,8 @@ impl WeightedGraphPartition {
     }
 
     /// Move a single node to a different part, updating caches.
-    pub fn move_node(&mut self, node: usize, part: u32) {
+    /// `check` toggles whether to check contiguity constraints.
+    pub fn move_node(&mut self, node: usize, part: u32, check: bool) {
         assert!(node < self.assignments.len(), "node {} out of range", node);
         assert!(part < self.num_parts, "part {} out of range [0, {})", part, self.num_parts);
 
@@ -123,7 +124,7 @@ impl WeightedGraphPartition {
         if prev == part { return }
 
         // Ensure move will not break contiguity.
-        assert!(self.check_node_contiguity(node, part), "moving node {} would break contiguity of part {}", node, prev);
+        if check { assert!(self.check_node_contiguity(node, part), "moving node {} would break contiguity of part {}", node, prev); }
 
         // Commit assignment.
         self.assignments[node] = part;
@@ -142,6 +143,10 @@ impl WeightedGraphPartition {
         for u in std::iter::once(node).chain(self.graph.edges(node)) {
             self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
         }
+
+        // Update part sizes (subtract from old, add to new).
+        self.part_sizes[prev as usize] -= 1;
+        self.part_sizes[part as usize] += 1;
 
         // Update aggregated integer totals (subtract from old, add to new).
         if self.graph.node_weights.i64.ncols() > 0 {
@@ -155,38 +160,11 @@ impl WeightedGraphPartition {
             self.part_weights.f64.row_mut(prev as usize).scaled_add(-1.0, &row_f);
             self.part_weights.f64.row_mut(part as usize).scaled_add(1.0, &row_f);
         }
-
-        // Update part sizes (subtract from old, add to new).
-        self.part_sizes[prev as usize] -= 1;
-        self.part_sizes[part as usize] += 1;
-    }
-
-    /// Move a single node to a different part without checking contiguity, updating caches.
-    pub fn move_node_without_rebuild(&mut self, node: usize, part: u32) {
-        let prev = self.assignments[node];
-        if prev == part { return }
-
-        // Commit assignment.
-        self.assignments[node] = part;
-
-        // Recompute boundary flag for `node`.
-        self.boundary[node] = self.graph.edges(node)
-            .any(|u| self.assignments[u] != part);
-
-        // Recompute boundary flags for neighbors of `node`.
-        for u in self.graph.edges(node) {
-            self.boundary[u] = self.graph.edges(u)
-                .any(|v| self.assignments[v] != self.assignments[u]);
-        }
-
-        // Recompute frontier sets for `node` and its neighbors.
-        for u in std::iter::once(node).chain(self.graph.edges(node)) {
-            self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
-        }
     }
 
     /// Move a connected subgraph to a different part, updating caches.
-    pub fn move_subgraph(&mut self, nodes: &[usize], part: u32) {
+    /// `check` toggles whether to check contiguity constraints.
+    pub fn move_subgraph(&mut self, nodes: &[usize], part: u32, check: bool) {
         assert!(part < self.num_parts, "part {} out of range [0, {})", part, self.num_parts);
         if nodes.is_empty() { return }
 
@@ -199,10 +177,10 @@ impl WeightedGraphPartition {
         }
 
         // Single node case: use move_node for efficiency and simplicity.
-        if subgraph.len() == 1 { return self.move_node(subgraph[0], part);}
+        if subgraph.len() == 1 { return self.move_node(subgraph[0], part, check);}
 
         // Check subgraph is connected AND removing it won't disconnect any source part.
-        assert!(self.check_subgraph_contiguity(&subgraph, part), "moving subgraph would break contiguity");
+        if check { assert!(self.check_subgraph_contiguity(&subgraph, part), "moving subgraph would break contiguity"); }
 
         let prev = self.assignments[subgraph[0]];
         assert!(subgraph.iter().all(|&u| self.assignments[u] == prev), "all nodes in subgraph must be in the same part");
@@ -226,6 +204,9 @@ impl WeightedGraphPartition {
             self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
         }
 
+        self.part_sizes[prev as usize] -= subgraph.len();
+        self.part_sizes[part as usize] += subgraph.len();
+
         // Batch-update per-part totals.
         if self.graph.node_weights.i64.ncols() > 0 {
             let mut sum_i = ndarray::Array1::<i64>::zeros(self.graph.node_weights.i64.ncols());
@@ -240,8 +221,24 @@ impl WeightedGraphPartition {
             self.part_weights.f64.row_mut(prev as usize).scaled_add(-1.0, &sum_f);
             self.part_weights.f64.row_mut(part as usize).scaled_add(1.0, &sum_f);
         }
+    }
 
-        self.part_sizes[prev as usize] -= subgraph.len();
-        self.part_sizes[part as usize] += subgraph.len();
+    /// Articulation-aware move: move `u` and (if needed) the minimal "dangling" component
+    /// that would be cut off by removing `u`, so the source stays contiguous.
+    pub fn move_node_with_articulation(&mut self, node: usize, part: u32) {
+        assert!(part < self.num_parts, "part must be in range [0, {})", self.num_parts);
+        if self.assignments[node] == part { return }
+
+        // Ensure that `node` is adjacent to the new part, if it exists.
+        if !(self.part_is_empty(part) || self.graph.edges(node).any(|v| self.assignments[v] == part)) { return }
+
+        // Find subgraph of all but largest "dangling" piece if removing `node` splits the district.
+        let mut subgraph = self.cut_subgraph_within_part(node);
+        if subgraph.len() == 0 { 
+            self.move_node(node, part, true);
+        } else {
+            subgraph.push(node);
+            self.move_subgraph(&subgraph, part, true);
+        }
     }
 }

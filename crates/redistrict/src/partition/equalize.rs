@@ -2,13 +2,13 @@ use std::collections::{HashSet};
 
 use rand::{distr::{weighted::WeightedIndex, Distribution}, Rng};
 
-use crate::{partition::WeightedGraphPartition};
+use crate::{partition::GraphPartition};
 
-impl WeightedGraphPartition {
+impl GraphPartition {
     /// Find the part with the minimum total weight.
     /// Returns (part, part_weight).
     pub fn part_with_min_weight(&self, series: &str) -> (u32, f64) {
-        assert_ne!(self.num_parts, 0, "cannot compute minimum with no parts");
+        assert!(self.num_parts > 1, "cannot find min part with only one part");
         assert!(self.graph.node_weights.series.contains_key(series),
             "series '{}' not found in node weights", series);
 

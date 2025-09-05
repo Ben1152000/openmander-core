@@ -1,8 +1,8 @@
 use std::f64::{consts::PI, INFINITY};
 
-use crate::partition::WeightedGraphPartition;
+use crate::partition::GraphPartition;
 
-impl WeightedGraphPartition {
+impl GraphPartition {
     /// Get the area of a part in square meters.
     #[inline]
     fn get_area(&self, part: u32) -> f64 {

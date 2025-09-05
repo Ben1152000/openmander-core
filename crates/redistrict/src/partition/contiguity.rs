@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::partition::WeightedGraphPartition;
+use crate::partition::GraphPartition;
 
-impl WeightedGraphPartition {
+impl GraphPartition {
     /// Check if a part is empty (has no assigned nodes).
     pub fn part_is_empty(&self, part: u32) -> bool {
         assert!(part < self.num_parts, "part must be in range [0, {})", self.num_parts);

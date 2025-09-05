@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use crate::partition::WeightedGraphPartition;
+use crate::partition::GraphPartition;
 
 pub struct AnnealConfig {
     pub sweeps: usize,           // outer loops
@@ -12,12 +12,12 @@ pub struct AnnealConfig {
     pub k_peel: usize,           // try small peels up to k nodes
 }
 
-impl WeightedGraphPartition {
+impl GraphPartition {
     // Implement simulated annealing with energy function, hard constraints
     pub fn anneal(&mut self) { todo!() }
 }
 
-impl WeightedGraphPartition {
+impl GraphPartition {
     /// Run a short annealing pass to reduce a 2-district imbalance while controlling cut.
     /// `series` is the name of the balanced column in node weights.
     /// `alpha` is the weight on cut change relative to population change.

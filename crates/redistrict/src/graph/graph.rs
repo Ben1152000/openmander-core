@@ -4,7 +4,7 @@ use ndarray::{s, Array1, Array2};
 
 use crate::graph::{WeightMatrix, WeightType};
 
-/// Compressed sparse row graph (undirected).
+/// A weighted, undirected graph in compressed sparse row format.
 #[derive(Debug)]
 pub struct WeightedGraph {
     size: usize,

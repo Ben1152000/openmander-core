@@ -5,7 +5,7 @@ use openmander_map::{GeoId, GeoType, Map};
 use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
 
 use crate::graph::WeightedGraph;
-use crate::partition::WeightedGraphPartition;
+use crate::partition::GraphPartition;
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Debug)]
@@ -13,7 +13,7 @@ pub struct Plan<'a> {
     pub map: &'a Map,
     pub num_districts: u32, // number of districts (excluding unassigned 0)
     pub graph: Arc<WeightedGraph>,
-    pub partition: WeightedGraphPartition,
+    pub partition: GraphPartition,
 }
 
 impl<'a> Plan<'a> {
@@ -46,7 +46,7 @@ impl<'a> Plan<'a> {
                 }).collect(),
         ));
 
-        let partition = WeightedGraphPartition::new(
+        let partition = GraphPartition::new(
             num_districts as usize + 1,
             Arc::clone(&graph)
         );

@@ -1,8 +1,8 @@
 use rand::{seq::IteratorRandom, Rng};
 
-use crate::partition::WeightedGraphPartition;
+use crate::partition::GraphPartition;
 
-impl WeightedGraphPartition {
+impl GraphPartition {
     /// Select a random block from the map.
     pub fn random_node(&self) -> usize {
         rand::rng().random_range(0..self.graph.len())

@@ -6,4 +6,4 @@ mod equalize;
 mod partition;
 mod randomize;
 
-pub use partition::WeightedGraphPartition;
+pub use partition::GraphPartition;

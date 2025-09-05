@@ -1,3 +1,4 @@
+mod algorithm;
 mod graph;
 mod partition;
 mod plan;

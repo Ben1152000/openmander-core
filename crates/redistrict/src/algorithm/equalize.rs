@@ -7,7 +7,7 @@ use crate::{partition::GraphPartition};
 impl GraphPartition {
     /// Find the part with the minimum total weight.
     /// Returns (part, part_weight).
-    pub fn part_with_min_weight(&self, series: &str) -> (u32, f64) {
+    fn part_with_min_weight(&self, series: &str) -> (u32, f64) {
         assert!(self.num_parts > 1, "cannot find min part with only one part");
         assert!(self.graph.node_weights.series.contains_key(series),
             "series '{}' not found in node weights", series);
@@ -21,7 +21,7 @@ impl GraphPartition {
     /// Attempt to find neighboring parts to a given part by sampling its frontier.
     /// `samples` is the number of random frontier nodes to sample.
     /// Use this function when computing the full neighbor set is too expensive.
-    pub fn sample_neighboring_parts(&self, part: u32, samples: usize, rng: &mut impl Rng) -> Vec<u32> {
+    fn sample_neighboring_parts(&self, part: u32, samples: usize, rng: &mut impl Rng) -> Vec<u32> {
         assert!(part < self.num_parts, "part {} out of range", part);
 
         let frontier = self.frontiers.get(part);

@@ -3,7 +3,7 @@ use std::{path::Path};
 use anyhow::{Context, Ok, Result};
 use polars::prelude::*;
 
-use crate::{common::{data::*, geom::*}, types::*};
+use crate::{common::*, types::*};
 
 impl MapLayer {
     /// Extract parent refs from the data DataFrame, returning (data, parents).

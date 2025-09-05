@@ -1,7 +1,66 @@
-use std::{fs::File, io::{BufReader, BufWriter, Read, Write}, path::Path, sync::Arc};
+use std::{
+    fs::{File, create_dir_all},
+    io::{BufReader, BufWriter, Read, Write},
+    path::Path,
+    sync::Arc,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
+use polars::{frame::DataFrame, io::SerReader, prelude::{ParquetReader, ParquetWriter}};
+use sha2::{Digest, Sha256};
 use shapefile as shp;
+
+/// Create the directory if it doesn’t exist; error if a non-directory exists there.
+pub fn ensure_dir_exists(path: &Path) -> Result<()> {
+    if path.exists() {
+        if !path.is_dir() { bail!("Path exists but is not a directory: {}", path.display()); }
+    } else {
+        create_dir_all(path)
+            .with_context(|| format!("Failed to create directory {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Create multiple directories under a base path.
+pub fn ensure_dirs(base: &Path, dirs: &[&str]) -> Result<()> {
+    for &dir in dirs {
+        ensure_dir_exists(&base.join(dir))?;
+    }
+    Ok(())
+}
+
+/// Computes the SHA-256 hash of a file located at `root/rel_path`.
+pub fn sha256_file(rel_path: &str, root: &Path) -> Result<(String, String)> {
+    let full = root.join(rel_path);
+    let mut file = File::open(&full)
+        .with_context(|| format!("open for hash {}", full.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let hex = hex::encode(hasher.finalize());
+    Ok((rel_path.to_string(), hex))
+}
+
+/// Writes a Polars DataFrame to a Parquet file at `path`.
+pub fn write_to_parquet(path: &Path, df: &DataFrame) -> Result<()> {
+    let file = File::create(&path)?;
+    let writer: BufWriter<File> = BufWriter::new(file);
+    ParquetWriter::new(writer).finish(&mut df.clone())?;
+    Ok(())
+}
+
+/// Reads a Polars DataFrame from a Parquet file at `path`.
+pub fn read_from_parquet(path: &Path) -> Result<DataFrame> {
+    let mut file = File::open(path)
+        .with_context(|| format!("Failed to read parquet file: {}", path.display()))?;
+    Ok(ParquetReader::new(&mut file).finish()?)
+}
 
 /// Convert shapefile::Polygon to geo::MultiPolygon<f64>
 pub fn shp_to_geo(p: &shp::Polygon) -> geo::MultiPolygon<f64> {

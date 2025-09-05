@@ -3,8 +3,7 @@ use std::{collections::BTreeMap, fs::File, path::Path};
 use anyhow::{Context, Ok, Result};
 use polars::prelude::*;
 
-use crate::{common::{data::*, fs::*, geom::*}, types::*};
-use super::manifest::{Manifest, FileHash};
+use crate::{common::*, pack::manifest::{FileHash, Manifest}, types::*};
 
 impl MapLayer {
     /// Prepare entity data (with parent refs) for writing to a parquet file.

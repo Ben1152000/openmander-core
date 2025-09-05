@@ -5,7 +5,7 @@ use geo::{MultiPolygon};
 use polars::{frame::DataFrame, prelude::{col, Column, DataFrameJoinOps, IntoLazy, NamedFrom, SortMultipleOptions}, series::Series};
 use shapefile::{dbase::{FieldValue, Record}, Reader, Shape};
 
-use crate::{common::geom::*, types::*};
+use crate::{common::shp_to_geo, types::*};
 
 impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.

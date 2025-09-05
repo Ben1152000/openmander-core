@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueHint};
-
 /// Redistricting CLI (argument schema only)
-#[derive(Parser, Debug)]
+#[derive(clap::Parser, Debug)]
 #[command(name = "districtor", version, about, propagate_version = true)]
 pub struct Cli {
     /// Increase output verbosity (-v, -vv)
@@ -14,7 +12,7 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(clap::Subcommand, Debug)]
 pub enum Commands {
     /// Download source data for a state (forbids stdout)
     Download(DownloadArgs),
@@ -23,24 +21,24 @@ pub enum Commands {
     Redistrict(RedistrictArgs),
 }
 
-#[derive(Args, Debug)]
+#[derive(clap::Args, Debug)]
 pub struct DownloadArgs {
     /// Two/three-letter code, e.g. IL, CA, PR
     pub state: String,
 
     /// Output location (directory).
-    #[arg(value_hint = ValueHint::DirPath)]
+    #[arg(value_hint = clap::ValueHint::DirPath)]
     pub out: PathBuf,
 }
 
-#[derive(Args, Debug)]
+#[derive(clap::Args, Debug)]
 pub struct RedistrictArgs {
     /// Input tabular data file (attributes, demographics, etc.)
-    #[arg(value_hint = ValueHint::DirPath)]
+    #[arg(value_hint = clap::ValueHint::DirPath)]
     pub pack: PathBuf,
 
     /// Output plan file (must be a file path; "-" is rejected)
-    #[arg(short, long, value_hint = ValueHint::FilePath)]
+    #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
     pub output: PathBuf,
 
     // /// Input district block assignment

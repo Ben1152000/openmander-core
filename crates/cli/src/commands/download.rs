@@ -4,10 +4,10 @@ use anyhow::{Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map, MapLayer};
 use polars::{frame::DataFrame, prelude::*};
 
-use crate::{cli::DownloadArgs, common::{fs::*, geo::*, io::*, data::*}};
+use crate::common::*;
 
 /// Download demographic data from Dave's redistricting
-pub fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
     let file_url = format!("https://data.dra2020.net/file/dra-block-data/Demographic_Data_Block_{state}.v06.zip");
     let zip_path = out_dir.join(format!("Demographic_Data_Block_{state}.v06.zip"));
     let out_path = out_dir.join(format!("Demographic_Data_Block_{state}"));
@@ -22,7 +22,7 @@ pub fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) 
 }
 
 /// Download election data from Dave's redistricting
-pub fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
     let file_url = format!("https://data.dra2020.net/file/dra-block-data/Election_Data_Block_{state}.v06.zip");
     let zip_path = out_dir.join(format!("Election_Data_Block_{state}.v06.zip"));
     let out_path = out_dir.join(format!("Election_Data_Block_{state}"));
@@ -38,7 +38,7 @@ pub fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> 
 
 /// Download geometry data from US Census TIGER 2020 PL directory
 /// Example URL: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
-pub fn download_tiger_geometries(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+fn download_tiger_geometries(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
     let fips = state_abbr_to_fips(&state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
     let name = state_abbr_to_name(&state)
@@ -67,7 +67,7 @@ pub fn download_tiger_geometries(out_dir: &PathBuf, state: &str, verbose: u8) ->
 
 /// Download block-level crosswalks from the US Census website
 /// Example URL: "NE" -> "https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST31_NE.zip"
-pub fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
     let fips = state_abbr_to_fips(&state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
 
@@ -86,7 +86,7 @@ pub fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -
 }
 
 /// Download all map files for the given state (specificied by state_code) into the output directory
-pub fn download_files(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+fn download_files(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
     if verbose > 0 { eprintln!("[download] state={}", state); }
     if verbose > 0 { eprintln!("[download] -> dir {}", out_dir.display()); }
 
@@ -99,7 +99,7 @@ pub fn download_files(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()>
 }
 
 /// Build a map pack from the downloaded files
-pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) -> Result<Map> {
+fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) -> Result<Map> {
     let code = state.to_ascii_uppercase();
     let fips = state_abbr_to_fips(&code)
         .with_context(|| format!("Unknown state/territory postal code: {code}"))?;
@@ -196,7 +196,7 @@ pub fn build_pack(input_dir: &Path, out_dir: &Path, state: &str, verbose: u8) ->
 }
 
 /// Delete the `download/` directory (and all contents) under `out_dir`.
-pub fn cleanup_download_dir(out_dir: &Path, verbose: u8) -> Result<()> {
+fn cleanup_download_dir(out_dir: &Path, verbose: u8) -> Result<()> {
     let download_dir = out_dir.join("download");
     if !download_dir.exists() {
         if verbose > 0 {
@@ -212,7 +212,7 @@ pub fn cleanup_download_dir(out_dir: &Path, verbose: u8) -> Result<()> {
     Ok(())
 }
 
-pub fn run(cli: &crate::cli::Cli, args: &DownloadArgs) -> Result<()> {
+pub fn run(cli: &crate::cli::Cli, args: &crate::cli::DownloadArgs) -> Result<()> {
     let state_code = &args.state.to_ascii_uppercase();
     let out_dir = &args.out.join(format!("{state_code}_2020_pack"));
     ensure_dir_exists(out_dir)?;

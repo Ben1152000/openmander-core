@@ -1,13 +1,11 @@
 use std::path::Path;
 
-use anyhow::{Result};
+use anyhow::Result;
 
 use openmander_map::Map;
 use openmander_redistrict::Plan;
 
-use crate::cli::RedistrictArgs;
-
-pub fn run(_cli: &crate::cli::Cli, args: &RedistrictArgs) -> Result<()> {
+pub fn run(_cli: &crate::cli::Cli, args: &crate::cli::RedistrictArgs) -> Result<()> {
     println!("[redistrict] loading map from {}", args.pack.display());
     let map = Map::read_from_pack(&args.pack)?;
 
@@ -16,7 +14,7 @@ pub fn run(_cli: &crate::cli::Cli, args: &RedistrictArgs) -> Result<()> {
     plan.partition.randomize();
 
     println!("[redistrict] equalizing plan with tolerance 0.5% for 2000 iterations");
-    plan.partition.equalize("T_20_CENS_Total", 0.0025, 10000);
+    plan.partition.equalize("T_20_CENS_Total", 0.002, 10000);
 
     println!("[redistrict] writing plan to {}", args.output.display());
     plan.to_csv(Path::new(&args.output))?;

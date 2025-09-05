@@ -1,4 +1,9 @@
-pub mod fs;
-pub mod geo;
-pub mod io;
-pub mod data;
+mod fs;
+mod geo;
+mod io;
+mod data;
+
+pub use fs::*;
+pub use geo::*;
+pub use io::*;
+pub use data::*;

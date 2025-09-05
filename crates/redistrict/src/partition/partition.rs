@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ndarray::{s, Array1, Array2, Axis};
 
-use crate::{graph::{WeightMatrix, WeightedGraph}, partition::frontier::FrontierSet};
+use crate::{graph::{self, WeightMatrix, WeightedGraph}, partition::frontier::FrontierSet};
 
 /// Partition + caches for fast incremental updates.
 #[derive(Debug)]
@@ -186,7 +186,7 @@ impl WeightedGraphPartition {
         assert!(subgraph.iter().all(|&u| self.assignments[u] == prev), "all nodes in subgraph must be in the same part");
 
         // Commit assignment.
-        subgraph.iter().for_each(|&u| self.assignments[u] = part);
+        for &u in &subgraph { self.assignments[u] = part }
 
         let mut boundary = Vec::with_capacity(subgraph.len() * 2);
         let mut in_boundary = vec![false; self.graph.len()];
@@ -240,5 +240,43 @@ impl WeightedGraphPartition {
             subgraph.push(node);
             self.move_subgraph(&subgraph, part, true);
         }
+    }
+
+    /// Merge two parts into one, updating caches.
+    /// Returns the index of the eliminated part (if merge is successful).
+    /// `check` toggles whether to check contiguity constraints.
+    pub fn merge_parts(&mut self, a: u32, b: u32, check: bool) -> Option<u32> {
+        assert!(a < self.num_parts && b < self.num_parts && a != b,
+            "a and b must be distinct parts in range [0, {})", self.num_parts);
+
+        // Choose `a` as the part to keep, `b` as the part to eliminate.
+        if self.part_sizes[a as usize] < self.part_sizes[b as usize] { return self.merge_parts(b, a, check) }
+
+        if !self.part_borders_part(a, b) { return None } // parts must be adjacent
+
+        // Update assignments.
+        for u in 0..self.graph.len() {
+            if self.assignments[u] == b { self.assignments[u] = a }
+        }
+
+        // Update boundary and frontier sets.
+        for u in (0..self.graph.len()).filter(|&u| self.assignments[u] == a) {
+            self.boundary[u] = self.graph.edges(u)
+                .any(|v| self.assignments[v] != self.assignments[u]);
+            self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
+        }
+
+        // update part_sizes
+        self.part_sizes[a as usize] += self.part_sizes[b as usize];
+        self.part_sizes[b as usize] = 0;
+
+        // update part_weights
+        if self.graph.node_weights.i64.ncols() > 0 {
+            let row_b = self.part_weights.i64.row_mut(b as usize).to_owned();
+            self.part_weights.i64.row_mut(a as usize).scaled_add(1, &row_b);
+            self.part_weights.i64.row_mut(b as usize).fill(0);
+        }
+
+        Some(b)
     }
 }

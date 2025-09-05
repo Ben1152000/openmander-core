@@ -39,11 +39,11 @@ pub struct RedistrictArgs {
     #[arg(value_hint = ValueHint::DirPath)]
     pub pack: PathBuf,
 
+    /// Output plan file (must be a file path; "-" is rejected)
+    #[arg(short, long, value_hint = ValueHint::FilePath)]
+    pub output: PathBuf,
+
     // /// Input district block assignment
     // #[arg(value_hint = ValueHint::FilePath)]
     // pub input: PathBuf,
-
-    // /// Output plan file (must be a file path; "-" is rejected)
-    // #[arg(short, long, value_hint = ValueHint::FilePath)]
-    // pub output: PathBuf,
 }

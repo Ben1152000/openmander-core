@@ -1,13 +1,46 @@
 use std::collections::{HashSet};
 
-use rand::Rng;
+use rand::{distr::{weighted::WeightedIndex, Distribution}, Rng};
 
 use crate::{partition::WeightedGraphPartition};
 
 impl WeightedGraphPartition {
+    /// Find the part with the minimum total weight.
+    /// Returns (part, part_weight).
+    pub fn part_with_min_weight(&self, series: &str) -> (u32, f64) {
+        assert_ne!(self.num_parts, 0, "cannot compute minimum with no parts");
+        assert!(self.graph.node_weights.series.contains_key(series),
+            "series '{}' not found in node weights", series);
+
+        (1..self.num_parts)
+            .map(|p| (p, self.part_weights.get_as_f64(series, p as usize).unwrap()))
+            .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
+            .unwrap()
+    }
+
+    /// Attempt to find neighboring parts to a given part by sampling its frontier.
+    /// `samples` is the number of random frontier nodes to sample.
+    /// Use this function when computing the full neighbor set is too expensive.
+    pub fn sample_neighboring_parts(&self, part: u32, samples: usize, rng: &mut impl Rng) -> Vec<u32> {
+        assert!(part < self.num_parts, "part {} out of range", part);
+
+        let frontier = self.frontiers.get(part);
+        if frontier.is_empty() { return vec![] }
+
+        let mut neighbors = HashSet::new();
+        for _ in 0..samples {
+            let node = frontier[rng.random_range(0..frontier.len())];
+            neighbors.extend(self.graph.edges(node)
+                .map(|u| self.assignments[u])
+                .filter(|&p| p != 0 && p != part));
+        }
+
+        neighbors.into_iter().collect()
+    }
+
     /// Equalize total weights between two parts using greedy swaps.
     /// `series` should name a column in node_weights.series.
-    pub fn equalize_parts(&mut self, series: &str, a: u32, b: u32) {
+    pub fn equalize_parts(&mut self, series: &str, a: u32, b: u32, tolerance: f64) {
         // Validate parts and adjacency.
         assert!(a < self.num_parts && b < self.num_parts && a != b,
             "a and b must be distinct parts in range [0, {})", self.num_parts);
@@ -24,8 +57,6 @@ impl WeightedGraphPartition {
         let delta = src_total - dest_total;
         let mut remaining = delta / 2.0;
 
-        println!("Moving from part {} (pop: {:.0}) to part {} (pop: {:.0})", src, src_total, dest, dest_total);
-
         while remaining > 0.0 {
             // Pick a random candidate on the boundary of src.
             let candidates = self.frontiers.get(src);
@@ -35,19 +66,24 @@ impl WeightedGraphPartition {
             if !(self.part_is_empty(dest) || self.node_borders_part(node, dest)) { continue }
 
             if self.check_node_contiguity(node, dest) {
+                let delta = self.graph.node_weights.get_as_f64(series, node).unwrap();
                 self.move_node(node, dest, false);
-                remaining -= self.graph.node_weights.get_as_f64(series, node).unwrap();
+                remaining -= delta;
             } else {
                 // Compute articulation bundle and move node with it (if necessary).
                 let mut subgraph = self.cut_subgraph_within_part(node);
                 subgraph.push(node);
 
-                self.move_subgraph(&subgraph, dest, false);
-                remaining -= subgraph.iter()
+                let delta = subgraph.iter()
                     .map(|&u| self.graph.node_weights.get_as_f64(series, u).unwrap())
                     .sum::<f64>();
+                self.move_subgraph(&subgraph, dest, false);
+                remaining -= delta;
             }
         }
+
+        // If we overshot, recursively equalize in the other direction with higher tolerance.
+        if -remaining > tolerance { self.equalize_parts(series, a, b, tolerance * 1.2) }
     }
 
     /// Equalize total weights across all parts using greedy swaps.
@@ -71,38 +107,58 @@ impl WeightedGraphPartition {
         println!("Target population per part: {:.0} ±{:.0}", target, allowed);
 
         // Iterate until all parts are within tolerance, or we give up.
-        for _ in 0..iter {
-            // Find the worst-offending part (max absolute deviation).
-            let (part, deviation) = (1..self.num_parts)
-                .map(|p| (p, (self.part_weights.get_as_f64(series, p as usize).unwrap() - target).abs()))
-                .max_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
-                .unwrap();
+        for i in 0..iter {
+            let totals = (1..self.num_parts)
+                .map(|p| self.part_weights.get_as_f64(series, p as usize).unwrap())
+                .collect::<Vec<_>>();
+            let deviations = totals.iter()
+                .map(|&total| (total - target).abs())
+                .collect::<Vec<_>>();
 
-            if deviation <= allowed { break } // all parts within tolerance
+            // Find the worst-offending part (max absolute deviation).
+            let largest_deviation = *deviations.iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+            if largest_deviation <= allowed { break } // all parts within tolerance
+
+            // Select a random part (weighted by absolute deviation)
+            let distribution = WeightedIndex::new(&deviations).unwrap();
+            let part = distribution.sample(&mut rng) as u32 + 1;
+
+            // If the part total is more than twice the target, split into two districts while the smallest.
+            if totals[part as usize - 1] > target * 2.0 {
+                let (smallest, _) = self.part_with_min_weight(series);
+                let (neighbor, _) = self.sample_neighboring_parts(smallest, 8, &mut rng).iter()
+                    .map(|&p| (p, self.part_weights.get_as_f64(series, p as usize).unwrap()))
+                    .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
+                    .unwrap();
+
+                // If merged successfully, assign a random frontier to the eliminated district and equalize with part
+                if let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
+                    println!("Merged part {} into part {}, and split part {}", neighbor, smallest, part);
+
+                    let frontier = self.frontiers.get(part);
+                    if !frontier.is_empty() {
+                        let node = frontier[rng.random_range(0..frontier.len())];
+                        self.move_node_with_articulation(node, new_part);
+                        self.equalize_parts(series, part, new_part, largest_deviation / 2.0);
+                        continue;
+                    }
+                }
+            }
 
             // Pick random neighboring part and equalize.
-            let frontier = self.frontiers.get(part);
-            assert!(!frontier.is_empty(), "part {} has no neighboring parts", part);
-
-            let mut neighbors = HashSet::new();
-            for _ in 0..8 {
-                let node = frontier[rng.random_range(0..frontier.len())];
-                neighbors.extend(self.graph.edges(node)
-                    .map(|u| self.assignments[u])
-                    .filter(|&p| p != 0 && p != part));
-            }
+            let neighbors = self.sample_neighboring_parts(part, 8, &mut rng);
             if neighbors.len() == 0 { continue }
 
-            // let part_total = self.part_weights.get_as_f64(series, part as usize).unwrap();
-            // let other = neighbors.iter()
-            //     .map(|&p| (p, (part_total - self.part_weights.get_as_f64(series, p as usize).unwrap()).abs()))
-            //     .max_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
-            //     .map(|(p, _)| p).unwrap();
-
+            // Pick random neighbor
             let neighbors = neighbors.into_iter().collect::<Vec<_>>();
             let other = neighbors[rng.random_range(0..neighbors.len())];
 
-            self.equalize_parts(series, part, other);
+            println!("{} ({:.0}): Equalizing part {} (pop: {:.0}) and part {} (pop: {:.0})", 
+                i, largest_deviation, part, totals[part as usize - 1], other, totals[other as usize - 1]);
+
+            self.equalize_parts(series, part, other, largest_deviation / 2.0);
+
         }
     }
 }

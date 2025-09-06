@@ -2,8 +2,6 @@
 
 A fast, memory-efficient redistricting toolchain in Rust.
 
----
-
 ## Quick start
 
 ```bash
@@ -16,8 +14,6 @@ cargo build --release
 # 3) Generate a plan (four districts with equal population)
 ./target/release/openmander-core redistrict IA_2020_pack -o IA_out.csv -d 4
 ```
-
----
 
 ## CLI
 
@@ -60,8 +56,6 @@ Options:
   -d, --districts <N>   Number of districts (required)
   -o, --output <FILE>   Output plan file [default: ./plan.csv]
 ```
-
----
 
 ## Components
 

@@ -214,7 +214,9 @@ fn cleanup_download_dir(out_dir: &Path, verbose: u8) -> Result<()> {
 
 pub fn run(cli: &crate::cli::Cli, args: &crate::cli::DownloadArgs) -> Result<()> {
     let state_code = &args.state.to_ascii_uppercase();
-    let out_dir = &args.out.join(format!("{state_code}_2020_pack"));
+    let out_dir = &args.output.clone().unwrap_or(".".into())
+        .join(format!("{state_code}_2020_pack"));
+
     ensure_dir_exists(out_dir)?;
 
     let download_dir = &out_dir.join("download");

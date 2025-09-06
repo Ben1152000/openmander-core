@@ -285,5 +285,4 @@ impl GraphPartition {
             .flat_map(|set| set.iter().copied())
             .collect::<Vec<_>>()
     }
-
 }

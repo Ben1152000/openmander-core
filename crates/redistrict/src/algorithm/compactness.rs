@@ -5,16 +5,22 @@ use crate::partition::GraphPartition;
 impl GraphPartition {
     /// Get the area of a part in square meters.
     #[inline]
-    fn get_area(&self, part: u32) -> f64 {
+    fn area(&self, part: u32) -> f64 {
         self.part_weights.get_as_f64("area_m2", part as usize).unwrap()
     }
 
     /// Get the perimeter of a part in meters.
-    fn get_perimeter(&self, part: u32) -> f64 { todo!() }
+    #[inline]
+    fn perimeter(&self, part: u32) -> f64 {
+        self.frontiers.get(part).iter()
+            .flat_map(|&u| self.graph.edges_with_weights(u))
+            .filter_map(|(v, w)| (self.assignments[v] != part).then_some(w))
+            .sum::<f64>()
+    }
 
     /// Get the moment of a part (defined as the sum of the square weighted
     /// distance from the population center).
-    fn get_moment(&self, part: u32) -> f64 { todo!() }
+    fn moment(&self, part: u32) -> f64 { todo!() }
 
     /// Compute the convex hull compactness score for a part (0 to 1).
     /// Formula: area(part) / area(convex_hull(part))
@@ -24,9 +30,10 @@ impl GraphPartition {
     /// Compute the Polsby-Popper compactness score for a part.
     /// Formula: 4 * pi * area / (perimeter^2)
     /// If the perimeter is zero, returns infinity.
+    #[inline]
     pub fn polsby_pobber(&self, part: u32) -> f64 {
-        let area = self.get_area(part);
-        let perimeter = self.get_perimeter(part);
+        let area = self.area(part);
+        let perimeter = self.perimeter(part);
         if perimeter == 0.0 { return INFINITY }
         4.0 * PI * area / (perimeter * perimeter)
     }
@@ -34,9 +41,10 @@ impl GraphPartition {
     /// Compute the Schwartzberg compactness score for a part.
     /// Formula: 2 * pi * sqrt(area / pi) / perimeter
     /// If the perimeter is zero, returns infinity.
+    #[inline]
     pub fn schwartzberg(&self, part: u32) -> f64 {
-        let area = self.get_area(part);
-        let perimeter = self.get_perimeter(part);
+        let area = self.area(part);
+        let perimeter = self.perimeter(part);
         if perimeter == 0.0 { return INFINITY }
         2.0 * PI * (area / PI).sqrt() / perimeter
     }

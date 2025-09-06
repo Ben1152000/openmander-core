@@ -26,9 +26,9 @@ pub struct DownloadArgs {
     /// Two/three-letter code, e.g. IL, CA, PR
     pub state: String,
 
-    /// Output location (directory).
-    #[arg(value_hint = clap::ValueHint::DirPath)]
-    pub out: PathBuf,
+    /// Output pack location (directory), defaults to "."
+    #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -37,9 +37,13 @@ pub struct RedistrictArgs {
     #[arg(value_hint = clap::ValueHint::DirPath)]
     pub pack: PathBuf,
 
-    /// Output plan file (must be a file path; "-" is rejected)
+    /// Output plan file, defaults to "./plan.csv"
     #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-    pub output: PathBuf,
+    pub output: Option<PathBuf>,
+
+    /// Number of districts
+    #[arg(short, long)]
+    pub districts: usize,
 
     // /// Input district block assignment
     // #[arg(value_hint = ValueHint::FilePath)]

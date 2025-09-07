@@ -1,5 +1,9 @@
-use pyo3::{pyclass, pymethods, pymodule, types::PyModule, Bound, Py, PyResult, Python};
-use numpy::{PyArray1, IntoPyArray};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use pyo3::{pyclass, pymethods, pymodule, Bound, Py, PyResult, Python};
+use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
+use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyModule};
 
 /// Python-facing Map wrapper.
 #[pyclass]
@@ -12,7 +16,7 @@ impl Map {
     #[new]
     pub fn new(pack_dir: &str) -> PyResult<Self> {
         let map = openmander_map::Map::read_from_pack(&std::path::PathBuf::from(pack_dir))
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner: map })
     }
 }
@@ -37,45 +41,87 @@ impl Plan {
         let map_ptr: *const openmander_map::Map = {
             let map_ref = map.borrow(py);
             &map_ref.inner as *const _
-        }; // `map_ref` dropped here
-
-        // Construct the borrowing Plan **without** holding a PyRef
-        let plan_local = unsafe {
-            // SAFETY: `map` (Py<PyMap>) is stored in `owner` below, which keeps the
-            // underlying Map alive for as long as `PyPlan` exists. We only create
-            // a temporary shared reference to that Map here.
-            openmander_plan::Plan::new(&*map_ptr, num_districts as u32)
         };
 
         // SAFETY: `plan_local` borrows from `map_ref.inner`. We store `map` in `owner`,
         // which keeps the underlying PyMap alive for the lifetime of PyPlan.
+        let plan_local = unsafe {
+            openmander_plan::Plan::new(&*map_ptr, num_districts as u32)
+        };
+
         let inner: openmander_plan::Plan<'static> = unsafe {
             std::mem::transmute::<_, openmander_plan::Plan<'static>>(plan_local)
         };
+
         Ok(Self { _owner: map, inner })
     }
 
-    /// Get assignments as a NumPy int32 array
-    pub fn assignments<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i32>> {
-        let v: Vec<i32> = self.inner.partition.assignments.iter().map(|&p| p as i32).collect();
-        v.into_pyarray_bound(py)  // returns Bound<'py, PyArray1<i32>>
+    /// Get the list of weight series available in the map's node weights.
+    pub fn get_series<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let names = self.inner.graph.node_weights.series.keys()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>();
+        Ok(PyList::new_bound(py, names))
     }
 
-    /// Randomize partition (adjust path to your API as needed)
-    pub fn randomize(&mut self) {
-        self.inner.partition.randomize()
+    /// Set block assignments from a Python dict { "block_geoid": district:int }.
+    /// Any block not present in the dict is set to 0 (unassigned).
+    pub fn set_assignments(&mut self, assignments: Bound<'_, PyDict>) -> PyResult<()> {
+        let map = assignments.iter()
+            .map(|(key, value)| Ok((
+                openmander_map::GeoId {
+                    ty: openmander_map::GeoType::Block,
+                    id: key.extract::<String>()
+                            .map_err(|_| PyValueError::new_err("[Plan.set_assignments] keys must be strings (geo_id)"))?
+                            .into()
+                },
+                value.extract::<u32>()
+                    .map_err(|_| PyValueError::new_err("[Plan.set_assignments] values must be integers (district)"))?
+            )))
+            .collect::<PyResult<HashMap<_, _>>>()?;
+        
+        self.inner.set_assignments(map)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Equalize population of partition
+    /// Get block assignments as a Python dict { "block_geoid": district:int }.
+    /// Includes zeros for unassigned blocks.
+    pub fn get_assignments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new_bound(py);
+        let assignments = self.inner.get_assignments()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        for (geo_id, district) in assignments {
+            dict.set_item(geo_id.id.as_ref(), district)?;
+        }
+
+        Ok(dict)
+    }
+
+    /// Randomize partition into contiguous districts
+    pub fn randomize(&mut self) -> PyResult<()> {
+        self.inner.randomize()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Equalize a weight series across districts using greedy swaps
     pub fn equalize(&mut self, py: Python<'_>, series: &str, tolerance: f64, max_iter: usize) -> PyResult<()> {
-        py.allow_threads(|| self.inner.partition.equalize(series, tolerance, max_iter));
-        Ok(())
+        py.allow_threads(||
+            self.inner.equalize(series, tolerance, max_iter)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        )
     }
 
-    /// Save plan to CSV/Parquet path
+    /// Load assignments from a CSV path (same validation as Rust `load_csv`)
+    pub fn load_csv(&mut self, path: &str) -> PyResult<()> {
+        self.inner.load_csv(&PathBuf::from(path))
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Save plan to CSV at the given path (non-zero assignments only)
     pub fn to_csv(&self, path: &str) -> PyResult<()> {
-        self.inner.to_csv(&std::path::PathBuf::from(path))
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+        self.inner.to_csv(&PathBuf::from(path))
+            .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 }
 

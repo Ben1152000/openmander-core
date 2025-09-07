@@ -89,8 +89,8 @@ impl Partition {
     /// Equalize total weights across all parts using greedy swaps.
     /// `series` should name a column in node_weights.series.
     /// `tolerance` is the allowed fraction deviation from ideal (e.g. 0.01 = ±1%).
-    /// `iter` is the maximum number of equalization passes to attempt.
-    pub fn equalize(&mut self, series: &str, tolerance: f64, iter: usize) {
+    /// `max_iter` is the maximum number of equalization passes to attempt.
+    pub fn equalize(&mut self, series: &str, tolerance: f64, max_iter: usize) {
         assert_ne!(self.num_parts, 1, "cannot equalize with only one part");
         assert!(self.graph.node_weights.series.contains_key(series),
             "series '{}' not found in node weights", series);
@@ -107,7 +107,7 @@ impl Partition {
         println!("Target population per part: {:.0} ±{:.0}", target, allowed);
 
         // Iterate until all parts are within tolerance, or we give up.
-        for i in 0..iter {
+        for i in 0..max_iter {
             let totals = (1..self.num_parts)
                 .map(|p| self.part_weights.get_as_f64(series, p as usize).unwrap())
                 .collect::<Vec<_>>();

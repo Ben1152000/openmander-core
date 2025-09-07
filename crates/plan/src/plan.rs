@@ -53,6 +53,27 @@ impl<'a> Plan<'a> {
         Self { map, num_districts, graph, partition }
     }
 
+    /// Set the block assignments for the plan.
+    pub fn set_assignments(&mut self, assignments: HashMap<GeoId, u32>) -> Result<()> {
+        // map the list of geo_ids to their value in assignments, using 0 if not found
+        self.partition.set_assignments(
+            self.map.blocks.geo_ids.iter()
+                .map(|geo_id| assignments.get(geo_id).copied().unwrap_or(0))
+                .collect::<Vec<u32>>()
+        );
+
+        Ok(())
+    }
+
+    /// Get the block assignments for the plan.
+    pub fn get_assignments(&self) -> Result<HashMap<GeoId, u32>> {
+        let assignments = self.map.blocks.index.clone().into_iter()
+                .map(|(geo_id, i)| (geo_id, self.partition.assignments[i as usize]))
+                .collect();
+
+        Ok(assignments)
+    }
+
     /// Load a plan from a CSV block assignment file.
     pub fn load_csv(&mut self, csv_path: &Path) -> Result<()> {
         // Read the CSV file into a Polars DataFrame, throwing an error if the file isn't found
@@ -84,23 +105,12 @@ impl<'a> Plan<'a> {
             })
             .collect::<Result<HashMap<GeoId, u32>>>()?;
 
-        // map the list of geo_ids to their value in assignments, using 0 if not found
-        self.partition.set_assignments(
-            self.map.blocks.geo_ids.iter()
-                .map(|geo_id| assignments.get(geo_id).copied().unwrap_or(0))
-                .collect::<Vec<u32>>()
-        );
-
-        Ok(())
+        self.set_assignments(assignments)
     }
 
     /// Generate a CSV block assignment
     pub fn to_csv(&self, path: &Path) -> Result<()> {
-        let assignments: HashMap<GeoId, u32> = self.map.blocks.index.clone().into_iter()
-            .map(|(geo_id, i)| (geo_id, self.partition.assignments[i as usize]))
-            .collect();
-
-        let (geo_ids, districts): (Vec<String>, Vec<u32>) = assignments.iter()
+        let (geo_ids, districts): (Vec<String>, Vec<u32>) = self.get_assignments()?.iter()
             .filter_map(|(geo_id, &district)| (district != 0)
                 .then_some((geo_id.id.as_ref().to_string(), district)))
             .unzip();
@@ -113,5 +123,17 @@ impl<'a> Plan<'a> {
         )?;
 
         Ok(())
+    }
+
+    /// Randomly assign all blocks to contiguous districts.
+    pub fn randomize(&mut self) -> Result<()> { Ok(self.partition.randomize()) }
+
+    /// Equalize total weights across all districts using greedy swaps.
+    pub fn equalize(&mut self, series: &str, tolerance: f64, max_iter: usize) -> Result<()> {
+        if !self.graph.node_weights.series.contains_key(series) {
+            bail!("[Plan.equalize] Population column '{}' not found in node weights", series);
+        }
+
+        Ok(self.partition.equalize(series, tolerance, max_iter))
     }
 }

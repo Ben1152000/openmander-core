@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use crate::partition::GraphPartition;
+use crate::partition::Partition;
 
 /// Geometric cooling schedule for `beta` (inverse temperature).
 /// `beta_init` = initial beta value
@@ -20,7 +20,7 @@ fn accept_metropolis_beta<R: Rng + ?Sized>(delta: f64, beta: f64, rng: &mut R) -
     delta <= 0.0 || rng.random::<f64>() < (-beta * delta).exp()
 }
 
-impl GraphPartition {
+impl Partition {
     /// Run a short annealing pass to reduce a 2-district imbalance while minimizing cut length.
     /// `series` is the name of the balanced column in node weights.
     /// `alpha` is the weight on cut change relative to population change.

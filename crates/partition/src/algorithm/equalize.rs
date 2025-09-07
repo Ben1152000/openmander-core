@@ -2,9 +2,9 @@ use std::collections::{HashSet};
 
 use rand::{distr::{weighted::WeightedIndex, Distribution}, Rng};
 
-use crate::{partition::GraphPartition};
+use crate::{partition::Partition};
 
-impl GraphPartition {
+impl Partition {
     /// Find the part with the minimum total weight.
     /// Returns (part, part_weight).
     fn part_with_min_weight(&self, series: &str) -> (u32, f64) {

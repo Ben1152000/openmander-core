@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use ndarray::{s, Array1, Array2, Axis};
 
-use crate::{graph::{WeightMatrix, WeightedGraph}, partition::frontier::FrontierSet};
+use crate::{graph::{WeightMatrix, Graph}, partition::frontier::FrontierSet};
 
 /// A partition of a graph into contiguous parts (districts).
 #[derive(Debug)]
-pub struct GraphPartition {
+pub struct Partition {
     pub num_parts: u32, // Fixed number of parts (including unassigned 0)
-    pub graph: Arc<WeightedGraph>, // Fixed graph structure
+    pub graph: Arc<Graph>, // Fixed graph structure
     pub assignments: Array1<u32>, // Current part assignment for each node, len = n
     pub boundary: Array1<bool>, // Whether each node is on a part boundary, len = n
     pub frontiers: FrontierSet, // Nodes on the boundary of each part
@@ -16,11 +16,11 @@ pub struct GraphPartition {
     pub part_weights: WeightMatrix, // Aggregated weights for each part
 }
 
-impl GraphPartition {
+impl Partition {
     /// Construct an empty partition from a weighted graph reference and number of parts.
     pub fn new(
         num_parts: usize,
-        graph: Arc<WeightedGraph>,
+        graph: Arc<Graph>,
     ) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
 

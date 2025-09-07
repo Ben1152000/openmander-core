@@ -1,8 +1,8 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::graph::WeightedGraph;
+use crate::graph::Graph;
 
-impl WeightedGraph {
+impl Graph {
     /// If `node` is an articulation point in the underlying undirected graph (ignoring assignments),
     /// return the nodes in the smaller components created by removing `node`.
     pub fn cut_subgraph(&self, node: usize) -> Vec<usize> {

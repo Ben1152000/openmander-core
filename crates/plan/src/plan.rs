@@ -2,7 +2,7 @@ use std::{collections::HashMap, fs::File, path::Path, sync::Arc, vec};
 
 use anyhow::{bail, Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map};
-use openmander_partition::{GraphPartition, WeightedGraph};
+use openmander_partition::{Partition, Graph};
 use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
 
 /// A districting plan, assigning blocks to districts.
@@ -10,14 +10,14 @@ use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, 
 pub struct Plan<'a> {
     pub map: &'a Map,
     pub num_districts: u32, // number of districts (excluding unassigned 0)
-    pub graph: Arc<WeightedGraph>,
-    pub partition: GraphPartition,
+    pub graph: Arc<Graph>,
+    pub partition: Partition,
 }
 
 impl<'a> Plan<'a> {
     /// Create a new empty plan with a set number of districts.
     pub fn new(map: &'a Map, num_districts: u32) -> Self {
-        let graph = Arc::new(WeightedGraph::new(
+        let graph = Arc::new(Graph::new(
             map.blocks.len(),
             map.blocks.adjacencies.clone(),
             map.blocks.shared_perimeters.clone(),
@@ -44,7 +44,7 @@ impl<'a> Plan<'a> {
                 }).collect(),
         ));
 
-        let partition = GraphPartition::new(
+        let partition = Partition::new(
             num_districts as usize + 1,
             Arc::clone(&graph)
         );

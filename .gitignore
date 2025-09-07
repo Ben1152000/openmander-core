@@ -1,1 +1,8 @@
-/target
+# Rust workspace
+/target/
+**/*.rs.bk
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

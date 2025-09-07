@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/map", "crates/redistrict", "crates/cli"]
+members = [
+    "crates/map",
+    "crates/redistrict",
+    "crates/cli",
+    "bindings/python"
+]
 resolver = "2"
 
 [workspace.package]

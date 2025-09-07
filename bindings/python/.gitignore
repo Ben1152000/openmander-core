@@ -1,0 +1,28 @@
+# Python caches & venvs
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.pytype/
+.tox/
+.nox/
+.venv/
+venv/
+env/
+.ruff_cache/
+
+# Packaging outputs (maturin / pip)
+build/
+dist/
+*.egg-info/
+.eggs/
+wheelhouse/
+target/wheels/
+*.whl
+
+# Native artifacts that might land here during local dev
+*.so
+*.dylib
+*.dll

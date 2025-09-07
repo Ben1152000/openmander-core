@@ -1,0 +1,19 @@
+[package]
+name = "openmander-py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "openmander"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3  = { version = "0.21.2", features = ["extension-module", "abi3-py38"] }
+numpy = "0.21"
+anyhow = "1"
+
+openmander-map = { path = "../../crates/map" }
+openmander-redistrict = { path = "../../crates/redistrict" }
+
+[build-dependencies]
+pyo3-build-config = "0.21"

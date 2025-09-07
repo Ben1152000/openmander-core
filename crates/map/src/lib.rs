@@ -1,6 +1,11 @@
-mod geometry;
 mod common;
-mod types;
+mod geo_id;
+mod geom;
+mod layer;
+mod map;
 mod pack;
 
-pub use types::{GeoId, GeoType, MapLayer, Map, Geometries};
+pub use geo_id::{GeoId, GeoType};
+pub use geom::Geometries;
+pub use layer::{MapLayer, ParentRefs};
+pub use map::Map;

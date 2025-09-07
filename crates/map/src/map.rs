@@ -1,4 +1,4 @@
-use super::{geo_type::GeoType, layer::MapLayer};
+use super::{geo_id::GeoType, layer::MapLayer};
 
 /// Map struct that contains geographic data and geometries for redistricting.
 #[derive(Debug)]

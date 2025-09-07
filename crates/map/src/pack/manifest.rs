@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{types::GeoType};
+use crate::{GeoType};
 
 #[derive(Serialize, Deserialize)]
 pub struct FileHash {

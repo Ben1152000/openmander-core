@@ -6,7 +6,7 @@ use crate::graph::{WeightMatrix, WeightType};
 
 /// A weighted, undirected graph in compressed sparse row format.
 #[derive(Debug)]
-pub struct WeightedGraph {
+pub struct Graph {
     size: usize,
     pub offsets: Vec<u32>,
     pub edges: Vec<u32>,
@@ -14,7 +14,7 @@ pub struct WeightedGraph {
     pub node_weights: WeightMatrix,
 }
 
-impl WeightedGraph {
+impl Graph {
     #[inline] pub fn len(&self) -> usize { self.size }
 
     #[inline]

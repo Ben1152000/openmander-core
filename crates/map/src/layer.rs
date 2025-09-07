@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt};
 
 use polars::{frame::DataFrame};
 
-use super::{geo_id::GeoId, geo_type::GeoType, geom::Geometries};
+use super::{geo_id::{GeoId, GeoType}, geom::Geometries};
 
 /// Quick way to access parent entities across levels.
 #[derive(Debug, Clone, Default)]

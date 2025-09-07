@@ -2,10 +2,8 @@ use std::{collections::HashMap, fs::File, path::Path, sync::Arc, vec};
 
 use anyhow::{bail, Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map};
+use openmander_partition::{GraphPartition, WeightedGraph};
 use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
-
-use crate::graph::WeightedGraph;
-use crate::partition::GraphPartition;
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Debug)]

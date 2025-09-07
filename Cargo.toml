@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/map",
+    "crates/partition",
     "crates/redistrict",
     "crates/cli",
     "bindings/python"

@@ -1,6 +1,6 @@
 mod algorithm;
-mod graph;
+mod contiguity;
+mod frontier;
 mod partition;
 
-pub use graph::Graph;
 pub use partition::Partition;

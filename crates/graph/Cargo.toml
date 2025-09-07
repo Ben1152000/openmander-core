@@ -1,5 +1,5 @@
 [package]
-name = "openmander-partition"
+name = "openmander-graph"
 version = "0.1.0"
 edition = "2024"
 
@@ -10,5 +10,3 @@ polars = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
 shapefile = { workspace = true }
-
-openmander-graph = { path = "../graph" }

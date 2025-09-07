@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ndarray::{s, Array1, Array2};
 
-use crate::graph::{WeightMatrix, WeightType};
+use crate::{WeightMatrix, WeightType};
 
 /// A weighted, undirected graph in compressed sparse row format.
 #[derive(Debug)]

@@ -25,7 +25,7 @@ pub struct Plan {
     _owner: Py<Map>,
 
     /// Borrowing plan; lifetime erased because `owner` guarantees validity.
-    inner: openmander_redistrict::Plan<'static>,
+    inner: openmander_plan::Plan<'static>,
 }
 
 #[pymethods]
@@ -44,13 +44,13 @@ impl Plan {
             // SAFETY: `map` (Py<PyMap>) is stored in `owner` below, which keeps the
             // underlying Map alive for as long as `PyPlan` exists. We only create
             // a temporary shared reference to that Map here.
-            openmander_redistrict::Plan::new(&*map_ptr, num_districts as u32)
+            openmander_plan::Plan::new(&*map_ptr, num_districts as u32)
         };
 
         // SAFETY: `plan_local` borrows from `map_ref.inner`. We store `map` in `owner`,
         // which keeps the underlying PyMap alive for the lifetime of PyPlan.
-        let inner: openmander_redistrict::Plan<'static> = unsafe {
-            std::mem::transmute::<_, openmander_redistrict::Plan<'static>>(plan_local)
+        let inner: openmander_plan::Plan<'static> = unsafe {
+            std::mem::transmute::<_, openmander_plan::Plan<'static>>(plan_local)
         };
         Ok(Self { _owner: map, inner })
     }

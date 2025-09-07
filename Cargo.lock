@@ -2251,7 +2251,7 @@ dependencies = [
  "anyhow",
  "clap",
  "openmander-map",
- "openmander-redistrict",
+ "openmander-plan",
  "polars",
  "reqwest",
  "tempfile",
@@ -2296,29 +2296,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "openmander-plan"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "openmander-map",
+ "openmander-partition",
+ "polars",
+]
+
+[[package]]
 name = "openmander-py"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "numpy",
  "openmander-map",
- "openmander-redistrict",
+ "openmander-plan",
  "pyo3",
  "pyo3-build-config",
-]
-
-[[package]]
-name = "openmander-redistrict"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ndarray",
- "openmander-map",
- "openmander-partition",
- "polars",
- "rand",
- "rayon",
- "shapefile",
 ]
 
 [[package]]

@@ -32,7 +32,7 @@ pub struct Plan {
 impl Plan {
     /// Build while holding the GIL (no threads). This avoids capturing Py types in a worker thread.
     #[new]
-    pub fn new(py: Python<'_>, map: Py<Map>, districts: usize) -> PyResult<Self> {
+    pub fn new(py: Python<'_>, map: Py<Map>, num_districts: usize) -> PyResult<Self> {
         // Take a raw pointer to the inner Map while holding the GIL
         let map_ptr: *const openmander_map::Map = {
             let map_ref = map.borrow(py);
@@ -44,7 +44,7 @@ impl Plan {
             // SAFETY: `map` (Py<PyMap>) is stored in `owner` below, which keeps the
             // underlying Map alive for as long as `PyPlan` exists. We only create
             // a temporary shared reference to that Map here.
-            openmander_redistrict::Plan::new(&*map_ptr, districts as u32)
+            openmander_redistrict::Plan::new(&*map_ptr, num_districts as u32)
         };
 
         // SAFETY: `plan_local` borrows from `map_ref.inner`. We store `map` in `owner`,

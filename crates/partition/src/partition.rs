@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use ndarray::{s, Array1, Array2, Axis};
+use openmander_graph::{Graph, WeightMatrix};
 
-use crate::{graph::{WeightMatrix, Graph}, partition::frontier::FrontierSet};
+use crate::frontier::FrontierSet;
 
 /// A partition of a graph into contiguous parts (districts).
 #[derive(Debug)]

@@ -2259,6 +2259,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "openmander-graph"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ndarray",
+ "polars",
+ "rand",
+ "rayon",
+ "shapefile",
+]
+
+[[package]]
 name = "openmander-map"
 version = "0.1.0"
 dependencies = [
@@ -2289,6 +2301,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ndarray",
+ "openmander-graph",
  "polars",
  "rand",
  "rayon",
@@ -2300,6 +2313,7 @@ name = "openmander-plan"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "openmander-graph",
  "openmander-map",
  "openmander-partition",
  "polars",

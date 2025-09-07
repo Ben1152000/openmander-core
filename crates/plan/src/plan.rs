@@ -1,8 +1,9 @@
 use std::{collections::HashMap, fs::File, path::Path, sync::Arc, vec};
 
 use anyhow::{bail, Context, Ok, Result};
+use openmander_graph::{Graph};
 use openmander_map::{GeoId, GeoType, Map};
-use openmander_partition::{Partition, Graph};
+use openmander_partition::{Partition};
 use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
 
 /// A districting plan, assigning blocks to districts.

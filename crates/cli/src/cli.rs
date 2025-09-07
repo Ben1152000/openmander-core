@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 /// Redistricting CLI (argument schema only)
 #[derive(clap::Parser, Debug)]
-#[command(name = "districtor", version, about, propagate_version = true)]
+#[command(name = "openmander", version, about, propagate_version = true)]
 pub struct Cli {
     /// Increase output verbosity (-v, -vv)
     #[arg(short, long, action = clap::ArgAction::Count)]

@@ -13,7 +13,7 @@ numpy = "0.21"
 anyhow = "1"
 
 openmander-map = { path = "../../crates/map" }
-openmander-redistrict = { path = "../../crates/redistrict" }
+openmander-plan = { path = "../../crates/plan" }
 
 [build-dependencies]
 pyo3-build-config = "0.21"

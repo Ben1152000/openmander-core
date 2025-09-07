@@ -2,9 +2,9 @@
 members = [
     "crates/map",
     "crates/partition",
-    "crates/redistrict",
+    "crates/plan",
     "crates/cli",
-    "bindings/python"
+    "bindings/python",
 ]
 resolver = "2"
 

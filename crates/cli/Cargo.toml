@@ -12,4 +12,4 @@ tempfile = { workspace = true }
 zip = { workspace = true }
 
 openmander-map = { path = "../map" }
-openmander-redistrict = { path = "../redistrict" }
+openmander-plan = { path = "../plan" }

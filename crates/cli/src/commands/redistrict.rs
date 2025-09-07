@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use openmander_map::Map;
-use openmander_redistrict::Plan;
+use openmander_plan::Plan;
 
 pub fn run(_cli: &crate::cli::Cli, args: &crate::cli::RedistrictArgs) -> Result<()> {
     let pack_path = &args.pack;

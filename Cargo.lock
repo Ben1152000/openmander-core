@@ -2250,6 +2250,21 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "openmander-download",
+ "openmander-map",
+ "openmander-plan",
+ "polars",
+ "reqwest",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "openmander-download"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
  "openmander-map",
  "openmander-plan",
  "polars",

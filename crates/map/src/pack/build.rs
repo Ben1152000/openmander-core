@@ -1,7 +1,6 @@
-use std::{collections::{HashMap, HashSet}, path::Path, sync::Arc};
+use std::{collections::{HashMap, HashSet}, path::Path};
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
-use geo::{MultiPolygon};
 use polars::{frame::DataFrame, prelude::{col, Column, DataFrameJoinOps, IntoLazy, NamedFrom, SortMultipleOptions}, series::Series};
 use shapefile::{dbase::{FieldValue, Record}, Reader, Shape};
 
@@ -11,7 +10,7 @@ impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.
     pub fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<Self> {
         /// Coerce a generic shape into an owned multipolygon, raising error if different shape
-        fn shape_to_multipolygon(shape: Shape) -> Result<MultiPolygon<f64>> {
+        fn shape_to_multipolygon(shape: Shape) -> Result<geo::MultiPolygon<f64>> {
             match shape {
                 Shape::Polygon(polygon) => Ok(shp_to_geo(&polygon)),
                 other => bail!("found non-Polygon shape in layer: {:?}", other.shapetype())
@@ -98,32 +97,35 @@ impl MapLayer {
 
         let size = reader.shape_count()?;
 
-        let mut shapes: Vec<geo::MultiPolygon<f64>> = Vec::with_capacity(size);
-        let mut records: Vec<Record> = Vec::with_capacity(size);
-        for result in reader.iter_shapes_and_records() {
-            let (shape, record) = result.context("Error reading shape+record")?;
-            shapes.push(shape_to_multipolygon(shape)?);
-            records.push(record);
-        }
+        let (shapes, records) = reader.iter_shapes_and_records()
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| format!("Error reading shapes+records from shapefile: {}", path.display()))?
+            .into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+
+        // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64>
+        let shapes = shapes.into_iter()
+            .map(|shape| shape_to_multipolygon(shape))
+            .collect::<Result<Vec<_>>>()
+            .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?;
 
         let data = records_to_dataframe(records, ty)?
             .with_row_index("idx".into(), None)?;
 
-        let geo_ids: Vec<GeoId> = data.column("geo_id")?.str()?
+        let geo_ids = data.column("geo_id")?.str()?
             .into_no_null_iter()
-            .map(|val| GeoId { ty, id: Arc::from(val) })
-            .collect();
+            .map(|val| GeoId::new(ty, val))
+            .collect::<Vec<_>>();
 
-        let index: HashMap<GeoId, u32> = geo_ids.iter().enumerate()
+        let index = geo_ids.iter().enumerate()
             .map(|(i, geo_id)| (geo_id.clone(), i as u32))
-            .collect();
+            .collect::<HashMap<_, _>>();
 
         Ok(Self {
-            ty: ty,
+            ty,
             geo_ids,
             index: index,
             parents: vec![ParentRefs::default(); size],
-            data: data,
+            data,
             adjacencies: vec![Vec::new(); size],
             shared_perimeters: vec![Vec::new(); size],
             geoms: Some(Geometries::new(shapes)),
@@ -138,7 +140,7 @@ impl MapLayer {
         self.data = self.data.with_row_index("idx".into(), None)?;
 
         self.geo_ids = geo_ids.iter()
-            .map(|&val| GeoId { ty: self.ty, id: Arc::from(val) })
+            .map(|&val| GeoId::new(self.ty, val))
             .collect();
 
         self.index = self.geo_ids.iter().enumerate()
@@ -201,23 +203,19 @@ impl MapLayer {
 
 impl Map {
     /// Compute parent references for all layers based on truncated geo_id.
-    pub fn compute_parents(&mut self) {
-        self.counties.assign_parents(GeoType::State);
-
-        self.tracts.assign_parents(GeoType::County);
-        self.tracts.assign_parents(GeoType::State);
-
-        self.groups.assign_parents(GeoType::Tract);
-        self.groups.assign_parents(GeoType::County);
-        self.groups.assign_parents(GeoType::State);
-
-        self.vtds.assign_parents(GeoType::County);
-        self.vtds.assign_parents(GeoType::State);
-
-        self.blocks.assign_parents(GeoType::Group);
-        self.blocks.assign_parents(GeoType::Tract);
-        self.blocks.assign_parents(GeoType::County);
-        self.blocks.assign_parents(GeoType::State);
+    pub fn assign_parents_from_geoids(&mut self) {
+        self.get_layer_mut(GeoType::County).assign_parents(GeoType::State);
+        self.get_layer_mut(GeoType::Tract).assign_parents(GeoType::County);
+        self.get_layer_mut(GeoType::Tract).assign_parents(GeoType::State);
+        self.get_layer_mut(GeoType::Group).assign_parents(GeoType::Tract);
+        self.get_layer_mut(GeoType::Group).assign_parents(GeoType::County);
+        self.get_layer_mut(GeoType::Group).assign_parents(GeoType::State);
+        self.get_layer_mut(GeoType::VTD).assign_parents(GeoType::County);
+        self.get_layer_mut(GeoType::VTD).assign_parents(GeoType::State);
+        self.get_layer_mut(GeoType::Block).assign_parents(GeoType::Group);
+        self.get_layer_mut(GeoType::Block).assign_parents(GeoType::Tract);
+        self.get_layer_mut(GeoType::Block).assign_parents(GeoType::County);
+        self.get_layer_mut(GeoType::Block).assign_parents(GeoType::State);
     }
 
     /// Aggregate a DataFrame from a child layer to a parent layer.
@@ -226,7 +224,7 @@ impl Map {
         let parent_ids = df.column(id_col)?.str()?.into_no_null_iter()
             .map(|id| {
                 let &i = self.get_layer(ty).index
-                    .get(&GeoId { ty, id: Arc::from(id) })
+                    .get(&GeoId::new(ty, id))
                     .ok_or_else(|| anyhow!("geoid {:?} not found in index", id))?;
                 Ok(self.get_layer(ty).parents
                     .get(i as usize)
@@ -253,13 +251,13 @@ impl Map {
 
     /// Merge block-level data into a given dataframe, aggregating on id_col.
     pub fn merge_block_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
-        for ty in GeoType::order() {
+        for ty in GeoType::ALL {
             if ty != GeoType::Block {
                 let aggregated = self.aggregate_data(&df, id_col, GeoType::Block, ty)?;
                 self.get_layer_mut(ty).merge_data(aggregated, id_col)?;
             }
         }
-        self.blocks.merge_data(df, "GEOID")?;
+        self.get_layer_mut(GeoType::Block).merge_data(df, "GEOID")?;
 
         Ok(())
     }
@@ -327,7 +325,7 @@ impl Map {
 
     /// Compute adjacencies for all layers, aggregating from blocks up to states.
     pub fn compute_adjacencies(&mut self) -> Result<()> {
-        self.blocks.compute_adjacencies()?;
+        self.get_layer_mut(GeoType::Block).compute_adjacencies()?;
         self.patch_adjacencies();
         self.aggregate_adjacencies(GeoType::Block, GeoType::VTD)?;
         self.aggregate_adjacencies(GeoType::Block, GeoType::Group)?;
@@ -340,7 +338,7 @@ impl Map {
 
     /// Compute shared perimeters for all layers, if geometries exist.
     pub fn compute_shared_perimeters(&mut self) -> Result<()> {
-        for ty in GeoType::order() {
+        for ty in GeoType::ALL {
             self.get_layer_mut(ty).compute_shared_perimeters()?;
         }
         Ok(())

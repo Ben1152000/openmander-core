@@ -19,13 +19,13 @@ impl MapLayer {
         let vtd_refs = data.column("parent_vtd").ok().map(|c| c.str()).transpose()?;
 
         let parents = (0..data_only.height()).map(|i| {
-            Ok(ParentRefs {
-                state: state_refs.and_then(|c| c.get(i).map(|s| GeoId { ty: GeoType::State, id: Arc::from(s) })),
-                county: county_refs.and_then(|c| c.get(i).map(|s| GeoId { ty: GeoType::County, id: Arc::from(s) })),
-                tract: tract_refs.and_then(|c| c.get(i).map(|s| GeoId { ty: GeoType::Tract, id: Arc::from(s) })),
-                group: group_refs.and_then(|c| c.get(i).map(|s| GeoId { ty: GeoType::Group, id: Arc::from(s) })),
-                vtd: vtd_refs.and_then(|c| c.get(i).map(|s| GeoId { ty: GeoType::VTD, id: Arc::from(s) })),
-            })
+            Ok(ParentRefs::new([
+                state_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::State, s))),
+                county_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::County, s))),
+                tract_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::Tract, s))),
+                group_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::Group, s))),
+                vtd_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::VTD, s))),
+            ]))
         }).collect::<Result<Vec<_>>>()?;
 
         Ok((data_only, parents))
@@ -41,7 +41,7 @@ impl MapLayer {
 
         self.geo_ids = self.data.column("geo_id")?.str()?
             .into_no_null_iter()
-            .map(|val| GeoId { ty: self.ty, id: Arc::from(val) })
+            .map(|val| GeoId::new(self.ty, val))
             .collect();
 
         self.index = self.geo_ids.iter().enumerate()
@@ -64,7 +64,7 @@ impl Map {
     pub fn read_from_pack(path: &Path) -> Result<Self> {
         let mut map = Self::default();
 
-        for ty in GeoType::order() {
+        for ty in GeoType::ALL {
             map.get_layer_mut(ty).read_from_pack(path)?;
         }
 

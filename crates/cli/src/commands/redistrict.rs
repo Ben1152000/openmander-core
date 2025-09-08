@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::Result;
-
 use openmander_map::Map;
 use openmander_plan::Plan;
 

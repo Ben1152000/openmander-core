@@ -73,7 +73,7 @@ impl Map {
         let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
 
-        for ty in GeoType::order() {
+        for ty in GeoType::ALL {
             self.get_layer(ty).write_to_pack(path, &mut counts, &mut file_hashes)?;
         }
 

@@ -4,6 +4,7 @@ members = [
     "crates/map",
     "crates/partition",
     "crates/plan",
+    "crates/download",
     "crates/cli",
     "bindings/python",
 ]

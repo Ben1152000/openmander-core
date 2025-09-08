@@ -9,18 +9,18 @@ A fast, memory-efficient redistricting toolchain in Rust.
 cargo build --release
 
 # 2) Fetch + prepare data (example: Iowa 2020)
-./target/release/openmander-core download IA
+./target/release/openmander-cli download IA
 
 # 3) Generate a plan (four districts with equal population)
-./target/release/openmander-core redistrict IA_2020_pack -o IA_out.csv -d 4
+./target/release/openmander-cli redistrict IA_2020_pack -o IA_out.csv -d 4
 ```
 
 ## CLI
 
-Binary name: **`openmander-core`**
+Binary name: **`openmander-cli`**
 
 ```text
-Usage: openmander-core [OPTIONS] <COMMAND>
+Usage: openmander-cli [OPTIONS] <COMMAND>
 
 Commands:
   download    Download source data for a state (forbids stdout)
@@ -37,7 +37,7 @@ Options:
 **download**
 
 ```text
-openmander-core download [OPTIONS] <STATE>
+openmander-cli download [OPTIONS] <STATE>
 
   STATE    Two/three-letter code, e.g., IL, CA, PR
 
@@ -48,7 +48,7 @@ Options:
 **redistrict**
 
 ```text
-openmander-core redistrict [OPTIONS] --districts <N> <PACK_DIR>
+openmander-cli redistrict [OPTIONS] --districts <N> <PACK_DIR>
 
   PACK_DIR              Pack directory produced by `download`
 

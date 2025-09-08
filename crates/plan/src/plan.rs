@@ -18,11 +18,13 @@ pub struct Plan<'a> {
 impl<'a> Plan<'a> {
     /// Create a new empty plan with a set number of districts.
     pub fn new(map: &'a Map, num_districts: u32) -> Self {
+        let blocks = map.get_layer(GeoType::Block);
+
         let graph = Arc::new(Graph::new(
-            map.blocks.len(),
-            map.blocks.adjacencies.clone(),
-            map.blocks.shared_perimeters.clone(),
-            map.blocks.data.get_columns().iter()
+            blocks.len(),
+            blocks.adjacencies.clone(),
+            blocks.shared_perimeters.clone(),
+            blocks.data.get_columns().iter()
                 .filter(|&column| column.name() != "idx")
                 .map(|column| (column.name().to_string(), column.as_series().unwrap()))
                 .filter_map(|(name, series)| match series.dtype() {
@@ -36,7 +38,7 @@ impl<'a> Plan<'a> {
                     DataType::UInt8  => Some((name, series.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
                     _ => None,
                 }).collect(),
-            map.blocks.data.get_columns().iter()
+            blocks.data.get_columns().iter()
                 .map(|column| (column.name().to_string(), column.as_series().unwrap()))
                 .filter_map(|(name, series)| match series.dtype() {
                     DataType::Float64 => Some((name, series.f64().unwrap().into_no_null_iter().collect())),
@@ -57,7 +59,7 @@ impl<'a> Plan<'a> {
     pub fn set_assignments(&mut self, assignments: HashMap<GeoId, u32>) -> Result<()> {
         // map the list of geo_ids to their value in assignments, using 0 if not found
         self.partition.set_assignments(
-            self.map.blocks.geo_ids.iter()
+            self.map.get_layer(GeoType::Block).geo_ids.iter()
                 .map(|geo_id| assignments.get(geo_id).copied().unwrap_or(0))
                 .collect::<Vec<u32>>()
         );
@@ -67,9 +69,9 @@ impl<'a> Plan<'a> {
 
     /// Get the block assignments for the plan.
     pub fn get_assignments(&self) -> Result<HashMap<GeoId, u32>> {
-        let assignments = self.map.blocks.index.clone().into_iter()
-                .map(|(geo_id, i)| (geo_id, self.partition.assignments[i as usize]))
-                .collect();
+        let assignments = self.map.get_layer(GeoType::Block).index.clone().into_iter()
+            .map(|(geo_id, i)| (geo_id, self.partition.assignments[i as usize]))
+            .collect();
 
         Ok(assignments)
     }
@@ -82,12 +84,14 @@ impl<'a> Plan<'a> {
             .finish()
             .with_context(|| format!("[Plan.from_csv] Failed to read CSV file: {}", csv_path.display()))?;
 
+        let block_layer = self.map.get_layer(GeoType::Block);
+
         // assert CSV has at least two columns
         if df.width() < 2 { bail!("[Plan.from_csv] CSV file must have two columns: geo_id,district"); }
 
         // assert CSV has correct number of rows
-        if df.height() != self.map.blocks.len() {
-            bail!("[Plan.from_csv] CSV file has {} rows, expected {}", df.height(), self.map.blocks.len());
+        if df.height() != block_layer.len() {
+            bail!("[Plan.from_csv] CSV file has {} rows, expected {}", df.height(), block_layer.len());
         }
 
         // Populate plan.assignments from CSV
@@ -97,8 +101,8 @@ impl<'a> Plan<'a> {
         let assignments: HashMap<GeoId, u32> = blocks.str()?.into_no_null_iter()
             .zip(districts.u32()?.into_no_null_iter())
             .map(|(block, district)| {
-                let geo_id = GeoId { ty: GeoType::Block, id: block.into() };
-                if !self.map.blocks.geo_ids.contains(&geo_id) {
+                let geo_id = GeoId::new(GeoType::Block, block);
+                if !block_layer.geo_ids.contains(&geo_id) {
                     bail!("[Plan.from_csv] GeoId {} in CSV not found in map", geo_id.id);
                 }
                 Ok((geo_id, district))

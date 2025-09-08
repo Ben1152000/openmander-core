@@ -32,7 +32,7 @@ impl Manifest {
                 .to_string(),
             version: "1".into(),
             crs: "EPSG:4269".into(),
-            levels: GeoType::order().iter().map(|ty| ty.to_str().into()).collect(),
+            levels: GeoType::ALL.iter().map(|ty| ty.to_str().into()).collect(),
             counts: counts.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             files: files,
         }

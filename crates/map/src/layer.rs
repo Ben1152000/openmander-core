@@ -2,41 +2,7 @@ use std::{collections::HashMap, fmt};
 
 use polars::{frame::DataFrame};
 
-use super::{geo_id::{GeoId, GeoType}, geom::Geometries};
-
-/// Quick way to access parent entities across levels.
-#[derive(Debug, Clone, Default)]
-pub struct ParentRefs {
-    pub state: Option<GeoId>,
-    pub county: Option<GeoId>,
-    pub tract: Option<GeoId>,
-    pub group: Option<GeoId>,
-    pub vtd: Option<GeoId>,
-}
-
-impl ParentRefs {
-    pub fn get(&self, ty: GeoType) -> Option<&GeoId> {
-        match ty {
-            GeoType::State => self.state.as_ref(),
-            GeoType::County => self.county.as_ref(),
-            GeoType::Tract => self.tract.as_ref(),
-            GeoType::Group => self.group.as_ref(),
-            GeoType::VTD => self.vtd.as_ref(),
-            GeoType::Block => None
-        }
-    }
-
-    pub fn set(&mut self, ty: GeoType, value: Option<GeoId>) {
-        match ty {
-            GeoType::State => self.state = value,
-            GeoType::County => self.county = value,
-            GeoType::Tract => self.tract = value,
-            GeoType::Group => self.group = value,
-            GeoType::VTD => self.vtd = value,
-            GeoType::Block => ()
-        }
-    }
-}
+use crate::{GeoId, GeoType, Geometries, ParentRefs};
 
 /// A single planar partition Layer of the map, containing entities and their relationships.
 pub struct MapLayer {
@@ -64,10 +30,12 @@ impl MapLayer {
         }
     }
 
+    /// Get the number of entities in this layer.
     #[inline] pub fn len(&self) -> usize { self.geo_ids.len() }
 }
 
 impl fmt::Debug for MapLayer {
+    /// Custom Debug implementation to summarize key layer stats.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let n_entities = self.geo_ids.len();
         let n_index    = self.index.len();
@@ -116,11 +84,11 @@ impl fmt::Debug for MapLayer {
         let mut cnt_group = 0usize;
         let mut cnt_vtd = 0usize;
         for p in &self.parents {
-            if p.state.is_some()  { cnt_state += 1; }
-            if p.county.is_some() { cnt_county += 1; }
-            if p.tract.is_some()  { cnt_tract += 1; }
-            if p.group.is_some()  { cnt_group += 1; }
-            if p.vtd.is_some()    { cnt_vtd += 1; }
+            if p.get(GeoType::State).is_some()  { cnt_state += 1; }
+            if p.get(GeoType::County).is_some() { cnt_county += 1; }
+            if p.get(GeoType::Tract).is_some()  { cnt_tract += 1; }
+            if p.get(GeoType::Group).is_some()  { cnt_group += 1; }
+            if p.get(GeoType::VTD).is_some()    { cnt_vtd += 1; }
         }
 
         // Geometry presence (don’t assume internals of Geometries)

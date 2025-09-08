@@ -1,6 +1,5 @@
 mod cli;
 pub mod commands;
-mod common;
 
 pub use cli::{Cli, Commands};
 pub use commands::{download, redistrict};

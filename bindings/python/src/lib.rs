@@ -56,12 +56,14 @@ impl Plan {
         Ok(Self { _owner: map, inner })
     }
 
+    /// Get the number of districts in this plan (excluding unassigned 0).
+    pub fn num_districts(&self) -> PyResult<u32> {
+        Ok(self.inner.num_districts())
+    }
+
     /// Get the list of weight series available in the map's node weights.
     pub fn get_series<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let names = self.inner.graph.node_weights.series.keys()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>();
-        Ok(PyList::new_bound(py, names))
+        Ok(PyList::new_bound(py, self.inner.get_series()))
     }
 
     /// Set block assignments from a Python dict { "block_geoid": district:int }.

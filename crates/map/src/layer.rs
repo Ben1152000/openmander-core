@@ -1,6 +1,7 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, sync::Arc};
 
-use polars::{frame::DataFrame};
+use openmander_graph::Graph;
+use polars::{frame::DataFrame, prelude::DataType};
 
 use crate::{GeoId, GeoType, Geometries, ParentRefs};
 
@@ -13,6 +14,7 @@ pub struct MapLayer {
     pub data: DataFrame, // Entity data (incl. name, centroid, geographic data, election data)
     pub adjacencies: Vec<Vec<u32>>,
     pub shared_perimeters: Vec<Vec<f64>>,
+    pub graph: Arc<Graph>, // Graph representation of layer used for partitioning
     pub geoms: Option<Geometries>, // Per-level geometry store, indexed by entities
 }
 
@@ -26,12 +28,44 @@ impl MapLayer {
             data: DataFrame::empty(),
             adjacencies: Vec::new(),
             shared_perimeters: Vec::new(),
+            graph: Arc::new(Graph::default()),
             geoms: None,
         }
     }
 
     /// Get the number of entities in this layer.
     #[inline] pub fn len(&self) -> usize { self.geo_ids.len() }
+
+    /// Construct a graph representation of the layer for partitioning.
+    /// Requires data, adjacencies, and shared_perimeters to be computed first.
+    pub fn construct_graph(&mut self) {
+        self.graph = Arc::new(Graph::new(
+            self.len(),
+            &self.adjacencies,
+            &self.shared_perimeters,
+            self.data.get_columns().iter()
+                .filter(|&column| column.name() != "idx")
+                .map(|column| (column.name().to_string(), column.as_series().unwrap()))
+                .filter_map(|(name, series)| match series.dtype() {
+                    DataType::Int64  => Some((name, series.i64().unwrap().into_no_null_iter().collect())),
+                    DataType::Int32  => Some((name, series.i32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::Int16  => Some((name, series.i16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::Int8   => Some((name, series.i8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::UInt64 => Some((name, series.u64().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::UInt32 => Some((name, series.u32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::UInt16 => Some((name, series.u16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    DataType::UInt8  => Some((name, series.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                    _ => None,
+                }).collect(),
+            self.data.get_columns().iter()
+                .map(|column| (column.name().to_string(), column.as_series().unwrap()))
+                .filter_map(|(name, series)| match series.dtype() {
+                    DataType::Float64 => Some((name, series.f64().unwrap().into_no_null_iter().collect())),
+                    DataType::Float32 => Some((name, series.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect())),
+                    _ => None,
+                }).collect(),
+        ));
+    }
 }
 
 impl fmt::Debug for MapLayer {

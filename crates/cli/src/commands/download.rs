@@ -1,5 +1,5 @@
 use anyhow::Result;
-use openmander_download::build_pack;
+use openmander_pack::build_pack;
 
 pub fn run(cli: &crate::cli::Cli, args: &crate::cli::DownloadArgs) -> Result<()> {
     let state_code = &args.state.to_ascii_uppercase();

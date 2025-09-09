@@ -26,10 +26,10 @@ impl MapLayer {
 
         // Fill any missing centroids from geometry (interior/centroid)
         if let Some(g) = &self.geoms {
-            let len = g.shapes.len().min(n);
+            let len = g.len().min(n);
             for i in 0..len {
                 if !(lons[i].is_finite() && lats[i].is_finite()) {
-                    if let Some(c) = g.shapes[i].centroid() {
+                    if let Some(c) = g.shapes()[i].centroid() {
                         lons[i] = c.x();
                         lats[i] = c.y();
                     }
@@ -44,7 +44,7 @@ impl MapLayer {
         let mut maxy = f64::NEG_INFINITY;
 
         if let Some(g) = &self.geoms {
-            for mp in &g.shapes {
+            for mp in g.shapes() {
                 if let Some(rect) = mp.bounding_rect() {
                     let (x0, y0) = (rect.min().x, rect.min().y);
                     let (x1, y1) = (rect.max().x, rect.max().y);
@@ -124,7 +124,7 @@ impl MapLayer {
 
         // --- Draw polygons (if we have them)
         if let Some(g) = &self.geoms {
-            for mp in &g.shapes {
+            for mp in g.shapes() {
                 // Convert MultiPolygon -> a single path 'd'
                 let d = multipolygon_to_path(mp, &project);
                 let _ = writeln!(w, r#"<path class="blk" d="{}"/>"#, d);

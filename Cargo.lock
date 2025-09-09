@@ -2260,6 +2260,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "openmander-geom"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "geo",
+ "rstar",
+ "smallvec",
+]
+
+[[package]]
 name = "openmander-graph"
 version = "0.1.0"
 dependencies = [
@@ -2275,7 +2286,6 @@ dependencies = [
 name = "openmander-map"
 version = "0.1.0"
 dependencies = [
- "ahash",
  "anyhow",
  "arrow-array",
  "arrow-schema",
@@ -2286,15 +2296,14 @@ dependencies = [
  "geoarrow-schema",
  "geoparquet",
  "hex",
+ "openmander-geom",
  "openmander-graph",
  "parquet",
  "polars",
- "rstar",
  "serde",
  "serde_json",
  "sha2",
  "shapefile",
- "smallvec",
 ]
 
 [[package]]

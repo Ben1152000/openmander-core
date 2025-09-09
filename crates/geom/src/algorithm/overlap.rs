@@ -15,8 +15,8 @@ impl Geometries {
                 [rect.max().x + tol, rect.max().y + tol],
             );
 
-            for cand in self.rtree.locate_in_envelope_intersecting(&search) {
-                let j = cand.idx;
+            for candidate in self.query(&search) {
+                let j = candidate.idx();
                 if j <= i { continue; }
 
                 // One relate() call gives you the full DE-9IM:

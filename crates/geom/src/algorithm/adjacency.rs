@@ -11,7 +11,7 @@ use crate::Geometries;
 impl Geometries {
     /// Populate `adj_list` with rook contiguity (shared edge with positive length).
     /// Uses DE‑9IM string: require `touches` AND boundary∩boundary has dimension 1.
-    pub fn compute_adjacencies(&mut self) -> Result<Vec<Vec<u32>>> {
+    pub fn compute_adjacencies(&self) -> Result<Vec<Vec<u32>>> {
         // clear any existing adjacencies
         let mut adjacencies: Vec<Vec<u32>> = vec![Vec::new(); self.len()];
 
@@ -25,8 +25,8 @@ impl Geometries {
                 [rect.max().x + eps, rect.max().y + eps],
             );
 
-            for cand in self.rtree.locate_in_envelope_intersecting(&search) {
-                let j = cand.idx;
+            for candidate in self.query(&search) {
+                let j = candidate.idx();
                 if j <= i { continue; } // check each unordered pair once
 
                 let im = self.shapes[i].relate(&self.shapes[j]);
@@ -47,7 +47,7 @@ impl Geometries {
 
     /// Compute rook adjacencies by hashing shared edges. `scale` is the snapping factor
     /// used to quantize coordinates and defeat tiny FP mismatches (e.g., 1e7 for degrees).
-    pub fn compute_adjacencies_fast(&mut self, scale: f64) -> Result<Vec<Vec<u32>>> {
+    pub fn compute_adjacencies_fast(&self, scale: f64) -> Result<Vec<Vec<u32>>> {
         #[derive(Clone, Copy, Eq)]
         struct I2 { x: i64, y: i64 }
         impl PartialEq for I2 { fn eq(&self, o: &Self) -> bool { self.x == o.x && self.y == o.y } }

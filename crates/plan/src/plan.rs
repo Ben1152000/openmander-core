@@ -19,7 +19,7 @@ impl Plan {
         let map: Arc<Map> = map.into();
         let partition = Partition::new(
             num_districts as usize + 1,
-            map.get_layer(GeoType::Block).graph.clone()
+            map.get_layer(GeoType::Block).graph_arc()
         );
 
         Self { map, num_districts, partition }
@@ -39,7 +39,7 @@ impl Plan {
     pub fn set_assignments(&mut self, assignments: HashMap<GeoId, u32>) -> Result<()> {
         // map the list of geo_ids to their value in assignments, using 0 if not found
         self.partition.set_assignments(
-            self.map.get_layer(GeoType::Block).geo_ids.iter()
+            self.map.get_layer(GeoType::Block).geo_ids().iter()
                 .map(|geo_id| assignments.get(geo_id).copied().unwrap_or(0))
                 .collect::<Vec<u32>>()
         );
@@ -49,7 +49,7 @@ impl Plan {
 
     /// Get the block assignments for the plan.
     pub fn get_assignments(&self) -> Result<HashMap<GeoId, u32>> {
-        let assignments = self.map.get_layer(GeoType::Block).index.clone().into_iter()
+        let assignments = self.map.get_layer(GeoType::Block).index().clone().into_iter()
             .map(|(geo_id, i)| (geo_id, self.partition.assignments[i as usize]))
             .collect();
 
@@ -82,8 +82,8 @@ impl Plan {
             .zip(districts.u32()?.into_no_null_iter())
             .map(|(block, district)| {
                 let geo_id = GeoId::new(GeoType::Block, block);
-                if !block_layer.geo_ids.contains(&geo_id) {
-                    bail!("[Plan.from_csv] GeoId {} in CSV not found in map", geo_id.id);
+                if !block_layer.geo_ids().contains(&geo_id) {
+                    bail!("[Plan.from_csv] GeoId {} in CSV not found in map", geo_id.id());
                 }
                 Ok((geo_id, district))
             })
@@ -94,10 +94,10 @@ impl Plan {
 
     /// Generate a CSV block assignment
     pub fn to_csv(&self, path: &Path) -> Result<()> {
-        let (geo_ids, districts): (Vec<String>, Vec<u32>) = self.get_assignments()?.iter()
+        let (geo_ids, districts) = self.get_assignments()?.iter()
             .filter_map(|(geo_id, &district)| (district != 0)
-                .then_some((geo_id.id.as_ref().to_string(), district)))
-            .unzip();
+                .then_some((geo_id.id().to_string(), district)))
+            .unzip::<_, _, Vec<_>, Vec<_>>();
 
         CsvWriter::new(File::create(path)?).finish(
             &mut DataFrame::new(vec![

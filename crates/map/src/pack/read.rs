@@ -1,9 +1,10 @@
 use std::{path::Path};
 
 use anyhow::{Context, Ok, Result};
+use openmander_geom::Geometries;
 use polars::prelude::*;
 
-use crate::{common::*, GeoId, GeoType, Geometries, Map, MapLayer, ParentRefs};
+use crate::{common::*, GeoId, GeoType, Map, MapLayer, ParentRefs};
 
 impl MapLayer {
     /// Extract parent refs from the data DataFrame, returning (data, parents).
@@ -53,7 +54,7 @@ impl MapLayer {
         }
 
         if geom_path.exists() { 
-            self.geoms = Some(Geometries::new(read_from_geoparquet(&geom_path)?));
+            self.geoms = Some(Geometries::new(&read_from_geoparquet(&geom_path)?));
         }
 
         Ok(())

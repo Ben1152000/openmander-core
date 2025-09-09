@@ -1,21 +1,22 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
+use openmander_geom::Geometries;
 use openmander_graph::Graph;
 use polars::{frame::DataFrame, prelude::DataType};
 
-use crate::{GeoId, GeoType, Geometries, ParentRefs};
+use crate::{GeoId, GeoType, ParentRefs};
 
 /// A single planar partition Layer of the map, containing entities and their relationships.
 pub struct MapLayer {
-    pub ty: GeoType,
-    pub geo_ids: Vec<GeoId>,
-    pub index: HashMap<GeoId, u32>, // Map between geo_ids and per-level contiguous indices
-    pub parents: Vec<ParentRefs>, // References to parent entities (higher level types)
-    pub data: DataFrame, // Entity data (incl. name, centroid, geographic data, election data)
-    pub adjacencies: Vec<Vec<u32>>,
-    pub shared_perimeters: Vec<Vec<f64>>,
-    pub graph: Arc<Graph>, // Graph representation of layer used for partitioning
-    pub geoms: Option<Geometries>, // Per-level geometry store, indexed by entities
+    pub(crate) ty: GeoType,
+    pub(crate) geo_ids: Vec<GeoId>,
+    pub(crate) index: HashMap<GeoId, u32>, // Map between geo_ids and per-level contiguous indices
+    pub(crate) parents: Vec<ParentRefs>, // References to parent entities (higher level types)
+    pub(crate) data: DataFrame, // Entity data (incl. name, centroid, geographic data, election data)
+    pub(crate) adjacencies: Vec<Vec<u32>>,
+    pub(crate) shared_perimeters: Vec<Vec<f64>>,
+    pub(crate) graph: Arc<Graph>, // Graph representation of layer used for partitioning
+    pub(crate) geoms: Option<Geometries>, // Per-level geometry store, indexed by entities
 }
 
 impl MapLayer {
@@ -35,6 +36,25 @@ impl MapLayer {
 
     /// Get the number of entities in this layer.
     #[inline] pub fn len(&self) -> usize { self.geo_ids.len() }
+
+    /// Check if the layer is empty (no entities).
+    /// Returns true if empty, false otherwise.
+    #[inline] pub fn is_empty(&self) -> bool { self.geo_ids.is_empty() }
+
+    /// Get the geographic type of this layer.
+    #[inline] pub fn ty(&self) -> GeoType { self.ty }
+
+    /// Get a reference to the list of GeoIds in this layer.
+    #[inline] pub fn geo_ids(&self) -> &Vec<GeoId> { &self.geo_ids }
+
+    /// Get a reference to the index mapping GeoIds to contiguous indices.
+    #[inline] pub fn index(&self) -> &HashMap<GeoId, u32> { &self.index }
+
+    /// Get a simple reference to the graph representation of this layer.
+    #[inline] pub fn graph(&self) -> &Graph { &self.graph.as_ref() }
+
+    /// Get an Arc clone of the graph representation of this layer.
+    #[inline] pub fn graph_arc(&self) -> Arc<Graph> { self.graph.clone() }
 
     /// Construct a graph representation of the layer for partitioning.
     /// Requires data, adjacencies, and shared_perimeters to be computed first.
@@ -130,7 +150,7 @@ impl fmt::Debug for MapLayer {
 
         // Optional small preview of first few IDs in pretty mode
         let geo_id_preview: Vec<&str> = if show_all {
-            self.geo_ids.iter().take(5).map(|g| g.id.as_ref()).collect()
+            self.geo_ids.iter().take(5).map(|g| g.id()).collect()
         } else {
             Vec::new()
         };

@@ -1,7 +1,6 @@
 use std::{collections::HashMap, fs::File, path::Path, sync::Arc, vec};
 
 use anyhow::{bail, Context, Ok, Result};
-use openmander_graph::{Graph};
 use openmander_map::{GeoId, GeoType, Map};
 use openmander_partition::{Partition};
 use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
@@ -9,50 +8,32 @@ use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, 
 /// A districting plan, assigning blocks to districts.
 #[derive(Debug)]
 pub struct Plan<'a> {
-    pub map: &'a Map,
-    pub num_districts: u32, // number of districts (excluding unassigned 0)
-    pub graph: Arc<Graph>,
-    pub partition: Partition,
+    pub(crate) map: &'a Map,
+    pub(crate) num_districts: u32, // number of districts (excluding unassigned 0)
+    pub(crate) partition: Partition,
 }
 
 impl<'a> Plan<'a> {
     /// Create a new empty plan with a set number of districts.
     pub fn new(map: &'a Map, num_districts: u32) -> Self {
-        let blocks = map.get_layer(GeoType::Block);
+        Self {
+            map,
+            num_districts,
+            partition: Partition::new(
+                num_districts as usize + 1,
+                Arc::clone(&map.get_layer(GeoType::Block).graph)
+            )
+        }
+    }
 
-        let graph = Arc::new(Graph::new(
-            blocks.len(),
-            blocks.adjacencies.clone(),
-            blocks.shared_perimeters.clone(),
-            blocks.data.get_columns().iter()
-                .filter(|&column| column.name() != "idx")
-                .map(|column| (column.name().to_string(), column.as_series().unwrap()))
-                .filter_map(|(name, series)| match series.dtype() {
-                    DataType::Int64  => Some((name, series.i64().unwrap().into_no_null_iter().collect())),
-                    DataType::Int32  => Some((name, series.i32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::Int16  => Some((name, series.i16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::Int8   => Some((name, series.i8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::UInt64 => Some((name, series.u64().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::UInt32 => Some((name, series.u32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::UInt16 => Some((name, series.u16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::UInt8  => Some((name, series.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    _ => None,
-                }).collect(),
-            blocks.data.get_columns().iter()
-                .map(|column| (column.name().to_string(), column.as_series().unwrap()))
-                .filter_map(|(name, series)| match series.dtype() {
-                    DataType::Float64 => Some((name, series.f64().unwrap().into_no_null_iter().collect())),
-                    DataType::Float32 => Some((name, series.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect())),
-                    _ => None,
-                }).collect(),
-        ));
+    /// Get the number of districts in this plan (excluding unassigned 0).
+    pub fn num_districts(&self) -> u32 { self.num_districts }
 
-        let partition = Partition::new(
-            num_districts as usize + 1,
-            Arc::clone(&graph)
-        );
-
-        Self { map, num_districts, graph, partition }
+    /// Get the list of weight series available in the map's node weights.
+    pub fn get_series(&self) -> Vec<&str> {
+        self.partition.graph.node_weights.series.keys()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
     }
 
     /// Set the block assignments for the plan.
@@ -134,7 +115,7 @@ impl<'a> Plan<'a> {
 
     /// Equalize total weights across all districts using greedy swaps.
     pub fn equalize(&mut self, series: &str, tolerance: f64, max_iter: usize) -> Result<()> {
-        if !self.graph.node_weights.series.contains_key(series) {
+        if !self.partition.graph.node_weights.series.contains_key(series) {
             bail!("[Plan.equalize] Population column '{}' not found in node weights", series);
         }
 

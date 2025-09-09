@@ -5,7 +5,7 @@ use ndarray::{s, Array1, Array2};
 use crate::{WeightMatrix, WeightType};
 
 /// A weighted, undirected graph in compressed sparse row format.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Graph {
     size: usize,
     pub offsets: Vec<u32>,
@@ -35,8 +35,8 @@ impl Graph {
     /// Construct a graph from adjacency lists and node weights.
     pub fn new(
         num_nodes: usize,
-        edges: Vec<Vec<u32>>,
-        edge_weights: Vec<Vec<f64>>,
+        edges: &[Vec<u32>],
+        edge_weights: &[Vec<f64>],
         weights_i64: HashMap<String, Vec<i64>>,
         weights_f64: HashMap<String, Vec<f64>>,
     ) -> Self {

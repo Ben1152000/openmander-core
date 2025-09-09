@@ -1,12 +1,7 @@
-use std::{
-    fs::{File, create_dir_all},
-    io::{BufReader, BufWriter, Read, Write},
-    path::Path,
-    sync::Arc,
-};
+use std::{fs::{File, create_dir_all}, io::{BufReader, BufWriter, Read, Write}, path::Path, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
-use polars::{frame::DataFrame, io::SerReader, prelude::{ParquetReader, ParquetWriter}};
+use polars::{frame::DataFrame, io::SerReader, prelude::{CsvReadOptions, CsvReader, ParquetReader, ParquetWriter}};
 use sha2::{Digest, Sha256};
 use shapefile as shp;
 
@@ -29,6 +24,13 @@ pub fn ensure_dirs(base: &Path, dirs: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Error unless the directory already exists.
+pub fn require_dir_exists(path: &Path) -> Result<()> {
+    if !path.exists() { bail!("Directory does not exist: {}", path.display()); }
+    if !path.is_dir() { bail!("Path exists but is not a directory: {}", path.display()); }
+    Ok(())
+}
+
 /// Computes the SHA-256 hash of a file located at `root/rel_path`.
 pub fn sha256_file(rel_path: &str, root: &Path) -> Result<(String, String)> {
     let full = root.join(rel_path);
@@ -45,6 +47,26 @@ pub fn sha256_file(rel_path: &str, root: &Path) -> Result<(String, String)> {
     }
     let hex = hex::encode(hasher.finalize());
     Ok((rel_path.to_string(), hex))
+}
+
+/// Reads a CSV file from `path` into a Polars DataFrame.
+pub fn read_from_csv(path: &Path) -> Result<DataFrame> {
+    let file = File::open(&path)?;
+    let df = CsvReader::new(file)
+        .finish()?;
+    Ok(df)
+}
+
+/// Reads a pipe-delimited `.txt` file with a header row into a Polars DataFrame.
+pub fn read_from_pipe_delimited_txt(path: &Path) -> Result<DataFrame> {
+    let file = File::open(path)?;
+    let df = CsvReadOptions::default()
+        .with_has_header(true)
+        .map_parse_options(|po| po
+            .with_separator(b'|'))
+            .with_infer_schema_length(Some(0))
+        .into_reader_with_file_handle(file).finish()?;
+    Ok(df)
 }
 
 /// Writes a Polars DataFrame to a Parquet file at `path`.
@@ -118,8 +140,7 @@ pub fn shp_to_geo(p: &shp::Polygon) -> geo::MultiPolygon<f64> {
 }
 
 /// Convert geo::MultiPolygon<f64> to shapefile::Polygon
-#[allow(dead_code)]
-pub fn geo_to_shp(mp: &geo::MultiPolygon<f64>) -> shp::Polygon {
+pub fn _geo_to_shp(mp: &geo::MultiPolygon<f64>) -> shp::Polygon {
     /// Create a shapefile::Point
     #[inline] fn shp_point(x: f64, y: f64) -> shp::Point { shp::Point { x, y } }
 
@@ -255,8 +276,7 @@ pub fn read_from_geoparquet(path: &Path) -> Result<Vec<geo::MultiPolygon<f64>>> 
 
 /// Write adjacency list to a simple CSR binary file.
 /// Layout: "CSR1" | n(u64) | nnz(u64) | indptr[u64; n+1] | indices[u32; nnz]
-#[allow(dead_code)]
-pub fn write_to_adjacency_csr(path: &Path, adj_list: &Vec<Vec<u32>>) -> Result<()> {
+pub fn _write_to_adjacency_csr(path: &Path, adj_list: &Vec<Vec<u32>>) -> Result<()> {
     let n = adj_list.len();
 
     // Build indptr (prefix sums) and count nnz
@@ -292,8 +312,7 @@ pub fn write_to_adjacency_csr(path: &Path, adj_list: &Vec<Vec<u32>>) -> Result<(
 }
 
 /// Read adjacency from a CSR binary file written by `write_adjacency_csr`.
-#[allow(dead_code)]
-pub fn read_from_adjacency_csr(path: &Path) -> Result<Vec<Vec<u32>>> {
+pub fn _read_from_adjacency_csr(path: &Path) -> Result<Vec<Vec<u32>>> {
     let file = File::open(path)
         .with_context(|| format!("Failed to read csr file: {}", path.display()))?;
     let mut reader = BufReader::new(file);

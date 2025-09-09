@@ -49,6 +49,9 @@ impl Partition {
         }
     }
 
+    /// Get the number of parts in this partition (including unassigned 0).
+    pub fn num_parts(&self) -> usize { self.num_parts as usize }
+
     /// Clear all assignments, setting every node to unassigned (0).
     pub fn clear_assignments(&mut self) {
         self.assignments.fill(0);

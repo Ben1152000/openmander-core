@@ -6,7 +6,7 @@ use ndarray::Array2;
 pub enum WeightType { I64, F64 }
 
 /// Node weights stored as type-separated matrices.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct WeightMatrix {
     pub series: HashMap<String, (WeightType, usize)>, // len = k_i + k_f
     pub i64: Array2<i64>, // (n, k_i)

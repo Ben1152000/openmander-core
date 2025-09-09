@@ -37,7 +37,6 @@ impl MapLayer {
         let adj_path = path.join(format!("adj/{}.csr.bin", self.ty.to_str()));
 
         (self.data, self.parents) = self.unpack_data(read_from_parquet(&entity_path)?)?;
-        // self.data = read_from_parquet(&entity_path)?;
 
         self.geo_ids = self.data.column("geo_id")?.str()?
             .into_no_null_iter()
@@ -49,7 +48,8 @@ impl MapLayer {
             .collect();
 
         if self.ty != GeoType::State {
-            (self.adjacencies, self.shared_perimeters) = read_from_weighted_csr(&adj_path)?
+            (self.adjacencies, self.shared_perimeters) = read_from_weighted_csr(&adj_path)?;
+            self.construct_graph();
         }
 
         if geom_path.exists() { 
@@ -62,10 +62,11 @@ impl MapLayer {
 
 impl Map {
     pub fn read_from_pack(path: &Path) -> Result<Self> {
-        let mut map = Self::default();
+        require_dir_exists(path)?;
 
-        for ty in GeoType::ALL {
-            map.get_layer_mut(ty).read_from_pack(path)?;
+        let mut map = Self::default();
+        for layer in map.get_layers_mut() {
+            layer.read_from_pack(path)?;
         }
 
         Ok(map)

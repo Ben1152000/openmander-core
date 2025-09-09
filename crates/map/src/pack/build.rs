@@ -1,14 +1,14 @@
-use std::{collections::{HashMap, HashSet}, path::Path};
+use std::{collections::{HashMap, HashSet}, path::Path, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
-use polars::{frame::DataFrame, prelude::{col, Column, DataFrameJoinOps, IntoLazy, NamedFrom, SortMultipleOptions}, series::Series};
+use polars::{frame::DataFrame, prelude::*, series::Series};
 use shapefile::{dbase::{FieldValue, Record}, Reader, Shape};
 
-use crate::{common::shp_to_geo, GeoId, GeoType, Geometries, Map, MapLayer, ParentRefs};
+use crate::{common::*, GeoId, GeoType, Geometries, Map, MapLayer, ParentRefs};
 
 impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.
-    pub fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<Self> {
+    fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<Self> {
         /// Coerce a generic shape into an owned multipolygon, raising error if different shape
         fn shape_to_multipolygon(shape: Shape) -> Result<geo::MultiPolygon<f64>> {
             match shape {
@@ -123,17 +123,18 @@ impl MapLayer {
         Ok(Self {
             ty,
             geo_ids,
-            index: index,
+            index,
             parents: vec![ParentRefs::default(); size],
             data,
             adjacencies: vec![Vec::new(); size],
             shared_perimeters: vec![Vec::new(); size],
+            graph: Arc::default(),
             geoms: Some(Geometries::new(shapes)),
         })
     }
 
     /// Initialize layer with a list of geo_ids, replacing existing data.
-    pub fn set_data(&mut self, geo_ids: Vec<&str>) -> Result<()> {
+    fn _set_data(&mut self, geo_ids: Vec<&str>) -> Result<()> {
         self.parents.resize(geo_ids.len(), ParentRefs::default());
 
         self.data = DataFrame::new(vec![Column::new("geo_id".into(), &geo_ids)])?;
@@ -151,7 +152,7 @@ impl MapLayer {
     }
 
     /// Merge new dataframe into self.data, preserving geo_id
-    pub fn merge_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
+    fn merge_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
         // Assert size of dataframe matches self.data
         if df.height() != self.data.height() {
             bail!("insert_data: size of dataframe ({:?}) does not match expected size: {:?}.", df.height(), self.data.height());
@@ -169,14 +170,14 @@ impl MapLayer {
     }
 
     /// Assign parent references for each entity in the layer, based on their truncated geo_id.
-    pub fn assign_parents(&mut self, parent_ty: GeoType) {
+    fn assign_parents(&mut self, parent_ty: GeoType) {
         self.geo_ids.iter().enumerate()
             .map(|(i, geo_id)| self.parents[i].set(parent_ty,Some(geo_id.to_parent(parent_ty))))
             .collect()
     }
 
     /// Assign parent references for each entity in the layer, based on a provided map of geo_id to parent geo_id.
-    pub fn assign_parents_from_map(&mut self, parent_ty: GeoType, parent_map: HashMap<GeoId, GeoId>) -> Result<()> {
+    fn assign_parents_from_map(&mut self, parent_ty: GeoType, parent_map: HashMap<GeoId, GeoId>) -> Result<()> {
         self.geo_ids.iter().enumerate()
             .map(|(i, geo_id)| Ok(parent_map.get(geo_id)
                 .ok_or_else(|| anyhow!("No parent found for entity with geo_id: {:?}", geo_id))
@@ -185,7 +186,7 @@ impl MapLayer {
     }
 
     /// Compute adjacencies for the layer geometries, if it exists.
-    pub fn compute_adjacencies(&mut self) -> Result<()> {
+    fn compute_adjacencies(&mut self) -> Result<()> {
         let geoms = self.geoms.as_mut()
             .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?;
         self.adjacencies = geoms.compute_adjacencies_fast(1e8)?;
@@ -193,7 +194,7 @@ impl MapLayer {
     }
 
     /// Compute shared perimeters for the layer geometries, if it exists.
-    pub fn compute_shared_perimeters(&mut self) -> Result<()> {
+    fn compute_shared_perimeters(&mut self) -> Result<()> {
         let geoms = self.geoms.as_mut()
             .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
         self.shared_perimeters = geoms.compute_shared_perimeters_fast(&self.adjacencies, 1e8);
@@ -203,7 +204,7 @@ impl MapLayer {
 
 impl Map {
     /// Compute parent references for all layers based on truncated geo_id.
-    pub fn assign_parents_from_geoids(&mut self) {
+    fn assign_parents_from_geoids(&mut self) {
         self.get_layer_mut(GeoType::County).assign_parents(GeoType::State);
         self.get_layer_mut(GeoType::Tract).assign_parents(GeoType::County);
         self.get_layer_mut(GeoType::Tract).assign_parents(GeoType::State);
@@ -250,7 +251,7 @@ impl Map {
     }
 
     /// Merge block-level data into a given dataframe, aggregating on id_col.
-    pub fn merge_block_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
+    fn merge_block_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
         for ty in GeoType::ALL {
             if ty != GeoType::Block {
                 let aggregated = self.aggregate_data(&df, id_col, GeoType::Block, ty)?;
@@ -263,7 +264,7 @@ impl Map {
     }
 
     /// Aggregate adjacencies from a child layer to a parent layer.
-    pub fn aggregate_adjacencies(&mut self, ty: GeoType, parent_ty: GeoType) -> Result<()> {
+    fn aggregate_adjacencies(&mut self, ty: GeoType, parent_ty: GeoType) -> Result<()> {
         // Build parent edge sets from child graph
         let (parent_sets, n_parents) = {
             let child_layer = self.get_layer(ty);
@@ -324,7 +325,7 @@ impl Map {
     }
 
     /// Compute adjacencies for all layers, aggregating from blocks up to states.
-    pub fn compute_adjacencies(&mut self) -> Result<()> {
+    fn compute_adjacencies(&mut self) -> Result<()> {
         self.get_layer_mut(GeoType::Block).compute_adjacencies()?;
         self.patch_adjacencies();
         self.aggregate_adjacencies(GeoType::Block, GeoType::VTD)?;
@@ -337,10 +338,104 @@ impl Map {
     }
 
     /// Compute shared perimeters for all layers, if geometries exist.
-    pub fn compute_shared_perimeters(&mut self) -> Result<()> {
+    fn compute_shared_perimeters(&mut self) -> Result<()> {
         for ty in GeoType::ALL {
             self.get_layer_mut(ty).compute_shared_perimeters()?;
         }
         Ok(())
+    }
+
+    /// Build a map pack from the download files in `input_dir`
+    pub fn build_pack(input_dir: &Path, state_code: &str, fips: &str, verbose: u8) -> Result<Self> {
+        require_dir_exists(input_dir)?;
+
+        let mut map = Map::default();
+
+        if verbose > 0 { eprintln!("[build_pack] loading state shapes"); }
+        map.set_layer(MapLayer::from_tiger_shapefile(GeoType::State,
+            &input_dir.join(format!("tl_2020_{fips}_state20/tl_2020_{fips}_state20.shp")))?);
+
+        if verbose > 0 { eprintln!("[build_pack] loading county shapes"); }
+        map.set_layer(MapLayer::from_tiger_shapefile(GeoType::County,
+            &input_dir.join(format!("tl_2020_{fips}_county20/tl_2020_{fips}_county20.shp")))?);
+
+        if verbose > 0 { eprintln!("[build_pack] loading tract shapes"); }
+        map.set_layer(MapLayer::from_tiger_shapefile(GeoType::Tract,
+            &input_dir.join(format!("tl_2020_{fips}_tract20/tl_2020_{fips}_tract20.shp")))?);
+
+        if verbose > 0 { eprintln!("[build_pack] loading group shapes"); }
+        map.set_layer(MapLayer::from_tiger_shapefile(GeoType::Group,
+            &input_dir.join(format!("tl_2020_{fips}_bg20/tl_2020_{fips}_bg20.shp")))?);
+
+        if verbose > 0 { eprintln!("[build_pack] loading vtd shapes"); }
+        map.set_layer(MapLayer::from_tiger_shapefile(GeoType::VTD,
+            &input_dir.join(format!("tl_2020_{fips}_vtd20/tl_2020_{fips}_vtd20.shp")))?);
+
+        if verbose > 0 { eprintln!("[build_pack] loading block shapes"); }
+        map.set_layer(MapLayer::from_tiger_shapefile(GeoType::Block,
+            &input_dir.join(format!("tl_2020_{fips}_tabblock20/tl_2020_{fips}_tabblock20.shp")))?);
+
+        if verbose > 0 { eprintln!("[build_pack] computing crosswalks"); }
+        map.assign_parents_from_geoids();
+
+        /// Convert a crosswalk DataFrame to a map of GeoIds
+        #[inline]
+        fn get_map_from_crosswalk_df(df: &DataFrame, geo_types: (GeoType, GeoType), col_names: (&str, &str)) -> Result<HashMap<GeoId, GeoId>> {
+            Ok(
+                df.column(col_names.0.into())?.str()?
+                    .into_iter()
+                    .zip(df.column(col_names.1.into())?.str()?)
+                    .filter_map(|(b, d)| Some((
+                        GeoId::new(geo_types.0, b?),
+                        GeoId::new(geo_types.1, &format!("{}{}", &b?[..5], d?)),
+                    )))
+                    .collect()
+            )
+        }
+
+        if verbose > 0 { eprintln!("[build_pack] loading block -> vtd crosswalks"); }
+        map.get_layer_mut(GeoType::Block).assign_parents_from_map(
+            GeoType::VTD,
+            get_map_from_crosswalk_df(
+                &read_from_pipe_delimited_txt(&input_dir.join(format!("BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt")))?, 
+                (GeoType::Block, GeoType::VTD), 
+                ("BLOCKID", "DISTRICT")
+            )?
+        )?;
+
+        /// Convert GEOID column from i64 to String type
+        #[inline]
+        fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {
+            if *df.column("GEOID")?.dtype() != DataType::String {
+                let geoid_str = df.column("GEOID")?.i64()?.into_iter()
+                    .map(|opt| opt.map(|v| format!("{:015}", v)))
+                    .collect::<StringChunked>();
+                df.replace("GEOID", geoid_str)?;
+            }
+            Ok(df)
+        }
+
+        if verbose > 0 { eprintln!("[build_pack] loading demographic data"); }
+        map.merge_block_data(ensure_geoid_is_str(read_from_csv(
+            &input_dir.join(format!("Demographic_Data_Block_{state_code}/demographic_data_block_{state_code}.v06.csv"))
+        )?)?, "GEOID")?;
+
+        if verbose > 0 { eprintln!("[build_pack] loading election data"); }
+        map.merge_block_data(ensure_geoid_is_str(read_from_csv(
+            &input_dir.join(format!("Election_Data_Block_{state_code}/election_data_block_{state_code}.v06.csv"))
+        )?)?, "GEOID")?;
+
+        if verbose > 0 { eprintln!("[build_pack] computing adjacencies"); }
+        map.compute_adjacencies()?;
+
+        if verbose > 0 { eprintln!("[build_pack] computing shared perimeters"); }
+        map.compute_shared_perimeters()?;
+
+        if verbose > 0 { eprintln!("[build_pack] constructing graphs"); }
+        for layer in map.get_layers_mut() {
+            layer.construct_graph();
+        }
+
+        Ok(map)
     }
 }

@@ -31,8 +31,8 @@ impl Partition {
         alpha: f64,
         iters: usize
     ) {
-        assert!(src < self.num_parts && dest < self.num_parts && src != dest, 
-            "src and dest must be distinct parts in range [0, {})", self.num_parts);
+        assert!(src < self.num_parts() && dest < self.num_parts() && src != dest, 
+            "src and dest must be distinct parts in range [0, {})", self.num_parts());
 
         let mut rng = rand::rng();
 
@@ -59,19 +59,19 @@ impl Partition {
                 else { self.cut_subgraph_within_part(node) };
 
             // Score: weight change and perimeter change for u (+ bundle).
-            let weight_delta = self.graph.node_weights.get_as_f64(series, node).unwrap()
+            let weight_delta = self.graph().node_weights().get_as_f64(series, node).unwrap()
             + bundle.iter()
-                .map(|&u| self.graph.node_weights.get_as_f64(series, u).unwrap())
+                .map(|&u| self.graph().node_weights().get_as_f64(series, u).unwrap())
                 .sum::<f64>();
 
-            let boundary_delta = self.graph.edges_with_weights(node)
+            let boundary_delta = self.graph().edges_with_weights(node)
                 .filter_map(|(v, w)| (self.assignments[v] == src).then_some(w))
                 .sum::<f64>()
-            - self.graph.edges_with_weights(node)
+            - self.graph().edges_with_weights(node)
                 .filter_map(|(v, w)| (self.assignments[v] == dest).then_some(w))
                 .sum::<f64>()
             - if bundle.len() > 0 {
-                self.graph.edges_with_weights(node)
+                self.graph().edges_with_weights(node)
                     .filter(|&(v, _)| self.assignments[v] == src)
                     .filter_map(|(v, w)| bundle.contains(&v).then_some(w))
                     .sum::<f64>()

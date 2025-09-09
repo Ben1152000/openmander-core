@@ -8,11 +8,11 @@ impl Partition {
     /// Find the part with the minimum total weight.
     /// Returns (part, part_weight).
     fn part_with_min_weight(&self, series: &str) -> (u32, f64) {
-        assert!(self.num_parts > 1, "cannot find min part with only one part");
-        assert!(self.graph.node_weights.series.contains_key(series),
+        assert!(self.num_parts() > 1, "cannot find min part with only one part");
+        assert!(self.graph().node_weights().contains(series),
             "series '{}' not found in node weights", series);
 
-        (1..self.num_parts)
+        (1..self.num_parts())
             .map(|p| (p, self.part_weights.get_as_f64(series, p as usize).unwrap()))
             .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
             .unwrap()
@@ -22,7 +22,7 @@ impl Partition {
     /// `samples` is the number of random frontier nodes to sample.
     /// Use this function when computing the full neighbor set is too expensive.
     fn sample_neighboring_parts(&self, part: u32, samples: usize, rng: &mut impl Rng) -> Vec<u32> {
-        assert!(part < self.num_parts, "part {} out of range", part);
+        assert!(part < self.num_parts(), "part {} out of range", part);
 
         let frontier = self.frontiers.get(part);
         if frontier.is_empty() { return vec![] }
@@ -30,7 +30,7 @@ impl Partition {
         let mut neighbors = HashSet::new();
         for _ in 0..samples {
             let node = frontier[rng.random_range(0..frontier.len())];
-            neighbors.extend(self.graph.edges(node)
+            neighbors.extend(self.graph().edges(node)
                 .map(|u| self.assignments[u])
                 .filter(|&p| p != 0 && p != part));
         }
@@ -42,8 +42,8 @@ impl Partition {
     /// `series` should name a column in node_weights.series.
     pub fn equalize_parts(&mut self, series: &str, a: u32, b: u32, tolerance: f64) {
         // Validate parts and adjacency.
-        assert!(a < self.num_parts && b < self.num_parts && a != b,
-            "a and b must be distinct parts in range [0, {})", self.num_parts);
+        assert!(a < self.num_parts() && b < self.num_parts() && a != b,
+            "a and b must be distinct parts in range [0, {})", self.num_parts());
 
         let mut rng = rand::rng();
 
@@ -66,7 +66,7 @@ impl Partition {
             if !(self.part_is_empty(dest) || self.node_borders_part(node, dest)) { continue }
 
             if self.check_node_contiguity(node, dest) {
-                let delta = self.graph.node_weights.get_as_f64(series, node).unwrap();
+                let delta = self.graph().node_weights().get_as_f64(series, node).unwrap();
                 self.move_node(node, dest, false);
                 remaining -= delta;
             } else {
@@ -75,7 +75,7 @@ impl Partition {
                 subgraph.push(node);
 
                 let delta = subgraph.iter()
-                    .map(|&u| self.graph.node_weights.get_as_f64(series, u).unwrap())
+                    .map(|&u| self.graph().node_weights().get_as_f64(series, u).unwrap())
                     .sum::<f64>();
                 self.move_subgraph(&subgraph, dest, false);
                 remaining -= delta;
@@ -91,24 +91,24 @@ impl Partition {
     /// `tolerance` is the allowed fraction deviation from ideal (e.g. 0.01 = ±1%).
     /// `max_iter` is the maximum number of equalization passes to attempt.
     pub fn equalize(&mut self, series: &str, tolerance: f64, max_iter: usize) {
-        assert_ne!(self.num_parts, 1, "cannot equalize with only one part");
-        assert!(self.graph.node_weights.series.contains_key(series),
+        assert_ne!(self.num_parts(), 1, "cannot equalize with only one part");
+        assert!(self.graph().node_weights().contains(series),
             "series '{}' not found in node weights", series);
 
         let mut rng = rand::rng();
 
         // Compute target population and tolerance band (ignoring unassigned part 0).
-        let total = (1..self.num_parts)
+        let total = (1..self.num_parts())
             .map(|part| self.part_weights.get_as_f64(series, part as usize).unwrap())
             .sum::<f64>();
-        let target = total / ((self.num_parts - 1) as f64);
+        let target = total / ((self.num_parts() - 1) as f64);
         let allowed = target * tolerance;
 
         println!("Target population per part: {:.0} ±{:.0}", target, allowed);
 
         // Iterate until all parts are within tolerance, or we give up.
         for i in 0..max_iter {
-            let totals = (1..self.num_parts)
+            let totals = (1..self.num_parts())
                 .map(|p| self.part_weights.get_as_f64(series, p as usize).unwrap())
                 .collect::<Vec<_>>();
             let deviations = totals.iter()

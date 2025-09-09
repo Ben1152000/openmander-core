@@ -20,7 +20,7 @@ pub struct MapLayer {
 }
 
 impl MapLayer {
-    pub fn new(ty: GeoType) -> Self {
+    pub(crate) fn new(ty: GeoType) -> Self {
         Self {
             ty,
             geo_ids: Vec::new(),
@@ -38,7 +38,6 @@ impl MapLayer {
     #[inline] pub fn len(&self) -> usize { self.geo_ids.len() }
 
     /// Check if the layer is empty (no entities).
-    /// Returns true if empty, false otherwise.
     #[inline] pub fn is_empty(&self) -> bool { self.geo_ids.is_empty() }
 
     /// Get the geographic type of this layer.
@@ -50,15 +49,12 @@ impl MapLayer {
     /// Get a reference to the index mapping GeoIds to contiguous indices.
     #[inline] pub fn index(&self) -> &HashMap<GeoId, u32> { &self.index }
 
-    /// Get a simple reference to the graph representation of this layer.
-    #[inline] pub fn graph(&self) -> &Graph { &self.graph.as_ref() }
-
     /// Get an Arc clone of the graph representation of this layer.
-    #[inline] pub fn graph_arc(&self) -> Arc<Graph> { self.graph.clone() }
+    #[inline] pub fn graph_handle(&self) -> Arc<Graph> { self.graph.clone() }
 
     /// Construct a graph representation of the layer for partitioning.
     /// Requires data, adjacencies, and shared_perimeters to be computed first.
-    pub fn construct_graph(&mut self) {
+    pub(crate) fn construct_graph(&mut self) {
         self.graph = Arc::new(Graph::new(
             self.len(),
             &self.adjacencies,

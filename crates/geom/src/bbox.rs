@@ -1,4 +1,4 @@
-use geo::{Rect};
+use geo::Rect;
 use rstar::{RTreeObject, AABB};
 
 /// A bounding box in an R-tree, associated with a MultiPolygon by index.
@@ -9,7 +9,7 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
-    pub fn new(idx: usize, bbox: Rect<f64>) -> Self {
+    pub(crate) fn new(idx: usize, bbox: Rect<f64>) -> Self {
         Self { idx, bbox }
     }
 

@@ -5,7 +5,7 @@ use crate::partition::Partition;
 impl Partition {
     /// Select a random block from the map.
     pub fn random_node(&self) -> usize {
-        rand::rng().random_range(0..self.graph.len())
+        rand::rng().random_range(0..self.graph().len())
     }
 
     /// Select a random unassigned block from the map.
@@ -28,16 +28,16 @@ impl Partition {
 
     /// Select a random neighbor of a given block.
     pub fn random_edge(&self, node: usize, rng: &mut impl Rng) -> Option<usize> {
-        assert!(node < self.graph.len(), "node {} out of range", node);
-        if self.graph.range(node).is_empty() { return None }
-        Some(self.graph.edges[rng.random_range(self.graph.range(node))] as usize)
+        assert!(node < self.graph().len(), "node {} out of range", node);
+        if self.graph().is_isolated(node) { return None }
+        Some(self.graph().edge(node, rng.random_range(0..self.graph().degree(node)) as usize).unwrap())
     }
 
     /// Select a random neighboring district of a given block.
     pub fn random_neighboring_part(&self, node: usize, rng: &mut impl Rng) -> Option<u32> {
-        assert!(node < self.graph.len(), "node {} out of range", node);
-        if self.graph.range(node).is_empty() { return None }
-        self.graph.edges(node)
+        assert!(node < self.graph().len(), "node {} out of range", node);
+        if self.graph().is_isolated(node) { return None }
+        self.graph().edges(node)
             .map(|v| self.assignments[v])
             .filter(|&p| p != self.assignments[node])
             .choose(rng)
@@ -49,7 +49,7 @@ impl Partition {
         self.clear_assignments();
 
         // Seed districts with random starting blocks.
-        for part in 1..self.num_parts {
+        for part in 1..self.num_parts() {
             self.move_node(self.random_unassigned_node(&mut rng).unwrap(), part, false);
         }
 
@@ -57,7 +57,5 @@ impl Partition {
         while let Some(u) = self.random_unassigned_boundary_node(&mut rng) {
             self.move_node(u, self.random_neighboring_part(u, &mut rng).unwrap(), false);
         }
-
-        self.rebuild_caches();
     }
 }

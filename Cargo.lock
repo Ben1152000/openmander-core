@@ -2253,10 +2253,6 @@ dependencies = [
  "openmander-map",
  "openmander-pack",
  "openmander-plan",
- "polars",
- "reqwest",
- "tempfile",
- "zip",
 ]
 
 [[package]]
@@ -2274,12 +2270,7 @@ dependencies = [
 name = "openmander-graph"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "ndarray",
- "polars",
- "rand",
- "rayon",
- "shapefile",
 ]
 
 [[package]]
@@ -2311,10 +2302,8 @@ name = "openmander-pack"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
  "openmander-map",
  "openmander-plan",
- "polars",
  "reqwest",
  "tempfile",
  "zip",
@@ -2324,13 +2313,9 @@ dependencies = [
 name = "openmander-partition"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "ndarray",
  "openmander-graph",
- "polars",
  "rand",
- "rayon",
- "shapefile",
 ]
 
 [[package]]
@@ -2338,7 +2323,6 @@ name = "openmander-plan"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "openmander-graph",
  "openmander-map",
  "openmander-partition",
  "polars",

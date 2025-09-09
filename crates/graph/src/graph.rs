@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use ndarray::{s, Array1, Array2};
-
-use crate::{WeightMatrix, WeightType};
+use crate::WeightMatrix;
 
 /// A weighted, undirected graph in compressed sparse row format.
 #[derive(Debug, Default)]

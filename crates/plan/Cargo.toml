@@ -7,6 +7,5 @@ edition = "2024"
 anyhow = { workspace = true }
 polars = { workspace = true }
 
-openmander-graph = { path = "../graph" }
 openmander-map = { path = "../map" }
 openmander-partition = { path = "../partition" }

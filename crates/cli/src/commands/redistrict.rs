@@ -12,7 +12,7 @@ pub fn run(_cli: &crate::cli::Cli, args: &crate::cli::RedistrictArgs) -> Result<
     println!("[redistrict] loading map from {}", pack_path.display());
     let map = Map::read_from_pack(&pack_path)?;
 
-    let mut plan = Plan::new(&map, num_districts as u32);
+    let mut plan = Plan::new(map, num_districts as u32);
     println!("[redistrict] generating random plan with {} districts", plan.num_districts() - 1);
     plan.randomize()?;
 

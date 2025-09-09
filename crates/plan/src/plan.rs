@@ -19,20 +19,19 @@ impl Plan {
         let map: Arc<Map> = map.into();
         let partition = Partition::new(
             num_districts as usize + 1,
-            map.get_layer(GeoType::Block).graph_arc()
+            map.get_layer(GeoType::Block).graph_handle()
         );
 
         Self { map, num_districts, partition }
     }
 
     /// Get the number of districts in this plan (excluding unassigned 0).
-    pub fn num_districts(&self) -> u32 { self.num_districts }
+    #[inline] pub fn num_districts(&self) -> u32 { self.num_districts }
 
     /// Get the list of weight series available in the map's node weights.
+    #[inline]
     pub fn get_series(&self) -> Vec<&str> {
-        self.partition.graph.node_weights.series.keys()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
+        self.partition.graph().node_weights().series()
     }
 
     /// Set the block assignments for the plan.
@@ -41,7 +40,7 @@ impl Plan {
         self.partition.set_assignments(
             self.map.get_layer(GeoType::Block).geo_ids().iter()
                 .map(|geo_id| assignments.get(geo_id).copied().unwrap_or(0))
-                .collect::<Vec<u32>>()
+                .collect()
         );
 
         Ok(())
@@ -50,7 +49,7 @@ impl Plan {
     /// Get the block assignments for the plan.
     pub fn get_assignments(&self) -> Result<HashMap<GeoId, u32>> {
         let assignments = self.map.get_layer(GeoType::Block).index().clone().into_iter()
-            .map(|(geo_id, i)| (geo_id, self.partition.assignments[i as usize]))
+            .map(|(geo_id, i)| (geo_id, self.partition.assignment(i as usize)))
             .collect();
 
         Ok(assignments)
@@ -78,7 +77,7 @@ impl Plan {
         let blocks = df.column(df.get_column_names()[0])?.cast(&DataType::String)?;
         let districts = df.column(df.get_column_names()[1])?.cast(&DataType::UInt32)?;
 
-        let assignments: HashMap<GeoId, u32> = blocks.str()?.into_no_null_iter()
+        let assignments = blocks.str()?.into_no_null_iter()
             .zip(districts.u32()?.into_no_null_iter())
             .map(|(block, district)| {
                 let geo_id = GeoId::new(GeoType::Block, block);
@@ -87,7 +86,7 @@ impl Plan {
                 }
                 Ok((geo_id, district))
             })
-            .collect::<Result<HashMap<GeoId, u32>>>()?;
+            .collect::<Result<_>>()?;
 
         self.set_assignments(assignments)
     }
@@ -114,7 +113,7 @@ impl Plan {
 
     /// Equalize total weights across all districts using greedy swaps.
     pub fn equalize(&mut self, series: &str, tolerance: f64, max_iter: usize) -> Result<()> {
-        if !self.partition.graph.node_weights.series.contains_key(series) {
+        if !self.partition.graph().node_weights().contains(series) {
             bail!("[Plan.equalize] Population column '{}' not found in node weights", series);
         }
 

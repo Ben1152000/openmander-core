@@ -15,7 +15,7 @@ impl Geometries {
         let mut shared_perimeters: Vec<Vec<f64>> = vec![Vec::new(); self.len()];
         for (i, neighbors) in adjacencies.iter().enumerate() {
             shared_perimeters[i] = neighbors.iter().map(|&j | {
-                shared_perimeter(&self.shapes[i], &self.shapes[j as usize])
+                shared_perimeter(&self.shapes()[i], &self.shapes()[j as usize])
             }).collect();
         }
 
@@ -54,13 +54,13 @@ impl Geometries {
             ring.0.windows(2).map(|w| (w[0], w[1]))
         }
 
-        let n = self.shapes.len();
+        let n = self.shapes().len();
         // Map an edge to (owner polygon, length). When we see the same edge again, we know the neighbor.
         let mut edge_owner: HashMap<EdgeKey, (u32, f64)> = HashMap::new();
         // Sum of shared lengths per unordered polygon pair.
         let mut pair_len: HashMap<u64, f64> = HashMap::new();
 
-        for (pi, mp) in self.shapes.iter().enumerate() {
+        for (pi, mp) in self.shapes().iter().enumerate() {
             let pid = pi as u32;
             for poly in mp {
                 // exterior + interiors

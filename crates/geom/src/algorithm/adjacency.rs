@@ -18,8 +18,8 @@ impl Geometries {
         // bbox padding if you expect FP jitter; keep 0.0 if not needed
         let eps = 0.0_f64;
 
-        for i in 0..self.shapes.len() {
-            let Some(rect) = self.shapes[i].bounding_rect() else { continue };
+        for i in 0..self.shapes().len() {
+            let Some(rect) = self.shapes()[i].bounding_rect() else { continue };
             let search = AABB::from_corners(
                 [rect.min().x - eps, rect.min().y - eps],
                 [rect.max().x + eps, rect.max().y + eps],
@@ -29,7 +29,7 @@ impl Geometries {
                 let j = candidate.idx();
                 if j <= i { continue; } // check each unordered pair once
 
-                let im = self.shapes[i].relate(&self.shapes[j]);
+                let im = self.shapes()[i].relate(&self.shapes()[j]);
 
                 // Rook predicate:
                 // 1) touches = true (no interior overlap)
@@ -79,10 +79,10 @@ impl Geometries {
         let mut adjacencies: Vec<Vec<u32>> = vec![Vec::new(); self.len()];
 
         // Edge -> polygons that contain this edge (usually 1 or 2)
-        let mut edge_to_polys: AHashMap<EdgeKey, SmallVec<[u32; 2]>> = AHashMap::with_capacity(self.shapes.len() * 16);
+        let mut edge_to_polys: AHashMap<EdgeKey, SmallVec<[u32; 2]>> = AHashMap::with_capacity(self.shapes().len() * 16);
 
         // 1) Ingest all edges
-        for (i, mp) in self.shapes.iter().enumerate() {
+        for (i, mp) in self.shapes().iter().enumerate() {
             // Iterate every polygon and ring
             for poly in &mp.0 {
                 // exterior + holes

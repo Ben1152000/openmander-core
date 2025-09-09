@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ndarray::{s, Array1, Array2, Axis};
+use ndarray::Array1;
 use openmander_graph::{Graph, WeightMatrix};
 
 use crate::frontier::FrontierSet;
@@ -8,35 +8,27 @@ use crate::frontier::FrontierSet;
 /// A partition of a graph into contiguous parts (districts).
 #[derive(Debug)]
 pub struct Partition {
-    pub num_parts: u32, // Fixed number of parts (including unassigned 0)
-    pub graph: Arc<Graph>, // Fixed graph structure
-    pub assignments: Array1<u32>, // Current part assignment for each node, len = n
-    pub boundary: Array1<bool>, // Whether each node is on a part boundary, len = n
-    pub frontiers: FrontierSet, // Nodes on the boundary of each part
-    pub part_sizes: Vec<usize>, // Number of nodes in each part, len = num_parts
-    pub part_weights: WeightMatrix, // Aggregated weights for each part
+    num_parts: u32, // Fixed number of parts (including unassigned 0)
+    graph: Arc<Graph>, // Fixed graph structure
+    pub(crate) assignments: Array1<u32>, // Current part assignment for each node, len = n
+    pub(crate) boundary: Array1<bool>, // Whether each node is on a part boundary, len = n
+    pub(crate) frontiers: FrontierSet, // Nodes on the boundary of each part
+    pub(crate) part_sizes: Vec<usize>, // Number of nodes in each part, len = num_parts
+    pub(crate) part_weights: WeightMatrix, // Aggregated weights for each part
 }
 
 impl Partition {
     /// Construct an empty partition from a weighted graph reference and number of parts.
-    pub fn new(
-        num_parts: usize,
-        graph: Arc<Graph>,
-    ) -> Self {
+    pub fn new(num_parts: usize, graph: impl Into<Arc<Graph>>) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
 
-        let mut part_weights = WeightMatrix {
-            series: graph.node_weights.series.clone(),
-            i64: Array2::<i64>::zeros((num_parts, graph.node_weights.i64.ncols())),
-            f64: Array2::<f64>::zeros((num_parts, graph.node_weights.f64.ncols())),
-        };
-
-        // initialize part 0 to contain the sum of all node weights
-        part_weights.i64.row_mut(0).assign(&graph.node_weights.i64.sum_axis(Axis(0)));
-        part_weights.f64.row_mut(0).assign(&graph.node_weights.f64.sum_axis(Axis(0)));
+        let graph: Arc<Graph> = graph.into();
 
         let mut part_sizes = vec![0; num_parts];
         part_sizes[0] = graph.len();
+
+        let mut part_weights = graph.node_weights().copy_of_size(num_parts);
+        part_weights.set_row_to_sum_of(0, graph.node_weights());
 
         Self {
             num_parts: num_parts as u32,
@@ -50,23 +42,25 @@ impl Partition {
     }
 
     /// Get the number of parts in this partition (including unassigned 0).
-    pub fn num_parts(&self) -> usize { self.num_parts as usize }
+    #[inline] pub fn num_parts(&self) -> u32 { self.num_parts }
+
+    /// Get a reference to the underlying graph.
+    #[inline] pub fn graph(&self) -> &Graph { &self.graph }
+
+    /// Get the part assignment of a given node.
+    #[inline] pub fn assignment(&self, node: usize) -> u32 { self.assignments[node] }
 
     /// Clear all assignments, setting every node to unassigned (0).
     pub fn clear_assignments(&mut self) {
         self.assignments.fill(0);
         self.boundary.fill(false);
         self.frontiers.clear();
+
         self.part_sizes.fill(0);
         self.part_sizes[0] = self.graph.len();
-        if self.graph.node_weights.i64.ncols() > 0 {
-            self.part_weights.i64.row_mut(0).assign(&self.graph.node_weights.i64.sum_axis(Axis(0)));
-            self.part_weights.i64.slice_mut(s![1.., ..]).fill(0);
-        }
-        if self.graph.node_weights.f64.ncols() > 0 {
-            self.part_weights.f64.row_mut(0).assign(&self.graph.node_weights.f64.sum_axis(Axis(0)));
-            self.part_weights.f64.slice_mut(s![1.., ..]).fill(0.0);
-        }
+
+        self.part_weights.clear_all_rows();
+        self.part_weights.set_row_to_sum_of(0, self.graph.node_weights());
     }
 
     /// Generate assignments map from GeoId to district.
@@ -89,32 +83,13 @@ impl Partition {
             self.boundary.as_slice().unwrap()
         );
 
-        self.rebuild_caches();
-    }
-
-    /// Recompute all caches from scratch.
-    pub fn rebuild_caches(&mut self) {
-        // Recompute per-part totals.
-        self.part_weights = WeightMatrix {
-            series: self.graph.node_weights.series.clone(),
-            i64: Array2::<i64>::zeros((self.num_parts as usize, self.graph.node_weights.i64.ncols())),
-            f64: Array2::<f64>::zeros((self.num_parts as usize, self.graph.node_weights.f64.ncols())),
-        };
-
-        for (u, &p) in self.assignments.iter().enumerate() {
-            if self.graph.node_weights.i64.ncols() > 0 {
-                self.part_weights.i64.row_mut(p as usize)
-                    .scaled_add(1, &self.graph.node_weights.i64.row(u));
-            }
-            if self.graph.node_weights.f64.ncols() > 0 {
-                self.part_weights.f64.row_mut(p as usize)
-                    .scaled_add(1.0, &self.graph.node_weights.f64.row(u));
-            }
-        }
-
         self.part_sizes.fill(0);
-        for &i in &self.assignments {
-            self.part_sizes[i as usize] += 1
+        for &part in &self.assignments { self.part_sizes[part as usize] += 1 }
+
+        // Recompute per-part totals.
+        self.part_weights = WeightMatrix::copy_of_size(self.graph.node_weights(), self.num_parts as usize);
+        for (node, &part) in self.assignments.iter().enumerate() {
+            self.part_weights.add_row_from(part as usize, self.graph.node_weights(), node);
         }
     }
 
@@ -153,17 +128,8 @@ impl Partition {
         self.part_sizes[part as usize] += 1;
 
         // Update aggregated integer totals (subtract from old, add to new).
-        if self.graph.node_weights.i64.ncols() > 0 {
-            let row_i = self.graph.node_weights.i64.row(node);
-            self.part_weights.i64.row_mut(prev as usize).scaled_add(-1, &row_i);
-            self.part_weights.i64.row_mut(part as usize).scaled_add(1, &row_i);
-        }
-
-        if self.graph.node_weights.f64.ncols() > 0 {
-            let row_f = self.graph.node_weights.f64.row(node);
-            self.part_weights.f64.row_mut(prev as usize).scaled_add(-1.0, &row_f);
-            self.part_weights.f64.row_mut(part as usize).scaled_add(1.0, &row_f);
-        }
+        self.part_weights.subtract_row_from(prev as usize, self.graph.node_weights(), node);
+        self.part_weights.add_row_from(part as usize, self.graph.node_weights(), node);
     }
 
     /// Move a connected subgraph to a different part, updating caches.
@@ -212,19 +178,8 @@ impl Partition {
         self.part_sizes[part as usize] += subgraph.len();
 
         // Batch-update per-part totals.
-        if self.graph.node_weights.i64.ncols() > 0 {
-            let mut sum_i = ndarray::Array1::<i64>::zeros(self.graph.node_weights.i64.ncols());
-            subgraph.iter().for_each(|&u| sum_i += &self.graph.node_weights.i64.row(u));
-            self.part_weights.i64.row_mut(prev as usize).scaled_add(-1, &sum_i);
-            self.part_weights.i64.row_mut(part as usize).scaled_add(1, &sum_i);
-        }
-
-        if self.graph.node_weights.f64.ncols() > 0 {
-            let mut sum_f = ndarray::Array1::<f64>::zeros(self.graph.node_weights.f64.ncols());
-            subgraph.iter().for_each(|&u| sum_f += &self.graph.node_weights.f64.row(u));
-            self.part_weights.f64.row_mut(prev as usize).scaled_add(-1.0, &sum_f);
-            self.part_weights.f64.row_mut(part as usize).scaled_add(1.0, &sum_f);
-        }
+        self.part_weights.subtract_rows_from(prev as usize, self.graph.node_weights(), &subgraph);
+        self.part_weights.add_rows_from(part as usize, self.graph.node_weights(), &subgraph);
     }
 
     /// Articulation-aware move: move `u` and (if needed) the minimal "dangling" component
@@ -275,11 +230,8 @@ impl Partition {
         self.part_sizes[b as usize] = 0;
 
         // update part_weights
-        if self.graph.node_weights.i64.ncols() > 0 {
-            let row_b = self.part_weights.i64.row_mut(b as usize).to_owned();
-            self.part_weights.i64.row_mut(a as usize).scaled_add(1, &row_b);
-            self.part_weights.i64.row_mut(b as usize).fill(0);
-        }
+        self.part_weights.add_row(a as usize, b as usize);
+        self.part_weights.clear_row(b as usize);
 
         Some(b)
     }

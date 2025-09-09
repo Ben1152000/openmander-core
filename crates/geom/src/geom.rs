@@ -6,7 +6,7 @@ use crate::bbox::BoundingBox;
 /// Geometries represents a collection of non-overlapping MultiPolygons with spatial relationships.
 #[derive(Debug, Clone)]
 pub struct Geometries {
-    pub(crate) shapes: Vec<MultiPolygon<f64>>,
+    shapes: Vec<MultiPolygon<f64>>,
     rtree: RTree<BoundingBox>,
 }
 

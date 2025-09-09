@@ -13,7 +13,7 @@ impl Partition {
     #[inline]
     fn perimeter(&self, part: u32) -> f64 {
         self.frontiers.get(part).iter()
-            .flat_map(|&u| self.graph.edges_with_weights(u))
+            .flat_map(|&u| self.graph().edges_with_weights(u))
             .filter_map(|(v, w)| (self.assignments[v] != part).then_some(w))
             .sum::<f64>()
     }

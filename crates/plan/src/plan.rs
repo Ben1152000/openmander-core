@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::File, path::Path, sync::Arc, vec};
+use std::{collections::HashMap, fs::File, path::Path, sync::Arc};
 
 use anyhow::{bail, Context, Ok, Result};
 use openmander_map::{GeoId, GeoType, Map};
@@ -7,23 +7,22 @@ use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, 
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Debug)]
-pub struct Plan<'a> {
-    pub(crate) map: &'a Map,
+pub struct Plan {
+    pub(crate) map: Arc<Map>,
     pub(crate) num_districts: u32, // number of districts (excluding unassigned 0)
     pub(crate) partition: Partition,
 }
 
-impl<'a> Plan<'a> {
+impl Plan {
     /// Create a new empty plan with a set number of districts.
-    pub fn new(map: &'a Map, num_districts: u32) -> Self {
-        Self {
-            map,
-            num_districts,
-            partition: Partition::new(
-                num_districts as usize + 1,
-                Arc::clone(&map.get_layer(GeoType::Block).graph)
-            )
-        }
+    pub fn new(map: impl Into<Arc<Map>>, num_districts: u32) -> Self {
+        let map: Arc<Map> = map.into();
+        let partition = Partition::new(
+            num_districts as usize + 1,
+            map.get_layer(GeoType::Block).graph.clone()
+        );
+
+        Self { map, num_districts, partition }
     }
 
     /// Get the number of districts in this plan (excluding unassigned 0).

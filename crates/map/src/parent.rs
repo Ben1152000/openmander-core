@@ -3,7 +3,7 @@ use crate::{GeoId, GeoType};
 /// Quick way to access parent entities across levels.
 #[derive(Debug, Clone, Default)]
 pub struct ParentRefs {
-    pub refs: [Option<GeoId>; GeoType::COUNT - 1],
+    refs: [Option<GeoId>; GeoType::COUNT - 1],
 }
 
 impl ParentRefs {

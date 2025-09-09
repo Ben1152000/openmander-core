@@ -6,7 +6,7 @@ use crate::Geometries;
 
 impl Geometries {
     /// For each polygon and its adjacency list, compute the shared perimeter with each neighbor.
-    pub fn compute_shared_perimeters(&mut self, adjacencies: &Vec<Vec<u32>>) -> Vec<Vec<f64>>{
+    pub fn compute_shared_perimeters(&self, adjacencies: &Vec<Vec<u32>>) -> Vec<Vec<f64>>{
         /// Length of shared boundary between two (mutually adjacent) multipolygons.
         fn shared_perimeter(a: &MultiPolygon<f64>, b: &MultiPolygon<f64>) -> f64 {
             (a.geodesic_perimeter() + b.geodesic_perimeter() - a.union(b).geodesic_perimeter()) / 2.0

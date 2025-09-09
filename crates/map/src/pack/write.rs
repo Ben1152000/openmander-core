@@ -9,14 +9,14 @@ impl MapLayer {
     /// Prepare entity data (with parent refs) for writing to a parquet file.
     fn pack_data(&self) -> Result<DataFrame> {
         /// Helper to extract parent IDs as strings
-        fn get_parents(parents: &Vec<ParentRefs>, ty: GeoType) -> Vec<Option<String>> {
+        fn get_parents(parents: &Vec<ParentRefs>, ty: GeoType) -> Vec<Option<&str>> {
             parents.iter()
-                .map(|parents| parents.get(ty).map(|geo_id| geo_id.id.to_string()))
+                .map(|parents| parents.get(ty).map(|geo_id| geo_id.id()))
                 .collect()
         }
 
         let parents_df = df![
-            "geo_id" => self.geo_ids.iter().map(|geo_id| geo_id.id.to_string()).collect::<Vec<_>>(),
+            "geo_id" => self.geo_ids.iter().map(|geo_id| geo_id.id()).collect::<Vec<_>>(),
             "parent_state" => get_parents(&self.parents, GeoType::State),
             "parent_county" => get_parents(&self.parents, GeoType::County),
             "parent_tract" => get_parents(&self.parents, GeoType::Tract),
@@ -56,7 +56,7 @@ impl MapLayer {
 
         // geometries
         if let Some(geom) = &self.geoms {
-            write_to_geoparquet(&path.join(geom_path), &geom.shapes)?;
+            write_to_geoparquet(&path.join(geom_path), &geom.shapes())?;
             let (k, h) = sha256_file(geom_path, path)?;
             hashes.insert(k, FileHash { sha256: h });
         }

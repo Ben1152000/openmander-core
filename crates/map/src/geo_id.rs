@@ -5,8 +5,8 @@ use crate::GeoType;
 /// Stable key for any entity across levels.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GeoId {
-    pub ty: GeoType,  // ex: county, block
-    pub id: Arc<str>, // ex: "17019" for county, "170190111002007" for block
+    ty: GeoType,  // ex: county, block
+    id: Arc<str>, // ex: "17019" for county, "170190111002007" for block
 }
 
 impl GeoId {
@@ -15,13 +15,19 @@ impl GeoId {
         GeoId { ty, id: Arc::from(id) }
     }
 
+    /// Get the geographic type of this GeoId.
+    #[inline] pub fn ty(&self) -> GeoType { self.ty }
+
+    /// Get the string identifier of this GeoId.
+    #[inline] pub fn id(&self) -> &str { &self.id }
+
     /// Syntactic sugar for creating a new GeoId of type Block.
-    #[inline] pub fn new_block(id: &str) -> Self { Self::new(GeoType::Block, id) }
+    #[inline] pub(crate) fn new_block(id: &str) -> Self { Self::new(GeoType::Block, id) }
 
     /// Returns a new `GeoId` corresponding to the higher-level `GeoType`
     /// by truncating this GeoId's string to the correct prefix length.
     #[inline]
-    pub fn to_parent(&self, parent_ty: GeoType) -> GeoId {
+    pub(crate) fn to_parent(&self, parent_ty: GeoType) -> GeoId {
         // If the id is shorter than expected, just take the full id.
         GeoId { ty: parent_ty, id: Arc::from(&self.id[..self.id.len().min(parent_ty.id_len())]) }
     }

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/graph",
+    "crates/geom",
     "crates/map",
     "crates/partition",
     "crates/plan",

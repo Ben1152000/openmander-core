@@ -1,10 +1,11 @@
 use std::{collections::{HashMap, HashSet}, path::Path, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
+use openmander_geom::Geometries;
 use polars::{frame::DataFrame, prelude::*, series::Series};
 use shapefile::{dbase::{FieldValue, Record}, Reader, Shape};
 
-use crate::{common::*, GeoId, GeoType, Geometries, Map, MapLayer, ParentRefs};
+use crate::{common::*, GeoId, GeoType, Map, MapLayer, ParentRefs};
 
 impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.
@@ -129,7 +130,7 @@ impl MapLayer {
             adjacencies: vec![Vec::new(); size],
             shared_perimeters: vec![Vec::new(); size],
             graph: Arc::default(),
-            geoms: Some(Geometries::new(shapes)),
+            geoms: Some(Geometries::new(&shapes)),
         })
     }
 
@@ -232,7 +233,7 @@ impl Map {
                     .ok_or_else(|| anyhow!("row {} out of bounds (parents len = {})", i, self.get_layer(ty).parents.len()))?
                     .get(parent_ty)
                     .ok_or_else(|| anyhow!("parent reference {:?} not defined at row {}", parent_ty, i))?
-                    .id.to_string())
+                    .id())
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -288,7 +289,7 @@ impl Map {
                     parent_index
                         .get(geoid)
                         .copied()
-                        .ok_or_else(|| anyhow!("Parent index does not contain {:?}", geoid.id))
+                        .ok_or_else(|| anyhow!("Parent index does not contain {:?}", geoid.id()))
                 })
                 .collect::<Result<_>>()?;
 
@@ -322,6 +323,36 @@ impl Map {
         }
 
         Ok(())
+    }
+
+    /// Patch adjacency list with manual bridges for island/remote blocks.
+    fn patch_adjacencies(&mut self) {
+        let patches = [
+            // Washington County, Rhode Island
+            (GeoId::new_block("440099902000001"), GeoId::new_block("440099901000017")),
+            // Monroe County, Florida
+            (GeoId::new_block("120879801001000"), GeoId::new_block("120879900000030")),
+            // San Francisco County, California
+            (GeoId::new_block("060759804011000"), GeoId::new_block("060759901000001")),
+            // Ventura County, California
+            (GeoId::new_block("061119901000013"), GeoId::new_block("061119901000001")),
+            (GeoId::new_block("061119901000013"), GeoId::new_block("061119901000008")),
+            (GeoId::new_block("061119901000013"), GeoId::new_block("061119901000011")),
+            (GeoId::new_block("061119901000013"), GeoId::new_block("060839900000034")),
+            // Los Angeles County, California
+            (GeoId::new_block("060375991002000"), GeoId::new_block("060379903000006")),
+            (GeoId::new_block("060375991002000"), GeoId::new_block("060379903000007")),
+            (GeoId::new_block("060375991002000"), GeoId::new_block("060379903000010")),
+            (GeoId::new_block("060375991002000"), GeoId::new_block("060375991001000")),
+        ];
+
+        patches.into_iter().for_each(|(left, right)| {
+            let blocks = self.get_layer_mut(GeoType::Block);
+            if let (Some(&left), Some(&right)) = (blocks.index.get(&left), blocks.index.get(&right)) {
+                if !blocks.adjacencies[left as usize].contains(&right) { blocks.adjacencies[left as usize].push(right) }
+                if !blocks.adjacencies[right as usize].contains(&left) { blocks.adjacencies[right as usize].push(left) }
+            }
+        });
     }
 
     /// Compute adjacencies for all layers, aggregating from blocks up to states.

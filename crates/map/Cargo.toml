@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ahash = { workspace = true }
 anyhow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
@@ -17,11 +16,10 @@ geoparquet = { workspace = true }
 hex = { workspace = true }
 parquet = { workspace = true }
 polars = { workspace = true }
-rstar = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 shapefile = { workspace = true }
-smallvec = { workspace = true }
 
+openmander-geom = { path = "../geom" }
 openmander-graph = { path = "../graph" }

@@ -51,12 +51,11 @@ impl Plan {
     pub fn set_assignments(&mut self, assignments: Bound<'_, PyDict>) -> PyResult<()> {
         let map = assignments.iter()
             .map(|(key, value)| Ok((
-                openmander_map::GeoId {
-                    ty: openmander_map::GeoType::Block,
-                    id: key.extract::<String>()
-                            .map_err(|_| PyValueError::new_err("[Plan.set_assignments] keys must be strings (geo_id)"))?
-                            .into()
-                },
+                openmander_map::GeoId::new(
+                    openmander_map::GeoType::Block,
+                    &key.extract::<String>()
+                        .map_err(|_| PyValueError::new_err("[Plan.set_assignments] keys must be strings (geo_id)"))?,
+                ),
                 value.extract::<u32>()
                     .map_err(|_| PyValueError::new_err("[Plan.set_assignments] values must be integers (district)"))?
             )))
@@ -74,7 +73,7 @@ impl Plan {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         for (geo_id, district) in assignments {
-            dict.set_item(geo_id.id.as_ref(), district)?;
+            dict.set_item(geo_id.id(), district)?;
         }
 
         Ok(dict)

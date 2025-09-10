@@ -1,6 +1,6 @@
 use std::{fs::File, io::{BufWriter, Write}, path::Path};
 
-use geo::{BoundingRect, Centroid, MultiPolygon, Polygon};
+use geo::{MultiPolygon, Polygon};
 
 use crate::MapLayer;
 
@@ -8,63 +8,31 @@ impl MapLayer {
     pub fn to_svg(&self, path: &Path) {
         // --- Collect centroid lon/lat (from DataFrame if present, else compute from geom) ---
         let n = self.adjacencies.len();
-        let mut lons = vec![f64::NAN; n];
-        let mut lats = vec![f64::NAN; n];
+        let (lons, lats) = self.centroids().into_iter()
+            .unzip::<_, _, Vec<_>, Vec<_>>();
 
-        // Try from DataFrame first
-        if let (Ok(lon_s), Ok(lat_s)) = (self.data.column("centroid_lon"), self.data.column("centroid_lat")) {
-            if let (Ok(lon), Ok(lat)) = (lon_s.f64(), lat_s.f64()) {
-                let len = lon.len().min(lat.len()).min(n);
-                for i in 0..len {
-                    if let (Some(x), Some(y)) = (lon.get(i), lat.get(i)) {
-                        lons[i] = x;
-                        lats[i] = y;
-                    }
-                }
-            }
-        }
-
-        // Fill any missing centroids from geometry (interior/centroid)
-        if let Some(g) = &self.geoms {
-            let len = g.len().min(n);
-            for i in 0..len {
-                if !(lons[i].is_finite() && lats[i].is_finite()) {
-                    if let Some(c) = g.shapes()[i].centroid() {
-                        lons[i] = c.x();
-                        lats[i] = c.y();
-                    }
-                }
-            }
-        }
-
-        // --- Compute bounds (from geoms if available, else from centroids) ---
+        // Compute bounds (from geoms if available, else from centroids)
         let mut minx = f64::INFINITY;
         let mut miny = f64::INFINITY;
         let mut maxx = f64::NEG_INFINITY;
         let mut maxy = f64::NEG_INFINITY;
 
-        if let Some(g) = &self.geoms {
-            for mp in g.shapes() {
-                if let Some(rect) = mp.bounding_rect() {
-                    let (x0, y0) = (rect.min().x, rect.min().y);
-                    let (x1, y1) = (rect.max().x, rect.max().y);
-                    minx = minx.min(x0);
-                    miny = miny.min(y0);
-                    maxx = maxx.max(x1);
-                    maxy = maxy.max(y1);
-                }
+        if let Some(geoms) = &self.geoms {
+            if let Some(rect) = geoms.bounds() {
+                minx = rect.min().x;
+                miny = rect.min().y;
+                maxx = rect.max().x;
+                maxy = rect.max().y;
             }
         }
 
         // If bbox still invalid, try from centroids
         if !minx.is_finite() {
-            for i in 0..n {
-                if lons[i].is_finite() && lats[i].is_finite() {
-                    minx = minx.min(lons[i]);
-                    miny = miny.min(lats[i]);
-                    maxx = maxx.max(lons[i]);
-                    maxy = maxy.max(lats[i]);
-                }
+            for (&x, &y) in lons.iter().zip(lats.iter()) {
+                minx = minx.min(x);
+                miny = miny.min(y);
+                maxx = maxx.max(x);
+                maxy = maxy.max(y);
             }
         }
 

@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, path::Path, sync::Arc};
+use std::{collections::{HashMap, HashSet}, path::Path};
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
 use openmander_geom::Geometries;
@@ -96,42 +96,23 @@ impl MapLayer {
         let mut reader = Reader::from_path(path)
             .with_context(|| format!("Failed to open shapefile: {}", path.display()))?;
 
-        let size = reader.shape_count()?;
-
         let (shapes, records) = reader.iter_shapes_and_records()
             .collect::<Result<Vec<_>, _>>()
             .with_context(|| format!("Error reading shapes+records from shapefile: {}", path.display()))?
             .into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
 
-        // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64>
-        let shapes = shapes.into_iter()
-            .map(|shape| shape_to_multipolygon(shape))
-            .collect::<Result<Vec<_>>>()
-            .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?;
-
-        let data = records_to_dataframe(records, ty)?
+        let df = records_to_dataframe(records, ty)?
             .with_row_index("idx".into(), None)?;
 
-        let geo_ids = data.column("geo_id")?.str()?
-            .into_no_null_iter()
-            .map(|val| GeoId::new(ty, val))
-            .collect::<Vec<_>>();
+        // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64>
+        let geoms = Geometries::new(
+            &shapes.into_iter()
+                .map(|shape| shape_to_multipolygon(shape))
+                .collect::<Result<Vec<_>>>()
+                .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?
+        );
 
-        let index = geo_ids.iter().enumerate()
-            .map(|(i, geo_id)| (geo_id.clone(), i as u32))
-            .collect::<HashMap<_, _>>();
-
-        Ok(Self {
-            ty,
-            geo_ids,
-            index,
-            parents: vec![ParentRefs::default(); size],
-            data,
-            adjacencies: vec![Vec::new(); size],
-            shared_perimeters: vec![Vec::new(); size],
-            graph: Arc::default(),
-            geoms: Some(Geometries::new(&shapes)),
-        })
+        Self::from_dataframe(ty, df, Some(geoms))
     }
 
     /// Initialize layer with a list of geo_ids, replacing existing data.
@@ -142,7 +123,7 @@ impl MapLayer {
         self.data = self.data.with_row_index("idx".into(), None)?;
 
         self.geo_ids = geo_ids.iter()
-            .map(|&val| GeoId::new(self.ty, val))
+            .map(|&val| GeoId::new(self.ty(), val))
             .collect();
 
         self.index = self.geo_ids.iter().enumerate()
@@ -205,7 +186,7 @@ impl MapLayer {
 
 impl Map {
     /// Compute parent references for all layers based on truncated geo_id.
-    fn assign_parents_from_geoids(&mut self) {
+    fn assign_parents_from_geo_ids(&mut self) {
         self.get_layer_mut(GeoType::County).assign_parents(GeoType::State);
         self.get_layer_mut(GeoType::Tract).assign_parents(GeoType::County);
         self.get_layer_mut(GeoType::Tract).assign_parents(GeoType::State);
@@ -266,61 +247,28 @@ impl Map {
 
     /// Aggregate adjacencies from a child layer to a parent layer.
     fn aggregate_adjacencies(&mut self, ty: GeoType, parent_ty: GeoType) -> Result<()> {
+        let parents = self.get_layer(ty).parents.iter()
+            .map(|parent_refs| {
+                let geo_id = parent_refs.get(parent_ty)
+                    .ok_or_else(|| anyhow!("Parent with type {:?} is not defined for {:?}", parent_ty, ty))?;
+                self.get_layer(parent_ty).index.get(geo_id).copied()
+                    .ok_or_else(|| anyhow!("Parent index does not contain {:?}", geo_id.id()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         // Build parent edge sets from child graph
-        let (parent_sets, n_parents) = {
-            let child_layer = self.get_layer(ty);
-            let parent_layer_ro = self.get_layer(parent_ty);
-
-            // Child adjacency (must exist)
-            let child_adj = &child_layer.adjacencies;
-
-            // Precompute parent index for each child node
-            let parent_index = &parent_layer_ro.index;
-            let n_parents = parent_layer_ro.geo_ids.len();
-
-            let parent_of_child: Vec<u32> = (0..child_adj.len())
-                .map(|i| {
-                    let geoid = child_layer
-                        .parents
-                        .get(i)
-                        .ok_or_else(|| anyhow!("Index {i} out of bounds in child parents"))?
-                        .get(parent_ty)
-                        .ok_or_else(|| anyhow!("Parent with type {:?} is not defined for child[{i}]", parent_ty))?;
-                    parent_index
-                        .get(geoid)
-                        .copied()
-                        .ok_or_else(|| anyhow!("Parent index does not contain {:?}", geoid.id()))
-                })
-                .collect::<Result<_>>()?;
-
-            // Aggregate child edges -> parent edges with dedup
-            let mut parent_sets: Vec<HashSet<u32>> =
-                (0..n_parents).map(|_| HashSet::new()).collect();
-
-            for (i, nbrs) in child_adj.iter().enumerate() {
-                let pi = parent_of_child[i];
-                for &j in nbrs {
-                    let pj = parent_of_child[j as usize];
-                    if pi != pj {
-                        parent_sets[pi as usize].insert(pj);
-                        parent_sets[pj as usize].insert(pi);
-                    }
-                }
+        let mut parent_sets = vec![HashSet::new(); self.get_layer(parent_ty).len()];
+        for (i, neighbors) in self.get_layer(ty).adjacencies.iter().enumerate() {
+            for &j in neighbors.iter().filter(|&&j| parents[i] != parents[j as usize]) {
+                parent_sets[parents[i] as usize].insert(parents[j as usize]);
             }
-
-            (parent_sets, n_parents)
-        };
+        }
 
         // Write back into parent's adjacency list
-        let parent_layer = self.get_layer_mut(parent_ty);
-        if parent_layer.adjacencies.len() != n_parents {
-            parent_layer.adjacencies = vec![Vec::new(); n_parents];
-        }
-        for (p, set) in parent_sets.into_iter().enumerate() {
-            let mut v: Vec<u32> = set.into_iter().collect();
-            v.sort_unstable(); // deterministic
-            parent_layer.adjacencies[p] = v;
-        }
+        self.get_layer_mut(parent_ty).adjacencies = parent_sets.into_iter()
+            .map(|set| set.into_iter().collect::<Vec<_>>())
+            .map(|mut neighbors| { neighbors.sort_unstable(); neighbors })
+            .collect();
 
         Ok(())
     }
@@ -370,9 +318,10 @@ impl Map {
 
     /// Compute shared perimeters for all layers, if geometries exist.
     fn compute_shared_perimeters(&mut self) -> Result<()> {
-        for ty in GeoType::ALL {
-            self.get_layer_mut(ty).compute_shared_perimeters()?;
+        for layer in self.get_layers_mut() {
+            layer.compute_shared_perimeters()?;
         }
+
         Ok(())
     }
 
@@ -407,7 +356,7 @@ impl Map {
             &input_dir.join(format!("tl_2020_{fips}_tabblock20/tl_2020_{fips}_tabblock20.shp")))?);
 
         if verbose > 0 { eprintln!("[build_pack] computing crosswalks"); }
-        map.assign_parents_from_geoids();
+        map.assign_parents_from_geo_ids();
 
         /// Convert a crosswalk DataFrame to a map of GeoIds
         #[inline]

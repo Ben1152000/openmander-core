@@ -5,27 +5,31 @@ use openmander_map::Map;
 
 use crate::{clean::cleanup_download_dir, common::*, download::download_data};
 
-/// Download all data files for a state, build the map pack, and write it to `out_dir`.
-pub fn build_pack(out_dir: &PathBuf, state_code: &str, verbose: u8) -> Result<()> {
-    ensure_dir_exists(out_dir)?;
+/// Download data files for a state, build the map pack, and write it to a new directory in `path`.
+/// Returns the path to the new pack directory.
+pub fn build_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<PathBuf> {
+    let state_code = state_code.to_ascii_uppercase();
 
-    let download_dir = &out_dir.join("download");
-    ensure_dir_exists(&download_dir)?;
-    download_data(download_dir, state_code, verbose)?;
-    if verbose > 0 { eprintln!("Downloaded files for {} into {}", state_code, out_dir.display()); }
+    require_dir_exists(&path)?;
+
+    let pack_dir = path.join(format!("{state_code}_2020_pack"));
+    ensure_dir_exists(&pack_dir)?;
+
+    let download_dir = download_data(&state_code, &pack_dir, verbose)?;
+    if verbose > 0 { eprintln!("Downloaded files for {} into {}", state_code, pack_dir.display()); }
 
     let fips = state_abbr_to_fips(&state_code)
         .with_context(|| format!("Unknown state/territory postal code: {state_code}"))?;
 
-    let map = Map::build_pack(download_dir, state_code, fips, verbose)?;
+    let map = Map::build_pack(&download_dir, &state_code, fips, verbose)?;
     if verbose > 0 { eprintln!("Built pack for {state_code}"); }
 
-    map.write_to_pack( out_dir)?;
-    if verbose > 0 { eprintln!("Wrote pack to {}", out_dir.display()); }
+    map.write_to_pack( &pack_dir)?;
+    if verbose > 0 { eprintln!("Wrote pack to {}", pack_dir.display()); }
 
-    cleanup_download_dir(out_dir, verbose)?;
+    cleanup_download_dir(&pack_dir, verbose)?;
 
-    Ok(())
+    Ok(pack_dir)
 }
 
 /// Download the full map pack for a given state into `out_dir`.

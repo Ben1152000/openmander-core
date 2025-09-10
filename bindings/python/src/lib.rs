@@ -7,14 +7,14 @@ use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyModule};
 /// Python-facing Map wrapper.
 #[pyclass]
 pub struct Map {
-    inner: Arc<openmander_map::Map>,
+    inner: Arc<openmander_core::Map>,
 }
 
 #[pymethods]
 impl Map {
     #[new]
     pub fn new(pack_dir: &str) -> PyResult<Self> {
-        let map = openmander_map::Map::read_from_pack(&std::path::PathBuf::from(pack_dir))
+        let map = openmander_core::Map::read_from_pack(&std::path::PathBuf::from(pack_dir))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner: Arc::new(map) })
     }
@@ -24,7 +24,7 @@ impl Map {
 /// This ensures the underlying Map outlives the Plan reference stored in `inner`.
 #[pyclass]
 pub struct Plan {
-    inner: openmander_plan::Plan,
+    inner: openmander_core::Plan,
 }
 
 #[pymethods]
@@ -33,7 +33,7 @@ impl Plan {
     /// Clones the Arc<Map> and passes it into `Plan::new(map: impl Into<Arc<Map>>)` safely.
     #[new]
     pub fn new(py: Python<'_>, map: Py<Map>, num_districts: u32) -> PyResult<Self> {
-        Ok(Self { inner: openmander_plan::Plan::new(map.borrow(py).inner.clone(), num_districts) })
+        Ok(Self { inner: openmander_core::Plan::new(map.borrow(py).inner.clone(), num_districts) })
     }
 
     /// Get the number of districts in this plan (excluding unassigned 0).
@@ -51,8 +51,8 @@ impl Plan {
     pub fn set_assignments(&mut self, assignments: Bound<'_, PyDict>) -> PyResult<()> {
         let map = assignments.iter()
             .map(|(key, value)| Ok((
-                openmander_map::GeoId::new(
-                    openmander_map::GeoType::Block,
+                openmander_core::GeoId::new(
+                    openmander_core::GeoType::Block,
                     &key.extract::<String>()
                         .map_err(|_| PyValueError::new_err("[Plan.set_assignments] keys must be strings (geo_id)"))?,
                 ),

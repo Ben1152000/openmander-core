@@ -7,6 +7,4 @@ edition = "2024"
 anyhow = { workspace = true }
 clap = { workspace = true }
 
-openmander-map = { path = "../map" }
-openmander-pack = { path = "../pack" }
-openmander-plan = { path = "../plan" }
+openmander = { path = ".." }

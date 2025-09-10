@@ -1,8 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
-use openmander_map::Map;
-use openmander_plan::Plan;
+use openmander::{Map, Plan};
 
 pub fn run(_cli: &crate::cli::Cli, args: &crate::cli::RedistrictArgs) -> Result<()> {
     let pack_path = &args.pack;

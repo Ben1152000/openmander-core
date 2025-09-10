@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 /// Delete the `download/` directory (and all its contents) under `out_dir`.
-pub fn cleanup_download_dir(out_dir: &Path, verbose: u8) -> Result<()> {
-    let download_dir = out_dir.join("download");
+pub fn cleanup_download_dir(pack_dir: &Path, verbose: u8) -> Result<()> {
+    let download_dir = pack_dir.join("download");
 
     if !download_dir.exists() {
         if verbose > 0 { eprintln!("[cleanup] nothing to remove at {}", download_dir.display()) }

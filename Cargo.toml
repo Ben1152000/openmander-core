@@ -1,14 +1,15 @@
+[package]
+name = "openmander"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+openmander-map = { path = "crates/map" }
+openmander-pack = { path = "crates/pack" }
+openmander-plan = { path = "crates/plan" }
+
 [workspace]
-members = [
-    "crates/graph",
-    "crates/geom",
-    "crates/map",
-    "crates/partition",
-    "crates/plan",
-    "crates/pack",
-    "crates/cli",
-    "bindings/python",
-]
+members = ["crates/*", "cli", "bindings/python"]
 resolver = "2"
 
 [workspace.package]

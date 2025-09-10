@@ -16,7 +16,7 @@ pub fn ensure_dir_exists(path: &Path) -> Result<()> {
 }
 
 /// Error unless the directory already exists.
-pub fn _require_dir_exists(path: &Path) -> Result<()> {
+pub fn require_dir_exists(path: &Path) -> Result<()> {
     if !path.exists() { bail!("Directory does not exist: {}", path.display()); }
     if !path.is_dir() { bail!("Path exists but is not a directory: {}", path.display()); }
     Ok(())

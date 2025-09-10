@@ -1,8 +1,9 @@
-mod cli;
-pub mod commands;
 
-pub use cli::{Cli, Commands};
-pub use commands::{download, redistrict};
+mod cli;
+mod commands;
+
+use cli::{Cli, Commands};
+use commands::{download, redistrict};
 
 pub fn run() -> anyhow::Result<()> {
     use clap::Parser;
@@ -13,3 +14,5 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Redistrict(args) => redistrict::run(&cli, args),
     }
 }
+
+fn main() -> anyhow::Result<()> { run() }

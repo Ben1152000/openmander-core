@@ -63,6 +63,7 @@ impl MapLayer {
 }
 
 impl Map {
+    /// Read a map from a pack directory at `path`.
     pub fn read_from_pack(path: &Path) -> Result<Self> {
         require_dir_exists(path)?;
 

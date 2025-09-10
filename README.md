@@ -1,60 +1,88 @@
-# openmander
+# OpenMander
 
 A fast, memory-efficient redistricting toolchain in Rust.
 
-## Quick start
+## Quickstart (CLI, Python, Rust)
+
+### Command-line interface
+
+Build & run:
 
 ```bash
-# 1) Build
+# Build release binaries for the workspace
 cargo build --release
 
-# 2) Fetch + prepare data (example: Iowa 2020)
+# Fetch + prepare data (example: Iowa 2020)
 ./target/release/openmander-cli download IA
 
-# 3) Generate a plan (four districts with equal population)
+# Generate a plan (four districts with equal population)
 ./target/release/openmander-cli redistrict IA_2020_pack -o IA_out.csv -d 4
 ```
 
-## CLI
+Or directly via Cargo:
 
-Binary name: **`openmander-cli`**
-
-```text
-Usage: openmander-cli [OPTIONS] <COMMAND>
-
-Commands:
-  download    Download source data for a state (forbids stdout)
-  redistrict  Build a redistricted plan (forbids stdout)
-
-Options:
-  -v, --verbose...    Increase output verbosity (-v, -vv)
-  -h, --help          Print help
-  -V, --version       Print version
+```bash
+cargo run -p openmander-cli -- download IA
+cargo run -p openmander-cli -- redistrict IA_2020_pack -o IA_out.csv -d 4
 ```
 
-### Subcommands
+### Python
 
-**download**
+Build and install the wheel locally (requires [maturin]):
 
-```text
-openmander-cli download [OPTIONS] <STATE>
-
-  STATE    Two/three-letter code, e.g., IL, CA, PR
-
-Options:
-  -o, --output <DIR>   Output pack location (directory) [default: .]
+```bash
+# from repo root
+python -m pip install -U maturin  # or: pipx install maturin
+cd bindings/python
+maturin develop -r                # builds and installs the 'openmander' module into your env
 ```
 
-**redistrict**
+Use it:
 
-```text
-openmander-cli redistrict [OPTIONS] --districts <N> <PACK_DIR>
+```python
+import openmander as om
 
-  PACK_DIR              Pack directory produced by `download`
+iowa_map = om.Map("IA_2020_pack") # pack dir (see CLI quickstart to create)
+plan = om.Plan(iowa_map, 4)       # 4 districts
+plan.randomize()
+plan.to_csv("plan.csv")
+```
 
-Options:
-  -d, --districts <N>   Number of districts (required)
-  -o, --output <FILE>   Output plan file [default: ./plan.csv]
+> Tip: if you prefer, `maturin build` then `pip install dist/openmander-*.whl`.
+
+### Rust
+
+Add the crate and build a tiny program:
+
+```toml
+# Cargo.toml (your app)
+[dependencies]
+openmander = { git = "https://github.com/Ben1152000/openmander-core" }
+anyhow = "1"
+```
+
+```rust
+// src/main.rs
+use std::sync::Arc;
+use anyhow::Result;
+use openmander::{Map, Plan};
+
+fn main() -> Result<()> {
+    // Use a pack directory produced by the CLI "download" step (see CLI quickstart).
+    let map = Arc::new(Map::read_from_pack("IA_2020_pack")?);
+
+    // Create a 4-district plan, randomize, and save CSV
+    let mut plan = Plan::new(map, 4);
+    plan.randomize()?;
+    plan.to_csv("plan.csv")?;
+    Ok(())
+}
+```
+
+Run it:
+
+```bash
+cargo run
 ```
 
 ## Components
@@ -86,8 +114,8 @@ Options:
   manifest.json     # schema & provenance
 ```
 
----
-
 ## License
 
 TBD
+
+[maturin]: https://github.com/PyO3/maturin

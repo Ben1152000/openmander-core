@@ -33,22 +33,23 @@ impl MapLayer {
     }
 
     fn read_from_pack(&mut self, path: &Path) -> Result<()> {
-        let entity_path = path.join(format!("data/{}.parquet", self.ty.to_str()));
-        let geom_path = path.join(format!("geom/{}.geoparquet", self.ty.to_str()));
-        let adj_path = path.join(format!("adj/{}.csr.bin", self.ty.to_str()));
+        let layer_name = self.ty().to_str();
+        let entity_path = path.join(format!("data/{layer_name}.parquet"));
+        let geom_path = path.join(format!("geom/{layer_name}.geoparquet"));
+        let adj_path = path.join(format!("adj/{layer_name}.csr.bin"));
 
         (self.data, self.parents) = self.unpack_data(read_from_parquet(&entity_path)?)?;
 
         self.geo_ids = self.data.column("geo_id")?.str()?
             .into_no_null_iter()
-            .map(|val| GeoId::new(self.ty, val))
+            .map(|val| GeoId::new(self.ty(), val))
             .collect();
 
         self.index = self.geo_ids.iter().enumerate()
             .map(|(i, geo_id)| (geo_id.clone(), i as u32))
             .collect();
 
-        if self.ty != GeoType::State {
+        if self.ty() != GeoType::State {
             (self.adjacencies, self.shared_perimeters) = read_from_weighted_csr(&adj_path)?;
             self.construct_graph();
         }

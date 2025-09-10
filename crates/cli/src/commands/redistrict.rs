@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use openmander_map::Map;
@@ -10,10 +10,10 @@ pub fn run(_cli: &crate::cli::Cli, args: &crate::cli::RedistrictArgs) -> Result<
     let num_districts = args.districts;
 
     println!("[redistrict] loading map from {}", pack_path.display());
-    let map = Map::read_from_pack(&pack_path)?;
+    let map = Arc::new(Map::read_from_pack(&pack_path)?);
 
-    let mut plan = Plan::new(map, num_districts as u32);
-    println!("[redistrict] generating random plan with {} districts", plan.num_districts() - 1);
+    let mut plan = Plan::new(map.clone(), num_districts as u32);
+    println!("[redistrict] generating random plan with {} districts", plan.num_districts());
     plan.randomize()?;
 
     println!("[redistrict] equalizing plan with tolerance 0.1% for 2000 iterations");

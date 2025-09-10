@@ -15,16 +15,18 @@ impl Partition {
         self.frontiers.get(part).iter()
             .flat_map(|&u| self.graph().edges_with_weights(u))
             .filter_map(|(v, w)| (self.assignments[v] != part).then_some(w))
-            .sum::<f64>()
+            .sum()
     }
 
     /// Get the moment of a part (defined as the sum of the square weighted
     /// distance from the population center).
+    #[allow(dead_code, unused_variables)]
     fn moment(&self, part: u32) -> f64 { todo!() }
 
     /// Compute the convex hull compactness score for a part (0 to 1).
     /// Formula: area(part) / area(convex_hull(part))
     /// If the convex hull area is zero, returns infinity.
+    #[allow(dead_code, unused_variables)]
     pub fn convex_hull(&self, part: u32) -> f64 { todo!() }
 
     /// Compute the Polsby-Popper compactness score for a part.
@@ -52,5 +54,6 @@ impl Partition {
     /// Compute the Reock compactness score for a part (0 to 1).
     /// Formula: area(part) / area(minimum_bounding_circle(part))
     /// If the minimum bounding circle area is zero, returns infinity.
+    #[allow(dead_code, unused_variables)]
     pub fn reock(&self, part: u32) -> f64 { todo!() }
 }

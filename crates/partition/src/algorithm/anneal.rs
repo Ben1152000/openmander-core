@@ -109,10 +109,13 @@ impl Partition {
         }
     }
 
+    #[allow(dead_code, unused_variables)]
     pub fn anneal_balance(&mut self, series: &str) { todo!() }
 
+    #[allow(dead_code, unused_variables)]
     pub fn anneal_optimize_two(&mut self, series: &str) { todo!() }
 
     /// Implement simulated annealing with energy function, hard constraints
+    #[allow(dead_code, unused_variables)]
     pub fn anneal_optimize(&mut self, series: &str) { todo!() }
 }

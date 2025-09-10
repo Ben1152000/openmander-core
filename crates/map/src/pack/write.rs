@@ -35,12 +35,12 @@ impl MapLayer {
         counts: &mut BTreeMap<&'static str, usize>,
         hashes: &mut BTreeMap<String, FileHash>
     ) -> Result<()> {
-        let name: &'static str = self.ty.to_str();
-        let entity_path = &format!("data/{name}.parquet");
-        let adj_path = &format!("adj/{name}.csr.bin");
-        let geom_path = &format!("geom/{name}.geoparquet");
+        let layer_name = self.ty().to_str();
+        let entity_path = &format!("data/{layer_name}.parquet");
+        let adj_path = &format!("adj/{layer_name}.csr.bin");
+        let geom_path = &format!("geom/{layer_name}.geoparquet");
 
-        counts.insert(name.into(), self.geo_ids.len());
+        counts.insert(layer_name.into(), self.geo_ids.len());
 
         // entities
         write_to_parquet(&path.join(entity_path), &self.pack_data()?)?;
@@ -48,7 +48,7 @@ impl MapLayer {
         hashes.insert(k, FileHash { sha256: h });
 
         // adjacencies (CSR)
-        if self.ty != GeoType::State {
+        if self.ty() != GeoType::State {
             write_to_weighted_csr(&path.join(adj_path), &self.adjacencies, &self.shared_perimeters)?;
             let (k, h) = sha256_file(&adj_path, path)?;
             hashes.insert(k, FileHash { sha256: h });
@@ -73,8 +73,8 @@ impl Map {
         let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
 
-        for ty in GeoType::ALL {
-            self.get_layer(ty).write_to_pack(path, &mut counts, &mut file_hashes)?;
+        for layer in self.get_layers() {
+            layer.write_to_pack(path, &mut counts, &mut file_hashes)?;
         }
 
         // Manifest

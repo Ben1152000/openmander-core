@@ -10,10 +10,10 @@ fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> R
     let zip_path = out_dir.join(format!("Demographic_Data_Block_{state}.v06.zip"));
     let out_path = out_dir.join(format!("Demographic_Data_Block_{state}"));
 
-    if verbose > 0 { eprintln!("[download] {file_url} -> {}", zip_path.display()); }
+    if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
     download_big_file(file_url, &zip_path, true)?;
 
-    if verbose > 0 { eprintln!("[extract] {} -> {}", zip_path.display(), out_path.display()); }
+    if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     extract_zip(&zip_path, &out_path, true)?;
 
     Ok(())
@@ -25,10 +25,10 @@ fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Resu
     let zip_path = out_dir.join(format!("Election_Data_Block_{state}.v06.zip"));
     let out_path = out_dir.join(format!("Election_Data_Block_{state}"));
 
-    if verbose > 0 { eprintln!("[download] {file_url} -> {}", zip_path.display()); }
+    if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
     download_big_file(file_url, &zip_path, true)?;
 
-    if verbose > 0 { eprintln!("[extract] {} -> {}", zip_path.display(), out_path.display()); }
+    if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     extract_zip(&zip_path, &out_path, true)?;
 
     Ok(())
@@ -53,10 +53,10 @@ fn download_tiger_geometries(out_dir: &PathBuf, state: &str, verbose: u8) -> Res
         let zip_path = out_dir.join(format!("tl_2020_{fips}_{name}.zip"));
         let out_path = out_dir.join(format!("tl_2020_{fips}_{name}"));
 
-        if verbose > 0 { eprintln!("[download] {file_url} -> {}", zip_path.display()); }
+        if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
         download_big_file(file_url, &zip_path, true)?;
 
-        if verbose > 0 { eprintln!("[extract] {} -> {}", zip_path.display(), out_path.display()); }
+        if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
         extract_zip(&zip_path, &out_path, true)?;
     }
 
@@ -74,10 +74,10 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
     let zip_path = out_dir.join(format!("BlockAssign_ST{fips}_{state}.zip"));
     let out_path = out_dir.join(format!("BlockAssign_ST{fips}_{state}"));
 
-    if verbose > 0 { eprintln!("[download] {file_url} -> {}", zip_path.display()); }
+    if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
     download_big_file(file_url, &zip_path, true)?;
 
-    if verbose > 0 { eprintln!("[extract] {} -> {}", zip_path.display(), out_path.display()); }
+    if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     extract_zip(&zip_path, &out_path, true)?;
 
     Ok(())
@@ -85,8 +85,7 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
 
 /// Download all map files for the given state (specificied by state_code) into the output directory
 pub fn download_data(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
-    if verbose > 0 { eprintln!("[download] state={}", state); }
-    if verbose > 0 { eprintln!("[download] -> dir {}", out_dir.display()); }
+    if verbose > 0 { eprintln!("[download] state={state} -> dir {}", out_dir.display()); }
 
     download_tiger_geometries(out_dir, state, verbose)?;
     download_daves_demographics(out_dir, state, verbose)?;

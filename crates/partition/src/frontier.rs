@@ -51,14 +51,14 @@ impl FrontierSet {
     }
 
     /// Check if node i is currently in any frontier.
-    #[inline] pub fn contains(&self, u: usize) -> bool { self.index[u].is_some() }
+    #[inline] pub fn _contains(&self, u: usize) -> bool { self.index[u].is_some() }
 
     /// Read-only view of frontier nodes for part p.
     #[inline] pub fn get(&self, part: u32) -> &[usize] { &self.lists[part as usize] }
 
     /// Iterator over all nodes currently present (across all parts).
     #[inline]
-    pub fn items_iter(&self) -> impl Iterator<Item = usize> + '_ {
+    pub fn _items_iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.lists.iter().flat_map(|v| v.iter().copied())
     }
 

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
+use anyhow::Result;
 use openmander_geom::Geometries;
 use openmander_graph::Graph;
 use polars::{frame::DataFrame, prelude::DataType};
@@ -8,7 +9,7 @@ use crate::{GeoId, GeoType, ParentRefs};
 
 /// A single planar partition Layer of the map, containing entities and their relationships.
 pub struct MapLayer {
-    pub(crate) ty: GeoType,
+    ty: GeoType,
     pub(crate) geo_ids: Vec<GeoId>,
     pub(crate) index: HashMap<GeoId, u32>, // Map between geo_ids and per-level contiguous indices
     pub(crate) parents: Vec<ParentRefs>, // References to parent entities (higher level types)
@@ -34,6 +35,32 @@ impl MapLayer {
         }
     }
 
+    /// Create a MapLayer from a DataFrame and optional Geometries.
+    pub(crate) fn from_dataframe(ty: GeoType, df: DataFrame, geoms: Option<Geometries>) -> Result<Self> {
+        let size = df.height();
+
+        let geo_ids = df.column("geo_id")?.str()?
+            .into_no_null_iter()
+            .map(|val| GeoId::new(ty, val))
+            .collect::<Vec<_>>();
+
+        let index = geo_ids.iter().enumerate()
+            .map(|(i, geo_id)| (geo_id.clone(), i as u32))
+            .collect::<HashMap<_, _>>();
+
+        Ok(Self {
+            ty,
+            geo_ids,
+            index,
+            parents: vec![ParentRefs::default(); size],
+            data: df,
+            adjacencies: vec![Vec::new(); size],
+            shared_perimeters: vec![Vec::new(); size],
+            graph: Arc::default(),
+            geoms,
+        })
+    }
+
     /// Get the number of entities in this layer.
     #[inline] pub fn len(&self) -> usize { self.geo_ids.len() }
 
@@ -52,34 +79,63 @@ impl MapLayer {
     /// Get an Arc clone of the graph representation of this layer.
     #[inline] pub fn graph_handle(&self) -> Arc<Graph> { self.graph.clone() }
 
+    /// Get centroid lon/lat for each entity, preferring DataFrame columns if present, else computing from geometry.
+    pub fn centroids(&self) -> Vec<(f64, f64)> {
+        if let (Some(lon_column), Some(lat_column)) = (
+            self.data.column("centroid_lon").ok()
+                .and_then(|column| column.f64().ok()),
+            self.data.column("centroid_lat").ok()
+                .and_then(|column| column.f64().ok())
+        ) {
+            assert_eq!(lon_column.len(), self.len(), "Expected centroid_lon length {} to match number of entities {}", lon_column.len(), self.len());
+            assert_eq!(lat_column.len(), self.len(), "Expected centroid_lat length {} to match number of entities {}", lat_column.len(), self.len());
+
+            lon_column.into_iter().zip(lat_column.into_iter())
+                .map(|(lon, lat)| (lon.unwrap_or(f64::NAN), lat.unwrap_or(f64::NAN)))
+                .collect()
+        } else if let Some(geoms) = &self.geoms {
+            assert_eq!(geoms.len(), self.len(), "Expected geoms length {} to match number of entities {}", geoms.len(), self.len());
+
+            geoms.centroids().iter()
+                .map(|point| (point.x(), point.y()))
+                .collect()
+        } else { vec![(f64::NAN, f64::NAN); self.len()] }
+    }
+
     /// Construct a graph representation of the layer for partitioning.
     /// Requires data, adjacencies, and shared_perimeters to be computed first.
     pub(crate) fn construct_graph(&mut self) {
+        assert!(self.data.height() != 0, "DataFrame must be populated before constructing graph");
+
+        let weights_i64 = self.data.get_columns().iter()
+            .map(|column| (column.name().to_string(), column))
+            .filter(|(name, _)| name != "idx")
+            .filter_map(|(name, column)| match column.dtype() {
+                DataType::Int64  => Some((name, column.i64().unwrap().into_no_null_iter().collect())),
+                DataType::Int32  => Some((name, column.i32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::Int16  => Some((name, column.i16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::Int8   => Some((name, column.i8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::UInt64 => Some((name, column.u64().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::UInt32 => Some((name, column.u32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::UInt16 => Some((name, column.u16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::UInt8  => Some((name, column.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                _ => None,
+            }).collect();
+
+        let weights_f64 = self.data.get_columns().iter()
+            .map(|column| (column.name().to_string(), column))
+            .filter_map(|(name, column)| match column.dtype() {
+                DataType::Float64 => Some((name, column.f64().unwrap().into_no_null_iter().collect())),
+                DataType::Float32 => Some((name, column.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect())),
+                _ => None,
+            }).collect();
+
         self.graph = Arc::new(Graph::new(
             self.len(),
             &self.adjacencies,
             &self.shared_perimeters,
-            self.data.get_columns().iter()
-                .filter(|&column| column.name() != "idx")
-                .map(|column| (column.name().to_string(), column.as_series().unwrap()))
-                .filter_map(|(name, series)| match series.dtype() {
-                    DataType::Int64  => Some((name, series.i64().unwrap().into_no_null_iter().collect())),
-                    DataType::Int32  => Some((name, series.i32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::Int16  => Some((name, series.i16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::Int8   => Some((name, series.i8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::UInt64 => Some((name, series.u64().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::UInt32 => Some((name, series.u32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::UInt16 => Some((name, series.u16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    DataType::UInt8  => Some((name, series.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                    _ => None,
-                }).collect(),
-            self.data.get_columns().iter()
-                .map(|column| (column.name().to_string(), column.as_series().unwrap()))
-                .filter_map(|(name, series)| match series.dtype() {
-                    DataType::Float64 => Some((name, series.f64().unwrap().into_no_null_iter().collect())),
-                    DataType::Float32 => Some((name, series.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect())),
-                    _ => None,
-                }).collect(),
+            weights_i64,
+            weights_f64,
         ));
     }
 }

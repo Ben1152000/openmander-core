@@ -5,7 +5,7 @@ use openmander_map::Map;
 
 use crate::{clean::cleanup_download_dir, common::*, download::download_data};
 
-/// Download all data files for a state, build the state pack, and write it to `out_dir`.
+/// Download all data files for a state, build the map pack, and write it to `out_dir`.
 pub fn build_pack(out_dir: &PathBuf, state_code: &str, verbose: u8) -> Result<()> {
     ensure_dir_exists(out_dir)?;
 
@@ -28,8 +28,14 @@ pub fn build_pack(out_dir: &PathBuf, state_code: &str, verbose: u8) -> Result<()
     Ok(())
 }
 
-/// Download the full state pack for a given state into `out_dir`.
+/// Download the full map pack for a given state into `out_dir`.
+#[allow(dead_code, unused_variables)]
 pub fn download_pack(out_dir: &PathBuf, state_code: &str, verbose: u8) -> Result<()> { todo!() }
 
-/// Download the state pack without geometries for a given state into `out_dir`.
+/// Download the map pack without geometries for a given state into `out_dir`.
+#[allow(dead_code, unused_variables)]
 pub fn download_pack_without_geoms(out_dir: &PathBuf, state_code: &str, verbose: u8) -> Result<()> { todo!() }
+
+/// Validate the contents of a map pack at `pack_path`.
+#[allow(dead_code, unused_variables)]
+pub fn validate_pack(pack_path: &PathBuf, verbose: u8) -> Result<()> { todo!()}

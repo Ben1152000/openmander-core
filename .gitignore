@@ -5,4 +5,7 @@
 # IDE
 .vscode/
 .idea/
+
+# Other
 .DS_Store
+ignore/

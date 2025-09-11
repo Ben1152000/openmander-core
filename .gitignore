@@ -9,3 +9,4 @@
 # Other
 .DS_Store
 ignore/
+profile.json.gz

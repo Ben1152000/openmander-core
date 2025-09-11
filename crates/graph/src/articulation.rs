@@ -57,13 +57,11 @@ impl Graph {
         // Round-robin expansion; stop when a single label-group remains active.
         loop {
             // Count active union-find roots with non-empty queues
-            let mut active_roots = HashSet::new();
-            for i in 0..neighbors.len() {
-                if !queues[i].is_empty() {
-                    active_roots.insert(union_find.find(i));
-                }
-            }
-            
+            let active_roots = (0..neighbors.len())
+                .filter(|&i| !queues[i].is_empty())
+                .map(|i| union_find.find(i))
+                .collect::<HashSet<_>>();
+
             // Check if all but one BFS has completed
             if active_roots.len() <= 1 { break }
 
@@ -88,12 +86,10 @@ impl Graph {
         }
 
         // Determine main (still-active) root; if none, use largest by size.
-        let mut active_roots: HashSet<usize> = HashSet::new();
-        for i in 0..neighbors.len() {
-            if !queues[i].is_empty() {
-                active_roots.insert(union_find.find(i));
-            }
-        }
+        let active_roots = (0..neighbors.len())
+            .filter(|&i| !queues[i].is_empty())
+            .map(|i| union_find.find(i))
+            .collect::<HashSet<_>>();
 
         let main_root = active_roots.iter().copied().next().unwrap_or({
             let mut size_by_root = vec![0; neighbors.len()];
@@ -104,13 +100,9 @@ impl Graph {
         });
 
         // Collect nodes from all non-main components.
-        let mut out = Vec::new();
-        for i in 0..neighbors.len() {
-            if union_find.find(i) != main_root {
-                out.extend(components[i].drain(..));
-            }
-        }
-
-        out
+        components.into_iter().enumerate()
+            .filter(|(i, _)| union_find.find(*i) != main_root)
+            .flat_map(|(_, component)| component)
+            .collect()
     }
 }

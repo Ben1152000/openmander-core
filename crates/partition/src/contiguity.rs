@@ -87,7 +87,7 @@ impl Partition {
         }
 
         // Ensure that at least one node in the subgraph is adjacent to the new part.
-        if !(self.part_is_empty(part) || subgraph.iter().any(|&u| self.graph().edges(u).any(|v| self.assignments[v] == part))) { return false }
+        if !(part == 0 || self.part_is_empty(part) || subgraph.iter().any(|&u| self.graph().edges(u).any(|v| self.assignments[v] == part))) { return false }
 
         // Check if the subgraph itself is contiguous.
         let mut seen = 1 as usize;
@@ -325,18 +325,23 @@ impl Partition {
         }
 
         // Determine main (still-active) root; if none, use largest by size.
-        let main_root = {
+        let active_roots = (0..neighbors.len())
+            .filter(|&i| !queues[i].is_empty())
+            .map(|i| union_find.find(i))
+            .collect::<HashSet<_>>();
+
+        let main_root = active_roots.iter().copied().next().unwrap_or({
             let mut size_by_root = vec![0; neighbors.len()];
             for i in 0..neighbors.len() {
                 size_by_root[union_find.find(i)] += components[i].len();
             }
             (0..neighbors.len()).max_by_key(|&r| size_by_root[r]).unwrap()
-        };
+        });
 
         // Collect nodes from all non-main components.
         components.into_iter().enumerate()
             .filter(|(i, _)| union_find.find(*i) != main_root)
             .flat_map(|(_, component)| component)
-            .collect()
+            .collect::<Vec<_>>()
     }
 }

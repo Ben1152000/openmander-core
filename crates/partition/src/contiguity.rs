@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::partition::Partition;
 
@@ -238,9 +238,9 @@ impl Partition {
 
     /// If removing `u` from its current part splits it, return the smaller component(s)
     /// of the *previous* part that become disconnected from the rest *without u*.
-    /// 
-    /// todo: optimize by ending bfs when all but one components have been reached
     pub fn cut_subgraph_within_part(&self, node: usize) -> Vec<usize> {
+        assert!(node < self.graph().len(), "node {} out of range", node);
+
         let part = self.assignments[node];
         if part == 0 { return vec![] }
 
@@ -249,40 +249,94 @@ impl Partition {
             .filter(|&v| self.assignments[v] == part)
             .collect::<Vec<_>>();
 
+        // If fewer than 2 neighbors, node cannot be an articulation point.
         if neighbors.len() <= 1 { return vec![] }
 
-        // Mark u as "forbidden" and BFS from each unvisited same-part neighbor,
-        // building components in prev that are reachable without going through u.
-        let mut visited = vec![false; self.graph().len()];
-        visited[node] = true;
+        let mut components = neighbors.iter()
+            .map(|&u| vec![u])
+            .collect::<Vec<_>>();
 
-        let mut components = Vec::new();
-        for &u in &neighbors {
-            if visited[u] { continue }
-            let mut component = Vec::new();
-            let mut queue = VecDeque::from([u]);
-            visited[u] = true;
+        // Index of component that reached v, or usize::MAX if unvisited
+        let mut in_component = vec![usize::MAX; self.graph().len()];
+        in_component[node] = self.graph().len(); // mark removed
+        for i in 0..neighbors.len() { in_component[neighbors[i]] = i }
 
-            while let Some(v) = queue.pop_front() {
-                component.push(v);
-                for w in self.graph().edges(v) {
-                    if !visited[w] && w != node && self.assignments[w] == part {
-                        visited[w] = true;
-                        queue.push_back(w);
-                    }
+        // One queue per component seed (each neighbor).
+        let mut queues = neighbors.iter()
+            .map(|&u| VecDeque::from([u]))
+            .collect::<Vec<_>>();
+
+        // Tiny union-find data structure over label indices to merge when frontiers meet.
+        struct UnionFind { parent: Vec<usize>, reps: Vec<u8>, components: usize }
+
+        impl UnionFind {
+            fn new(n: usize) -> Self {
+                Self { parent: (0..n).collect(), reps: vec![0; n], components: n }
+            }
+
+            fn find(&mut self, u: usize) -> usize {
+                if self.parent[u] == u { u } else {
+                    let rep = self.find(self.parent[u]);
+                    self.parent[u] = rep;
+                    rep
                 }
             }
 
-            components.push(component);
+            fn union(&mut self, a: usize, b: usize) {
+                let (mut a, mut b) = (self.find(a), self.find(b));
+                if a == b { return }
+                if self.reps[a] < self.reps[b] { std::mem::swap(&mut a, &mut b) }
+                self.parent[b] = a;
+                if self.reps[a] == self.reps[b] { self.reps[a] += 1 }
+                self.components -= 1;
+            }
         }
 
-        // Heuristic: move all but the largest component along with `node`
-        let largest = components.iter()
-            .max_by_key(|set| set.len()).unwrap();
+        let mut union_find = UnionFind::new(neighbors.len());
 
-        components.iter()
-            .filter(|&set| !std::ptr::eq(set, largest))
-            .flat_map(|set| set.iter().copied())
-            .collect::<Vec<_>>()
+        // Round-robin expansion; stop when a single label-group remains active.
+        loop {
+            // Count active union-find roots with non-empty queues
+            let active_roots = (0..neighbors.len())
+                .filter(|&i| !queues[i].is_empty())
+                .map(|i| union_find.find(i))
+                .collect::<HashSet<_>>();
+
+            // Check if all but one BFS has completed
+            if active_roots.len() <= 1 { break }
+
+            // If all components have merged, node is not an articulation point
+            if union_find.components == 1 { return vec![] }
+
+            for i in 0..neighbors.len() {
+                if let Some(u) = queues[i].pop_front() {
+                    for v in self.graph().edges(u).filter(|&v| v != node && self.assignments[v] == part) {
+                        if in_component[v] == usize::MAX {
+                            in_component[v] = i;
+                            queues[i].push_back(v);
+                            components[i].push(v);
+                        } else if in_component[v] < neighbors.len() && in_component[v] != i {
+                            // BFS encountered node from another component
+                            union_find.union(i, in_component[v]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Determine main (still-active) root; if none, use largest by size.
+        let main_root = {
+            let mut size_by_root = vec![0; neighbors.len()];
+            for i in 0..neighbors.len() {
+                size_by_root[union_find.find(i)] += components[i].len();
+            }
+            (0..neighbors.len()).max_by_key(|&r| size_by_root[r]).unwrap()
+        };
+
+        // Collect nodes from all non-main components.
+        components.into_iter().enumerate()
+            .filter(|(i, _)| union_find.find(*i) != main_root)
+            .flat_map(|(_, component)| component)
+            .collect()
     }
 }

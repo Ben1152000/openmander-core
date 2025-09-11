@@ -27,19 +27,25 @@ impl Partition {
     }
 
     /// Check if moving `node` to a new part does not break contiguity.
+    /// If `part` is 0 (unassigned), only checks if removing `node` breaks its current part.
     pub fn check_node_contiguity(&self, node: usize, part: u32) -> bool {
         assert!(node < self.graph().len(), "node {} out of range", node);
         assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
 
         let prev = self.assignments[node];
 
-        // Ensure that `node` is adjacent to the new part, if it exists.
-        if !(self.part_is_empty(part) || self.graph().edges(node).any(|v| self.assignments[v] == part)) { return false }
+        // No-op move: always fine.
+        if part == prev { return true }
 
-        // Unassigned: moving it cannot break contiguity of a real district.
+        // For a non-empty destination, require at least one adjacent node in that part.
+        if part != 0 && !self.part_is_empty(part)
+            && !self.graph().edges(node).any(|v| self.assignments[v] == part)
+        { return false }
+
+        // If currently unassigned, removing it can't break any real district.
         if prev == 0 { return true }
 
-        // Collect neighbors that are in the same part.
+        // Collect neighbors in the same part as `node`.
         let neighbors = self.graph().edges(node)
             .filter(|&v| self.assignments[v] == prev)
             .collect::<Vec<_>>();
@@ -47,31 +53,52 @@ impl Partition {
         // If fewer than 2 same-part neighbors, removing `node` cannot disconnect the part.
         if neighbors.len() <= 1 { return true }
 
+        // Fast path: exactly two neighbors and they’re directly connected.
+        if neighbors.len() == 2
+            && self.graph().edges(neighbors[0]).any(|v| v == neighbors[1])
+        { return true }
+
+        // Get the number of same-part neighbors for each neighbor.
+        let neighbor_degrees = neighbors.iter()
+            .map(|&u| self.graph().edges(u).filter(|&v| self.assignments[v] == prev).count())
+            .collect::<Vec<_>>();
+
+        // Heuristic: Start the BFS with the neighbor with fewest same-part neighbors.
+        let (start, &min_degree) = neighbor_degrees.iter().enumerate()
+            .min_by_key(|&(_, d)| d)
+            .unwrap();
+
+        // Fast path: If any neighbor has only a single same-part neighbor, removing `node` would disconnect.
+        if min_degree == 1 { return false }
+
         // Track which same-part neighbors have been reached.
-        let mut targets = vec![false; self.graph().len()];
-        neighbors.iter().for_each(|&v| targets[v] = true );
+        let mut is_neighbor = vec![false; self.graph().len()];
+        for &u in &neighbors { is_neighbor[u] = true }
 
         // BFS from one neighbor within `part`, forbidding `node`.
         let mut visited = vec![false; self.graph().len()];
         visited[node] = true;
-        visited[neighbors[0]] = true;
+        visited[neighbors[start]] = true;
 
         let mut remaining = neighbors.len() - 1;
-        let mut queue = VecDeque::from([neighbors[0]]);
+        let mut queue = VecDeque::from([neighbors[start]]);
         while let Some(u) = queue.pop_front() {
-            for v in self.graph().edges(u) {
-                if v != node && !visited[v] && self.assignments[v] == prev {
+            for v in self.graph().edges(u).filter(|&v| v != node && self.assignments[v] == prev) {
+                if !visited[v] {
                     visited[v] = true;
-                    queue.push_back(v);
-
-                    // Check for early exit: if all targets have been visited, contiguity is preserved.
-                    if targets[v] { remaining -= 1; if remaining == 0 { return true } }
+                    if is_neighbor[v] {
+                        // Check for early exit: if all targets have been visited, contiguity is preserved.
+                        remaining -= 1; if remaining == 0 { return true }
+                        queue.push_front(v); // prioritize BFS from targets
+                    } else {
+                        queue.push_back(v);
+                    }
                 }
             }
         }
 
         // If all same-part neighbors are reachable without `node`, contiguity is preserved.
-        neighbors.iter().all(|&v| visited[v])
+        remaining == 0
     }
 
     /// Check if a set of nodes forms a contiguous subgraph, and if moving them would violate contiguity.

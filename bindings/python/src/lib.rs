@@ -1,3 +1,4 @@
+#![allow(unsafe_op_in_unsafe_fn)]
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use pyo3::{pyclass, pymethods, pymodule, Bound, Py, PyResult, Python};

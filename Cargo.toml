@@ -2,6 +2,13 @@
 name = "openmander"
 version = "0.1.0"
 edition = "2024"
+description = "A fast, memory-efficient redistricting toolkit"
+# license = "MIT OR Apache-2.0"
+repository = "https://github.com/Ben1152000/openmander-core"
+readme = "README.md"
+keywords = ["redistricting", "geospatial", "graphs", "partition"]
+categories = ["science", "data-structures", "algorithms", "geospatial"]
+include = ["src/**", "crates/**", "Cargo.toml", "README.md", "LICENSE*"]
 
 [dependencies]
 openmander-map = { path = "crates/map" }

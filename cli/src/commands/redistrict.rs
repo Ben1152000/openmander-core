@@ -15,8 +15,8 @@ pub fn run(_cli: &crate::cli::Cli, args: &crate::cli::RedistrictArgs) -> Result<
     println!("[redistrict] generating random plan with {} districts", plan.num_districts());
     plan.randomize()?;
 
-    println!("[redistrict] equalizing plan with tolerance 0.1% for 2000 iterations");
-    plan.equalize("T_20_CENS_Total", 0.001, 10000)?;
+    println!("[redistrict] equalizing plan with tolerance 0.02% for 2000 iterations");
+    plan.equalize("T_20_CENS_Total", 0.0002, 10000)?;
     // plan.partition.anneal_balance_two("T_20_CENS_Total", 1, 2, 0.1, 20000);
 
     println!("[redistrict] writing plan to {}", out_path.display());

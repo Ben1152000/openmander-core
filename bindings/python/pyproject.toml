@@ -4,10 +4,24 @@ build-backend = "maturin"
 
 [project]
 name = "openmander"
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.8"
-description = "OpenMander: fast redistricting in Rust with Python bindings"
-classifiers = ["Programming Language :: Python :: 3"]
+description = "OpenMander: a redistricting toolkit in Rust with Python bindings"
+readme = { file = "README.md", content-type = "text/markdown" }
+# license = {file = "LICENSE"}
+authors = [{ name = "Benjamin Darnell" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Operating System :: OS Independent",
+]
 
 [tool.maturin]
-features = []
+bindings = "pyo3"
+sdist-include = [
+  "Cargo.toml",
+  "pyproject.toml",
+  "README.md",
+  "LICENSE",
+  "src/**",
+]

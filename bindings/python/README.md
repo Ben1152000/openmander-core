@@ -30,4 +30,3 @@ plan.equalize("T_20_CENS_Total", tolerance=0.002, max_iter=1000)
 
 plan.to_csv("block-assign.csv")
 ```
-

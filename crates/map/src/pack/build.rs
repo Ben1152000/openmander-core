@@ -3,20 +3,15 @@ use std::{collections::{HashMap, HashSet}, path::Path};
 use anyhow::{anyhow, bail, Context, Ok, Result};
 use openmander_geom::Geometries;
 use polars::{frame::DataFrame, prelude::*, series::Series};
-use shapefile::{dbase::{FieldValue, Record}, Reader, Shape};
+use shapefile::{dbase::{FieldValue, Record}};
 
 use crate::{common::*, GeoId, GeoType, Map, MapLayer, ParentRefs};
 
 impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.
     fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<Self> {
-        /// Coerce a generic shape into an owned multipolygon, raising error if different shape
-        fn shape_to_multipolygon(shape: Shape) -> Result<geo::MultiPolygon<f64>> {
-            match shape {
-                Shape::Polygon(polygon) => Ok(shp_to_geo(&polygon)),
-                other => bail!("found non-Polygon shape in layer: {:?}", other.shapetype())
-            }
-        }
+        let (shapes, records) = read_from_shapefile(path)?;
+        let epsg = epsg_from_shapefile(path);
 
         /// Convert a vector of records to a DataFrame (using TIGER/PL census format)
         fn records_to_dataframe(records: Vec<Record>, ty: GeoType) -> Result<DataFrame> {
@@ -93,14 +88,6 @@ impl MapLayer {
             ])?)
         }
 
-        let mut reader = Reader::from_path(path)
-            .with_context(|| format!("Failed to open shapefile: {}", path.display()))?;
-
-        let (shapes, records) = reader.iter_shapes_and_records()
-            .collect::<Result<Vec<_>, _>>()
-            .with_context(|| format!("Error reading shapes+records from shapefile: {}", path.display()))?
-            .into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
-
         let df = records_to_dataframe(records, ty)?
             .with_row_index("idx".into(), None)?;
 
@@ -109,7 +96,8 @@ impl MapLayer {
             &shapes.into_iter()
                 .map(|shape| shape_to_multipolygon(shape))
                 .collect::<Result<Vec<_>>>()
-                .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?
+                .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?,
+            epsg,
         );
 
         Self::from_dataframe(ty, df, Some(geoms))
@@ -179,7 +167,7 @@ impl MapLayer {
     fn compute_shared_perimeters(&mut self) -> Result<()> {
         let geoms = self.geoms.as_mut()
             .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
-        self.shared_perimeters = geoms.compute_shared_perimeters_fast(&self.adjacencies, 1e8);
+        self.shared_perimeters = geoms.compute_shared_perimeters_fast(&self.adjacencies, 1e8)?;
         Ok(())
     }
 }

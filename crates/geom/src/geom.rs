@@ -8,11 +8,12 @@ use crate::bbox::BoundingBox;
 pub struct Geometries {
     shapes: Vec<MultiPolygon<f64>>,
     rtree: RTree<BoundingBox>,
+    epsg: Option<u32>, // EPSG code, if known
 }
 
 impl Geometries {
     /// Construct a Geometries object from a vector of MultiPolygons
-    pub fn new(polygons: &[MultiPolygon<f64>]) -> Self {
+    pub fn new(polygons: &[MultiPolygon<f64>], epsg: Option<u32>) -> Self {
         Self {
             rtree: RTree::bulk_load(
                 polygons.iter().enumerate()
@@ -20,6 +21,7 @@ impl Geometries {
                     .collect()
             ),
             shapes: polygons.to_vec(),
+            epsg,
         }
     }
 
@@ -31,6 +33,9 @@ impl Geometries {
 
     /// Get a reference to the list of MultiPolygons.
     #[inline] pub fn shapes(&self) -> &Vec<MultiPolygon<f64>> { &self.shapes }
+
+    /// Get the EPSG code, or default to 4269 (NAD83 lon/lat) if unknown.
+    #[inline] pub fn epsg(&self) -> u32 { self.epsg.unwrap_or(4269) }
 
     /// Query the R-tree for bounding boxes intersecting the given envelope.
     #[inline] pub fn query(&self, envelope: &AABB<[f64; 2]>) -> impl Iterator<Item=&BoundingBox> {

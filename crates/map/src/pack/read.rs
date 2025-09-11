@@ -55,7 +55,10 @@ impl MapLayer {
         }
 
         if geom_path.exists() { 
-            self.geoms = Some(Geometries::new(&read_from_geoparquet(&geom_path)?));
+            self.geoms = Some(Geometries::new(
+                &read_from_geoparquet(&geom_path)?,
+                None,
+            ));
         }
 
         Ok(())

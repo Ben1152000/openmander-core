@@ -32,9 +32,9 @@ Build and install the wheel locally (requires [maturin]):
 
 ```bash
 # from repo root
-python -m pip install -U maturin  # or: pipx install maturin
+python -m pip install -U maturin
 cd bindings/python
-maturin develop -r                # builds and installs the 'openmander' module into your env
+maturin develop -r
 ```
 
 Use it:
@@ -42,10 +42,19 @@ Use it:
 ```python
 import openmander as om
 
-iowa_map = om.Map("IA_2020_pack") # pack dir (see CLI quickstart to create)
-plan = om.Plan(iowa_map, 4)       # 4 districts
+# Download state pack for Illinois
+pack_path = om.download("IL")
+iowa_map = om.Map(pack_path)
+plan = om.Plan(iowa_map, num_districts=17)
+
+# Generate a random configuration of 17 districts.
 plan.randomize()
-plan.to_csv("plan.csv")
+
+# Balance the total population of each district.
+plan.equalize("T_20_CENS_Total", tolerance=0.002, max_iter=1000)
+
+# Output the block assignments to a csv file.
+plan.to_csv("block-assign.csv")
 ```
 
 > Tip: if you prefer, `maturin build` then `pip install dist/openmander-*.whl`.

@@ -18,15 +18,17 @@ Once installed, you can import the Openmander module in your Python scripts and 
 ```python
 import openmander as om
 
-iowa_map = om.Map("IA_2020_pack")
+# Download state pack for Illinois
+pack_path = om.download("IL")
+iowa_map = om.Map(pack_path)
+plan = om.Plan(iowa_map, num_districts=17)
 
-plan = om.Plan(iowa_map, num_districts=4)
-
-# Generate a random configuration of 4 districts.
+# Generate a random configuration of 17 districts.
 plan.randomize()
 
 # Balance the total population of each district.
 plan.equalize("T_20_CENS_Total", tolerance=0.002, max_iter=1000)
 
+# Output the block assignments to a csv file.
 plan.to_csv("block-assign.csv")
 ```

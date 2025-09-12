@@ -1,6 +1,7 @@
 mod common;
 mod geo_id;
 mod geo_ty;
+mod io;
 mod layer;
 mod map;
 mod pack;

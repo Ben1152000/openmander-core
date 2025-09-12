@@ -5,6 +5,7 @@ use geo::{MultiPolygon, Polygon};
 use crate::MapLayer;
 
 impl MapLayer {
+    /// Display the layer as an SVG file, including polygons and adjacency lines between centroids.
     pub fn to_svg(&self, path: &Path) {
         // --- Collect centroid lon/lat (from DataFrame if present, else compute from geom) ---
         let n = self.adjacencies.len();
@@ -176,4 +177,3 @@ fn polygon_to_path(
         out.push('Z');
     }
 }
-

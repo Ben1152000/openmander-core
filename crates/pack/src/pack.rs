@@ -9,7 +9,6 @@ use crate::{clean::cleanup_download_dir, common::*, download::download_data};
 /// Returns the path to the new pack directory.
 pub fn build_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<PathBuf> {
     let state_code = state_code.to_ascii_uppercase();
-
     require_dir_exists(&path)?;
 
     let pack_dir = path.join(format!("{state_code}_2020_pack"));
@@ -32,13 +31,34 @@ pub fn build_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<PathB
     Ok(pack_dir)
 }
 
-/// Download the full map pack for a given state into `out_dir`.
-#[allow(dead_code, unused_variables)]
-pub fn download_pack(out_dir: &PathBuf, state_code: &str, verbose: u8) -> Result<()> { todo!() }
+/// Download the full map pack for a given state into `path`.
+/// Falls back to building the pack locally if no prebuilt pack is available.
+/// `include_geoms` controls whether geometries are included in the download.
+/// Returns the path to the downloaded pack directory.
+pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<PathBuf> {
+    let state_code = state_code.to_ascii_uppercase();
+    require_dir_exists(&path)?;
 
-/// Download the map pack without geometries for a given state into `out_dir`.
-#[allow(dead_code, unused_variables)]
-pub fn download_pack_without_geoms(out_dir: &PathBuf, state_code: &str, verbose: u8) -> Result<()> { todo!() }
+    let pack_name = format!("{state_code}_2020_pack");
+    let pack_url = format!("https://media.githubusercontent.com/media/Ben1152000/openmander-data/master/packs/{state_code}/{pack_name}.zip");
+    if !remote_file_exists(&pack_url)? {
+        if verbose > 0 { eprintln!("No prebuilt pack found for {state_code}, building locally..."); }
+        return build_pack(&state_code, path, verbose)
+    }
+
+    let zip_path = path.join(format!("{pack_name}.zip"));
+    let pack_dir = path.join(pack_name);
+
+    if verbose > 0 { eprintln!("[download] downloading {pack_url}"); }
+    download_big_file(pack_url, &zip_path, true)?;
+
+    if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
+    extract_zip(&zip_path, &pack_dir, true)?;
+
+    if verbose > 0 { eprintln!("Downloaded pack to {}", pack_dir.display()); }
+
+    Ok(pack_dir)
+}
 
 /// Validate the contents of a map pack at `pack_path`.
 #[allow(dead_code, unused_variables)]

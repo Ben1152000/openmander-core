@@ -29,6 +29,10 @@ pub struct DownloadArgs {
     /// Output pack location (directory), defaults to "."
     #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
     pub output: Option<PathBuf>,
+
+    /// Build pack locally instead of downloading prebuilt pack
+    #[arg(long)]
+    pub build: bool,
 }
 
 #[derive(clap::Args, Debug)]

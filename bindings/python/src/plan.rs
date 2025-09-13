@@ -92,4 +92,10 @@ impl Plan {
         self.inner.to_csv(&PathBuf::from(path))
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
+
+    /// Save plan to SVG at the given path (shows district outlines and fills)
+    pub fn to_svg(&self, path: &str) -> PyResult<()> {
+        self.inner.to_svg(&PathBuf::from(path))
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
 }

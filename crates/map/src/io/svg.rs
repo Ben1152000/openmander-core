@@ -1,7 +1,7 @@
 use std::{fs::File, io::{BufWriter, Write}, path::Path};
 
 use anyhow::{anyhow, Context, Ok, Result};
-use geo::{Coord, CoordsIter, LineString, MultiPolygon,};
+use geo::{Coord, CoordsIter, LineString, MultiPolygon, Point};
 
 use crate::MapLayer;
 
@@ -22,6 +22,7 @@ fn write_svg_styles(writer: &mut impl Write) -> Result<()> {
   <style>
     .blk {{ fill: #e5e7eb; stroke: #111827; stroke-width: 0.5; fill-opacity: 0.85; }}
     .edge {{ stroke: #2563eb; stroke-opacity: 0.35; stroke-width: 0.6; }}
+    .dist {{ vector-effect: non-scaling-stroke; }}
   </style>
 </defs>"##)?;
     Ok(())
@@ -43,11 +44,15 @@ fn multipolygon_to_path(shape: &MultiPolygon<f64>, project: &impl Fn(&Coord<f64>
     let mut out = String::new();
 
     let mut ring_to_path = |ring: &LineString<f64>| {
-        for (i, (x, y)) in ring.coords_iter().map(|coord| project(&coord)).enumerate() {
-            if i == 0 { out.push_str(&format!(" M{:.3},{:.3}", x, y)) }
-            else { out.push_str(&format!(" L{:.3},{:.3}", x, y)) }
+        let mut coords = ring.coords_iter()
+            .map(|coord| project(&coord));
+        if let Some((x, y)) = coords.next() {
+            out.push_str(&format!(" M{x:.3},{y:.3}"));
+            for (x, y) in coords {
+                out.push_str(&format!(" L{x:.3},{y:.3}"));
+            }
+            out.push('Z');
         }
-        out.push('Z');
     };
 
     for polygon in &shape.0 {
@@ -62,31 +67,34 @@ fn multipolygon_to_path(shape: &MultiPolygon<f64>, project: &impl Fn(&Coord<f64>
 
 fn draw_edges(
     writer: &mut impl Write,
-    edges: &[(&Coord<f64>, &Coord<f64>)],
+    edges: &[(&Point<f64>, &Point<f64>)],
     project: &impl Fn(&Coord<f64>) -> (f64, f64),
 ) -> Result<()> {
     for edge in edges {
-        let (x1, y1) = project(edge.0);
-        let (x2, y2) = project(edge.1);
+        let (x1, y1) = project(&Coord { x: edge.0.x(), y: edge.0.y() });
+        let (x2, y2) = project(&Coord { x: edge.1.x(), y: edge.1.y() });
         writeln!(writer, r##"<line class="edge" x1="{x1:.3}" y1="{y1:.3}" x2="{x2:.3}" y2="{y2:.3}"/>"##)?;
     }
     Ok(())
 }
 
 impl MapLayer {
+    /// Small wrapper with defaults.
+    pub fn to_svg(&self, path: &Path) -> Result<()> {
+        self.to_svg_with_size(path, 1200, 10)
+    }
+
     /// Display the layer as an SVG file, including polygons and adjacency lines between centroids.
-    /// `width` is the desired width of the SVG in pixels (recommended: 800-2000).
-    /// `margin` is the margin to leave around the edges in pixels (recommended: 5-20).
-    pub fn to_svg(&self, path: &Path, width: i32, margin: i32) -> Result<()>{
+    /// `width` is the desired width of the SVG in pixels.
+    /// `margin` is the margin to leave around the edges in pixels.
+    pub fn to_svg_with_size(&self, path: &Path, width: i32, margin: i32) -> Result<()>{
         let geoms = self.geoms.as_ref()
             .ok_or_else(|| anyhow!("[to_svg] No geometries available to draw."))?;
 
         let bounds = geoms.bounds()
             .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?;
 
-        let centroids = self.centroids().iter()
-            .map(|&(x, y)| Coord { x, y })
-            .collect::<Vec<_>>();
+        let centroids = self.centroids();
 
         let margin = margin as f64;
         let width = width as f64;

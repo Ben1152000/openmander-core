@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
+geo = { workspace = true }
 polars = { workspace = true }
 
 openmander-map = { path = "../map" }

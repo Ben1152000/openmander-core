@@ -20,8 +20,8 @@ import openmander as om
 
 # Download state pack for Illinois
 pack_path = om.download("IL")
-iowa_map = om.Map(pack_path)
-plan = om.Plan(iowa_map, num_districts=17)
+IL_map = om.Map(pack_path)
+plan = om.Plan(IL_map, num_districts=17)
 
 # Generate a random configuration of 17 districts.
 plan.randomize()
@@ -30,5 +30,5 @@ plan.randomize()
 plan.equalize("T_20_CENS_Total", tolerance=0.002, max_iter=1000)
 
 # Output the block assignments to a csv file.
-plan.to_csv("block-assign.csv")
+plan.to_csv("IL-block-assign.csv")
 ```

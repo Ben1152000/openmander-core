@@ -50,6 +50,9 @@ impl Partition {
     /// Get the part assignment of a given node.
     #[inline] pub fn assignment(&self, node: usize) -> u32 { self.assignments[node] }
 
+    /// Get the set of boundary nodes for a given part.
+    #[inline] pub fn frontier(&self, part: u32) -> &[usize] { self.frontiers.get(part) }
+
     /// Clear all assignments, setting every node to unassigned (0).
     pub fn clear_assignments(&mut self) {
         self.assignments.fill(0);

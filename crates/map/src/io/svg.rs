@@ -1,9 +1,10 @@
-use std::{io::{Write}, path::Path};
+use std::{io::Write, path::Path};
 
 use anyhow::{anyhow, Ok, Result};
+use openmander_common as common;
 use geo::{Coord, CoordsIter, LineString, MultiPolygon, Point};
 
-use crate::{common::*, MapLayer};
+use crate::MapLayer;
 
 /// Projection function: lon/lat -> SVG coords (x,y)
 type Projection = dyn Fn(&Coord<f64>) -> (f64, f64);
@@ -90,7 +91,7 @@ impl MapLayer {
         };
 
         // --- Write SVG ---
-        let mut writer = SvgWriter::new(path)?;
+        let mut writer = common::SvgWriter::new(path)?;
         writer.write_header(width, height)?;
         writer.write_styles()?;
         draw_polygons(&mut writer, geoms.shapes(), &project)?;

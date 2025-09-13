@@ -1,10 +1,11 @@
 use std::{path::Path};
 
 use anyhow::{Context, Ok, Result};
+use openmander_common as common;
 use openmander_geom::Geometries;
 use polars::prelude::*;
 
-use crate::{common::*, GeoId, GeoType, Map, MapLayer, ParentRefs};
+use crate::{GeoId, GeoType, Map, MapLayer, ParentRefs};
 
 impl MapLayer {
     /// Extract parent refs from the data DataFrame, returning (data, parents).
@@ -38,7 +39,7 @@ impl MapLayer {
         let geom_path = path.join(format!("geom/{layer_name}.geoparquet"));
         let adj_path = path.join(format!("adj/{layer_name}.csr.bin"));
 
-        (self.data, self.parents) = self.unpack_data(read_from_parquet(&entity_path)?)?;
+        (self.data, self.parents) = self.unpack_data(common::read_from_parquet(&entity_path)?)?;
 
         self.geo_ids = self.data.column("geo_id")?.str()?
             .into_no_null_iter()
@@ -50,13 +51,13 @@ impl MapLayer {
             .collect();
 
         if self.ty() != GeoType::State {
-            (self.adjacencies, self.shared_perimeters) = read_from_weighted_csr(&adj_path)?;
+            (self.adjacencies, self.shared_perimeters) = common::read_from_weighted_csr(&adj_path)?;
             self.construct_graph();
         }
 
         if geom_path.exists() { 
             self.geoms = Some(Geometries::new(
-                &read_from_geoparquet(&geom_path)?,
+                &common::read_from_geoparquet(&geom_path)?,
                 None,
             ));
         }
@@ -68,7 +69,7 @@ impl MapLayer {
 impl Map {
     /// Read a map from a pack directory at `path`.
     pub fn read_from_pack(path: &Path) -> Result<Self> {
-        require_dir_exists(path)?;
+        common::require_dir_exists(path)?;
 
         let mut map = Self::default();
         for layer in map.get_layers_mut() {

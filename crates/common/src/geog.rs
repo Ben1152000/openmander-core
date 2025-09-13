@@ -1,9 +1,3 @@
-mod fs;
-mod io;
-
-pub use fs::*;
-pub use io::*;
-
 /// Two-letter postal code → full state name
 pub fn state_abbr_to_name(state: &str) -> Option<&'static str> {
     match state {

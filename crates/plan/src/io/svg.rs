@@ -29,8 +29,11 @@ fn write_svg_styles(writer: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
+/// Projection function: lon/lat -> SVG coords (x,y)
+type Projection = dyn Fn(&Coord<f64>) -> (f64, f64);
+
 /// Append a ring as an SVG subpath: "M x,y L x,y ... Z"
-fn ring_to_path(ring: &[Coord<f64>], project: &impl Fn(&Coord<f64>) -> (f64, f64), out: &mut String) {
+fn ring_to_path(ring: &[Coord<f64>], project: &Projection, out: &mut String) {
     if ring.is_empty() { return }
     let coords = ring.coords_iter().map(|coord| project(&coord)).collect::<Vec<_>>();
     out.push_str(&format!(" M{:.3},{:.3}", coords[0].0, coords[0].1));
@@ -57,7 +60,7 @@ impl Plan {
         let height = bounds.height() * scale + 2.0 * margin;
 
         // lon/lat -> SVG coords (Y down)
-        let project = |coord: &Coord<f64>| -> (f64, f64) {
+        let project = move |coord: &Coord<f64>| -> (f64, f64) {
             let x = margin + (coord.x - bounds.min().x) * scale;
             let y = margin + (bounds.max().y - coord.y) * scale;
             (x, y)
@@ -107,12 +110,7 @@ impl Plan {
 
     /// Build dissolved boundary for district `d` using frontier blocks, immediate same-district neighbors,
     /// and segments on the state outer boundary.
-    fn build_district_path_string(
-        &self,
-        d: u32,
-        state_outline: &SegmentSet,
-        project: &impl Fn(&Coord<f64>) -> (f64, f64),
-    ) -> Result<Option<String>> {
+    fn build_district_path_string(&self, d: u32, state_outline: &SegmentSet, project: &Projection) -> Result<Option<String>> {
         let shapes = self.map().get_layer(GeoType::Block).shapes()
             .ok_or_else(|| anyhow!("[to_svg] No block geoms available"))?;
 
@@ -258,11 +256,7 @@ fn collect_segments(mp: &MultiPolygon<f64>, ptmap: &mut HashMap<QuantizedPoint, 
     set
 }
 
-fn collect_ring_segments(
-    ring: &LineString<f64>,
-    set: &mut SegmentSet,
-    ptmap: &mut HashMap<QuantizedPoint, Coord<f64>>,
-) {
+fn collect_ring_segments(ring: &LineString<f64>, set: &mut SegmentSet, ptmap: &mut HashMap<QuantizedPoint, Coord<f64>>) {
     let mut prev: Option<Coord<f64>> = None;
     for c in ring.coords_iter().map(|c| Coord { x: c.x, y: c.y }) {
         if let Some(p) = prev {

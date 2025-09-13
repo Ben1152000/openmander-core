@@ -5,20 +5,12 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-arrow = { workspace = true }
 geo = { workspace = true }
-geo-traits = { workspace = true }
-geoarrow-array = { workspace = true }
-geoarrow-schema = { workspace = true }
-geoparquet = { workspace = true }
-hex = { workspace = true }
-parquet = { workspace = true }
 polars = { workspace = true }
-regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 shapefile = { workspace = true }
 
+openmander-common = { path = "../common" }
 openmander-geom = { path = "../geom" }
 openmander-graph = { path = "../graph" }

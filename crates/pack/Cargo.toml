@@ -5,9 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-reqwest = { workspace = true }
-tempfile = { workspace = true }
-zip = { workspace = true }
 
+openmander-common = { path = "../common" }
 openmander-map = { path = "../map" }
 openmander-plan = { path = "../plan" }

@@ -1,17 +1,18 @@
 use std::{collections::{HashMap, HashSet}, path::Path};
 
 use anyhow::{anyhow, bail, Context, Ok, Result};
+use openmander_common as common;
 use openmander_geom::Geometries;
 use polars::{frame::DataFrame, prelude::*, series::Series};
 use shapefile::{dbase::{FieldValue, Record}};
 
-use crate::{common::*, GeoId, GeoType, Map, MapLayer, ParentRefs};
+use crate::{GeoId, GeoType, Map, MapLayer, ParentRefs};
 
 impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.
     fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<Self> {
-        let (shapes, records) = read_from_shapefile(path)?;
-        let epsg = epsg_from_shapefile(path);
+        let (shapes, records) = common::read_from_shapefile(path)?;
+        let epsg = common::epsg_from_shapefile(path);
 
         /// Convert a vector of records to a DataFrame (using TIGER/PL census format)
         fn records_to_dataframe(records: Vec<Record>, ty: GeoType) -> Result<DataFrame> {
@@ -94,7 +95,7 @@ impl MapLayer {
         // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64>
         let geoms = Geometries::new(
             &shapes.into_iter()
-                .map(|shape| shape_to_multipolygon(shape))
+                .map(|shape| common::shape_to_multipolygon(shape))
                 .collect::<Result<Vec<_>>>()
                 .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?,
             epsg,
@@ -315,7 +316,7 @@ impl Map {
 
     /// Build a map pack from the download files in `input_dir`
     pub fn build_pack(input_dir: &Path, state_code: &str, fips: &str, verbose: u8) -> Result<Self> {
-        require_dir_exists(input_dir)?;
+        common::require_dir_exists(input_dir)?;
 
         let mut map = Map::default();
 
@@ -365,7 +366,7 @@ impl Map {
         map.get_layer_mut(GeoType::Block).assign_parents_from_map(
             GeoType::VTD,
             get_map_from_crosswalk_df(
-                &read_from_pipe_delimited_txt(&input_dir.join(format!("BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt")))?, 
+                &common::read_from_pipe_delimited_txt(&input_dir.join(format!("BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt")))?, 
                 (GeoType::Block, GeoType::VTD), 
                 ("BLOCKID", "DISTRICT")
             )?
@@ -384,12 +385,12 @@ impl Map {
         }
 
         if verbose > 0 { eprintln!("[build_pack] loading demographic data"); }
-        map.merge_block_data(ensure_geoid_is_str(read_from_csv(
+        map.merge_block_data(ensure_geoid_is_str(common::read_from_csv(
             &input_dir.join(format!("Demographic_Data_Block_{state_code}/demographic_data_block_{state_code}.v06.csv"))
         )?)?, "GEOID")?;
 
         if verbose > 0 { eprintln!("[build_pack] loading election data"); }
-        map.merge_block_data(ensure_geoid_is_str(read_from_csv(
+        map.merge_block_data(ensure_geoid_is_str(common::read_from_csv(
             &input_dir.join(format!("Election_Data_Block_{state_code}/election_data_block_{state_code}.v06.csv"))
         )?)?, "GEOID")?;
 

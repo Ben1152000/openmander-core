@@ -2330,6 +2330,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "openmander-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "geo",
+ "geo-traits",
+ "geoarrow-array",
+ "geoarrow-schema",
+ "geoparquet",
+ "hex",
+ "parquet",
+ "polars",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shapefile",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "openmander-geom"
 version = "0.1.0"
 dependencies = [
@@ -2353,21 +2377,13 @@ name = "openmander-map"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arrow",
  "geo",
- "geo-traits",
- "geoarrow-array",
- "geoarrow-schema",
- "geoparquet",
- "hex",
+ "openmander-common",
  "openmander-geom",
  "openmander-graph",
- "parquet",
  "polars",
- "regex",
  "serde",
  "serde_json",
- "sha2",
  "shapefile",
 ]
 
@@ -2376,11 +2392,9 @@ name = "openmander-pack"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "openmander-common",
  "openmander-map",
  "openmander-plan",
- "reqwest",
- "tempfile",
- "zip",
 ]
 
 [[package]]

@@ -10,19 +10,36 @@ struct PendingWrite {
     tmp: Option<(NamedTempFile, bool)>, // (file, need_fsync_dir)
 }
 
-fn open_for_big_write(target: &Path, force: bool) -> Result<PendingWrite> {
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create dir {}", parent.display()))?;
-    }
-    if !force && target.exists() {
-        bail!("Refusing to overwrite existing file: {} (use --force)", target.display());
-    }
-    let need_fsync_dir = target.parent().is_some();
-    let tmp = NamedTempFile::new_in(target.parent().unwrap_or(Path::new(".")))
-        .context("create temp file")?;
+impl PendingWrite {
+    /// Open a file for a big write.
+    fn open(target: &Path, force: bool) -> Result<Self> {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
+        }
+        if !force && target.exists() {
+            bail!("Refusing to overwrite existing file: {} (use --force)", target.display());
+        }
+        let need_fsync_dir = target.parent().is_some();
+        let tmp = NamedTempFile::new_in(target.parent().unwrap_or(Path::new(".")))
+            .context("create temp file")?;
 
-    Ok(PendingWrite { target: target.to_path_buf(), tmp: Some((tmp, need_fsync_dir)) })
+        Ok(Self { target: target.to_path_buf(), tmp: Some((tmp, need_fsync_dir)) })
+    }
+
+    /// Finalize the big write.
+    fn finalize(&mut self) -> Result<()> {
+        let (tmp, need_fsync_dir) = self.tmp.take().expect("not finalized");
+        tmp.as_file().sync_all().ok(); // best-effort fsync file
+        tmp.persist(&self.target)
+            .with_context(|| format!("rename to {}", self.target.display()))?;
+        if need_fsync_dir {
+            if let Some(dir) = self.target.parent() {
+                let _ = File::open(dir).and_then(|f| f.sync_all());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Write for PendingWrite {
@@ -40,23 +57,10 @@ impl Seek for PendingWrite {
     }
 }
 
-fn finalize_big_write(mut pending: PendingWrite) -> Result<()> {
-    let (tmp, need_fsync_dir) = pending.tmp.take().expect("not finalized");
-    tmp.as_file().sync_all().ok(); // best-effort fsync file
-    tmp.persist(&pending.target)
-        .with_context(|| format!("rename to {}", pending.target.display()))?;
-    if need_fsync_dir {
-        if let Some(dir) = pending.target.parent() {
-            let _ = File::open(dir).and_then(|f| f.sync_all());
-        }
-    }
-    Ok(())
-}
-
 /// Download a large file from `file_url` to `out_path`.
 pub fn download_big_file(file_url: String, out_path: &PathBuf, force: bool) -> Result<()> {
     // Safe big-file write (tempfile -> atomic rename), no accidental overwrite unless --force
-    let mut sink = open_for_big_write(&out_path, force)?;
+    let mut sink = PendingWrite::open(&out_path, force)?;
 
     let mut resp = reqwest::blocking::get(&file_url)
         .with_context(|| format!("GET {file_url}"))?
@@ -65,7 +69,7 @@ pub fn download_big_file(file_url: String, out_path: &PathBuf, force: bool) -> R
 
     std::io::copy(&mut resp, &mut sink).with_context(|| format!("write {}", out_path.display()))?;
 
-    finalize_big_write(sink)?;
+    sink.finalize()?;
     Ok(())
 }
 

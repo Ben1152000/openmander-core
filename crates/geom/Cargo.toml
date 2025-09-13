@@ -7,6 +7,6 @@ edition = "2024"
 ahash = { workspace = true }
 anyhow = { workspace = true }
 geo = { workspace = true }
-proj = { workspace = true }
+proj4rs = { workspace = true }
 rstar = { workspace = true }
 smallvec = { workspace = true }

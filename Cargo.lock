@@ -2397,6 +2397,7 @@ name = "openmander-plan"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "geo",
  "openmander-map",
  "openmander-partition",
  "polars",
@@ -2404,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "openmander-py"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "numpy",

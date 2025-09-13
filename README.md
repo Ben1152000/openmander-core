@@ -44,8 +44,8 @@ import openmander as om
 
 # Download state pack for Illinois
 pack_path = om.download("IL")
-iowa_map = om.Map(pack_path)
-plan = om.Plan(iowa_map, num_districts=17)
+IL_map = om.Map(pack_path)
+plan = om.Plan(IL_map, num_districts=17)
 
 # Generate a random configuration of 17 districts.
 plan.randomize()

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use anyhow::Result;
+use geo::{MultiPolygon, Point, Rect};
 use openmander_geom::Geometries;
 use openmander_graph::Graph;
 use polars::{frame::DataFrame, prelude::DataType};
@@ -76,11 +77,31 @@ impl MapLayer {
     /// Get a reference to the index mapping GeoIds to contiguous indices.
     #[inline] pub fn index(&self) -> &HashMap<GeoId, u32> { &self.index }
 
+    /// Get a reference to the list of ParentRefs for each entity in this layer.
+    #[inline] pub fn parents(&self) -> &Vec<ParentRefs> { &self.parents }
+
+    /// Get a reference to the DataFrame containing entity data for this layer.
+    #[inline] pub fn data(&self) -> &DataFrame { &self.data }
+
+    /// Get a reference to the adjacency list for this layer.
+    #[inline] pub fn adjacencies(&self) -> &Vec<Vec<u32>> { &self.adjacencies }
+
+    /// Get a reference to the shared perimeter weights for this layer.
+    #[inline] pub fn shared_perimeters(&self) -> &Vec<Vec<f64>> { &self.shared_perimeters }
+
     /// Get an Arc clone of the graph representation of this layer.
     #[inline] pub fn graph_handle(&self) -> Arc<Graph> { self.graph.clone() }
 
+    /// Get a reference to the shape data (if any) for this layer.
+    #[inline] pub fn shapes(&self) -> Option<&Vec<MultiPolygon<f64>>> {
+        self.geoms.as_ref().and_then(|geoms| Some(geoms.shapes()))
+    }
+
+    /// Get the bounding rectangle of all geometries in this layer, if available.
+    #[inline] pub fn bounds(&self) -> Option<Rect<f64>> { self.geoms.as_ref()?.bounds() }
+
     /// Get centroid lon/lat for each entity, preferring DataFrame columns if present, else computing from geometry.
-    pub fn centroids(&self) -> Vec<(f64, f64)> {
+    pub fn centroids(&self) -> Vec<Point<f64>> {
         if let (Some(lon_column), Some(lat_column)) = (
             self.data.column("centroid_lon").ok()
                 .and_then(|column| column.f64().ok()),
@@ -91,16 +112,18 @@ impl MapLayer {
             assert_eq!(lat_column.len(), self.len(), "Expected centroid_lat length {} to match number of entities {}", lat_column.len(), self.len());
 
             lon_column.into_iter().zip(lat_column.into_iter())
-                .map(|(lon, lat)| (lon.unwrap_or(f64::NAN), lat.unwrap_or(f64::NAN)))
+                .map(|(lon, lat)| Point::new(lon.unwrap_or(f64::NAN), lat.unwrap_or(f64::NAN)))
                 .collect()
         } else if let Some(geoms) = &self.geoms {
             assert_eq!(geoms.len(), self.len(), "Expected geoms length {} to match number of entities {}", geoms.len(), self.len());
-
-            geoms.centroids().iter()
-                .map(|point| (point.x(), point.y()))
-                .collect()
-        } else { vec![(f64::NAN, f64::NAN); self.len()] }
+            geoms.centroids()
+        } else { vec![Point::new(f64::NAN, f64::NAN); self.len()] }
     }
+
+    /// Get the union of all MultiPolygons in this layer into a single MultiPolygon.
+    /// Returns None if there are no geometries.
+    /// Note: this can be slow for large numbers of complex polygons.
+    #[inline] pub fn union(&self) -> Option<MultiPolygon<f64>> { self.geoms.as_ref()?.union() }
 
     /// Construct a graph representation of the layer for partitioning.
     /// Requires data, adjacencies, and shared_perimeters to be computed first.

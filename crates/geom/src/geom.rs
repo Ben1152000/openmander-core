@@ -1,4 +1,4 @@
-use geo::{BoundingRect, Centroid, Coord, MultiPolygon, Point, Rect};
+use geo::{BooleanOps, BoundingRect, Centroid, Coord, MultiPolygon, Point, Rect};
 use rstar::{RTree, AABB};
 
 use crate::bbox::BoundingBox;
@@ -43,7 +43,7 @@ impl Geometries {
     }
 
     /// Compute the bounding rectangle of all MultiPolygons.
-    pub fn bounds(&self) -> Option<Rect<f64>> {
+    #[inline] pub fn bounds(&self) -> Option<Rect<f64>> {
         fn union(a: Rect<f64>, b: Rect<f64>) -> Rect<f64> {
             Rect::new(
                 Coord {
@@ -63,10 +63,17 @@ impl Geometries {
     }
 
     /// Compute the centroids of all MultiPolygons.
-    pub fn centroids(&self) -> Vec<Point<f64>> {
+    #[inline] pub fn centroids(&self) -> Vec<Point<f64>> {
         self.shapes.iter()
             .map(|polygon| polygon.centroid()
                 .unwrap_or(Point::new(f64::NAN, f64::NAN)))
             .collect()
+    }
+
+    /// Compute the union of all MultiPolygons into a single MultiPolygon.
+    /// Returns None if there are no shapes.
+    /// Note: this can be slow for large numbers of complex polygons.
+    #[inline] pub fn union(&self) -> Option<MultiPolygon<f64>> {
+        self.shapes.iter().cloned().reduce(|a, b| a.union(&b))
     }
 }

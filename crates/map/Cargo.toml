@@ -5,11 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-schema = { workspace = true }
+arrow = { workspace = true }
 geo = { workspace = true }
 geo-traits = { workspace = true }
-geoarrow = { workspace = true }
 geoarrow-array = { workspace = true }
 geoarrow-schema = { workspace = true }
 geoparquet = { workspace = true }

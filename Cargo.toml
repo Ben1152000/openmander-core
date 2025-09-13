@@ -25,12 +25,10 @@ edition = "2024"
 [workspace.dependencies]
 ahash = "0.8"
 anyhow = "1"
-arrow-array = "56"
-arrow-schema = "56"
+arrow = { version = "56", default-features = false }
 clap = { version = "4.0", features = ["derive"] }
 geo = "0.30"
 geo-traits = "0.3"
-geoarrow = "0.5"
 geoarrow-array = "0.5"
 geoarrow-schema = "0.5"
 geoparquet = "0.5"

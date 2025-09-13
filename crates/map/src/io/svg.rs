@@ -1,65 +1,46 @@
-use std::{fs::File, io::{BufWriter, Write}, path::Path};
+use std::{io::{Write}, path::Path};
 
-use anyhow::{anyhow, Context, Ok, Result};
+use anyhow::{anyhow, Ok, Result};
 use geo::{Coord, CoordsIter, LineString, MultiPolygon, Point};
 
-use crate::MapLayer;
+use crate::{common::*, MapLayer};
 
-fn write_svg_header(writer: &mut impl Write, width: f64, height: f64) -> Result<()> {
-    writeln!(writer, r##"<?xml version="1.0" encoding="UTF-8" standalone="no"?>"##)?;
-    writeln!(writer, r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">"##)?;
-    writeln!(writer, r##"<rect width="100%" height="100%" fill="#ffffff"/>"##)?;
-    Ok(())
-}
+/// Projection function: lon/lat -> SVG coords (x,y)
+type Projection = dyn Fn(&Coord<f64>) -> (f64, f64);
 
-fn write_svg_footer(writer: &mut impl Write) -> Result<()> {
-    writeln!(writer, "</svg>")?;
-    Ok(())
-}
-
-fn write_svg_styles(writer: &mut impl Write) -> Result<()> {
-    writeln!(writer, r##"<defs>
-  <style>
-    .blk {{ fill: #e5e7eb; stroke: #111827; stroke-width: 0.5; fill-opacity: 0.85; }}
-    .edge {{ stroke: #2563eb; stroke-opacity: 0.35; stroke-width: 0.6; }}
-    .dist {{ vector-effect: non-scaling-stroke; }}
-  </style>
-</defs>"##)?;
-    Ok(())
-}
-
-fn draw_polygons(
-    writer: &mut impl Write,
-    polygons: &[MultiPolygon<f64>],
-    project: &impl Fn(&Coord<f64>) -> (f64, f64)
-) -> Result<()> {
+fn draw_polygons(writer: &mut impl Write, polygons: &[MultiPolygon<f64>], project: &Projection) -> Result<()> {
     for polygon in polygons {
-        writeln!(writer, r#"<path class="blk" d="{}"/>"#, multipolygon_to_path(polygon, &project))?;
+        writeln!(writer, r#"<path class="blk" d="{}"/>"#, multipolygon_to_path(polygon, project))?;
     }
     Ok(())
 }
 
 /// Build a compact SVG path string for a MultiPolygon (exteriors + holes).
-fn multipolygon_to_path(shape: &MultiPolygon<f64>, project: &impl Fn(&Coord<f64>) -> (f64, f64)) -> String {
+fn multipolygon_to_path(shape: &MultiPolygon<f64>, project: &Projection) -> String {
     let mut out = String::new();
 
-    let mut ring_to_path = |ring: &LineString<f64>| {
-        let mut coords = ring.coords_iter()
-            .map(|coord| project(&coord));
-        if let Some((x, y)) = coords.next() {
-            out.push_str(&format!(" M{x:.3},{y:.3}"));
-            for (x, y) in coords {
-                out.push_str(&format!(" L{x:.3},{y:.3}"));
-            }
-            out.push('Z');
-        }
-    };
-
     for polygon in &shape.0 {
-        ring_to_path(polygon.exterior());
+        out.push_str(&ring_to_path(polygon.exterior(), project));
         for interior in polygon.interiors() {
-            ring_to_path(interior);
+            out.push_str(&ring_to_path(interior, project));
         }
+    }
+
+    out
+}
+
+/// Build a compact SVG path string for a LineString (ring).
+fn ring_to_path(ring: &LineString<f64>, project: &Projection) -> String {
+    let mut out = String::new();
+
+    let mut coords = ring.coords_iter()
+        .map(|coord| project(&coord));
+    if let Some((x, y)) = coords.next() {
+        out.push_str(&format!(" M{x:.3},{y:.3}"));
+        for (x, y) in coords {
+            out.push_str(&format!(" L{x:.3},{y:.3}"));
+        }
+        out.push('Z');
     }
 
     out
@@ -102,20 +83,16 @@ impl MapLayer {
         let height = bounds.height() * scale + 2.0 * margin;
 
         // --- Map lon/lat -> SVG coords (preserve aspect, Y down) ---
-        let project = |coord: &Coord<f64>| -> (f64, f64) {
+        let project = move |coord: &Coord<f64>| -> (f64, f64) {
             let x = margin + (coord.x - bounds.min().x) * scale;
             let y = margin + (bounds.max().y - coord.y) * scale; // invert vertically
             (x, y)
         };
 
         // --- Write SVG ---
-        let file = File::create(path)
-            .with_context(|| format!("[to_svg] Failed to create {}", path.display()))?;
-
-        let mut writer = BufWriter::new(file);
-
-        write_svg_header(&mut writer, width, height)?;
-        write_svg_styles(&mut writer)?;
+        let mut writer = SvgWriter::new(path)?;
+        writer.write_header(width, height)?;
+        writer.write_styles()?;
         draw_polygons(&mut writer, geoms.shapes(), &project)?;
 
         // Draw adjacency lines between centroids
@@ -128,11 +105,9 @@ impl MapLayer {
             .collect::<Vec<_>>();
         draw_edges(&mut writer, &edges, &project)?;
 
-        write_svg_footer(&mut writer)?;
-
+        writer.write_footer()?;
         writer.flush()?;
 
         Ok(())
     }
 }
-

@@ -28,7 +28,13 @@ cargo run -p openmander-cli -- redistrict IA_2020_pack -o IA_out.csv -d 4
 
 ### Python
 
-Build and install the wheel locally (requires [maturin]):
+Install using pip:
+
+```bash
+python -m pip install openmander
+```
+
+Or build and install the wheel locally (requires [maturin]):
 
 ```bash
 # from repo root

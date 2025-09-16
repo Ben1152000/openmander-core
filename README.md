@@ -26,6 +26,10 @@ cargo run -p openmander-cli -- download IA
 cargo run -p openmander-cli -- redistrict IA_2020_pack -o IA_out.csv -d 4
 ```
 
+Sample output:
+
+![Sample output](./sample.svg)
+
 ### Python
 
 Install using pip:

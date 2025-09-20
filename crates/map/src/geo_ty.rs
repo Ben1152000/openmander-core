@@ -27,21 +27,19 @@ impl GeoType {
     pub const BOTTOM: GeoType = Self::ALL[Self::COUNT - 1];
 
     /// Get the string representation of the GeoType.
-    #[inline]
-    pub fn to_str(&self) -> &'static str {
+    #[inline] pub fn to_str(&self) -> &'static str {
         match self {
-            GeoType::State => "state",
+            GeoType::State  => "state",
             GeoType::County => "county",
-            GeoType::Tract => "tract",
-            GeoType::Group => "group",
-            GeoType::VTD => "vtd",
-            GeoType::Block => "block",
+            GeoType::Tract  => "tract",
+            GeoType::Group  => "group",
+            GeoType::VTD    => "vtd",
+            GeoType::Block  => "block",
         }
     }
 
     /// Get the expected length of the GEOID string for this GeoType.
-    #[inline]
-    pub fn id_len(&self) -> usize {
+    #[inline] pub fn id_len(&self) -> usize {
         match self {
             GeoType::State  => 2,
             GeoType::County => 5,

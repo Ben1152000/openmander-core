@@ -8,7 +8,7 @@ dynamic = ["version"]
 requires-python = ">=3.8"
 description = "OpenMander: a redistricting toolkit in Rust with Python bindings"
 readme = { file = "README.md", content-type = "text/markdown" }
-# license = {file = "LICENSE"}
+# license = { file = "LICENSE" }
 authors = [{ name = "Benjamin Darnell" }]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -24,4 +24,5 @@ sdist-include = [
   "README.md",
   "LICENSE",
   "src/**",
+  "demo.ipynb",
 ]

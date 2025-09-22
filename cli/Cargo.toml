@@ -6,6 +6,6 @@ publish = false
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true }
+clap = { version = "4.0", features = ["derive"] }
 
 openmander = { path = ".." }

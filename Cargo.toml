@@ -28,7 +28,6 @@ ahash = "0.8"
 anyhow = "1"
 arrow-array = "56"
 arrow-schema = "56"
-clap = { version = "4.0", features = ["derive"] }
 geo = "0.30"
 geo-traits = "0.3"
 geoarrow-array = "0.5"

@@ -46,7 +46,7 @@ $(PYTHON):
 
 # Install Python-side build/test deps into the venv
 deps: venv
-	$(PIP) install -U maturin pytest numpy
+	$(PIP) install -U maturin ipykernel
 
 # (Optional) ensure rust target is available if TARGET is set
 prepare-target:

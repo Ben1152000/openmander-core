@@ -1,7 +1,8 @@
 use std::{fs::File, path::Path, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
-use arrow::{array::RecordBatch, datatypes::Schema};
+use arrow_array::RecordBatch;
+use arrow_schema::Schema;
 use geo_traits::to_geo::ToGeoMultiPolygon;
 use geoarrow_array::{array::MultiPolygonArray, builder::MultiPolygonBuilder, GeoArrowArray, GeoArrowArrayAccessor};
 use geoarrow_schema::{Dimension, MultiPolygonType};

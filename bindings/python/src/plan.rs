@@ -81,6 +81,13 @@ impl Plan {
         )
     }
 
+    pub fn anneal_balance<'py>(&mut self, py: Python<'py>, series: &str, max_iter: usize, initial_temp: f64, final_temp: f64, boundary_factor: f64) -> PyResult<()> {
+        py.allow_threads(||
+            self.inner.anneal_balance(series, max_iter, initial_temp, final_temp, boundary_factor)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        )
+    }
+
     /// Load assignments from a CSV path (same validation as Rust `load_csv`)
     pub fn load_csv(&mut self, path: &str) -> PyResult<()> {
         self.inner.load_csv(&PathBuf::from(path))

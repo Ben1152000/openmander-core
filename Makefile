@@ -56,10 +56,12 @@ endif
 
 # Build & install the package into the venv (like editable)
 dev: deps prepare-target
+	. $(VENV)/bin/activate
 	$(MATURIN) develop $(PROFILE_FLAG) $(TARGET_FLAG) $(MANIFEST)
 
 # Build wheel(s) into target/wheels
 wheel: deps prepare-target
+	. $(VENV)/bin/activate
 	$(MATURIN) build $(PROFILE_FLAG) $(TARGET_FLAG) $(MANIFEST)
 
 # Run tests (from the bindings dir so relative tests work)

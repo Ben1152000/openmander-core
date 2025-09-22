@@ -3,7 +3,7 @@ use std::{path::Path};
 use anyhow::{Context, Ok, Result};
 use openmander_common as common;
 use openmander_geom::Geometries;
-use polars::prelude::*;
+use polars::frame::DataFrame;
 
 use crate::{GeoId, GeoType, Map, MapLayer, ParentRefs};
 
@@ -14,32 +14,37 @@ impl MapLayer {
         let data_only = data.select_by_range(0..data.width()-5)
             .with_context(|| format!("Expected at least 6 columns in data, got {}", data.width()))?;
 
-        let state_refs = data.column("parent_state").ok().map(|c| c.str()).transpose()?;
-        let county_refs = data.column("parent_county").ok().map(|c| c.str()).transpose()?;
-        let tract_refs = data.column("parent_tract").ok().map(|c| c.str()).transpose()?;
-        let group_refs = data.column("parent_group").ok().map(|c| c.str()).transpose()?;
-        let vtd_refs = data.column("parent_vtd").ok().map(|c| c.str()).transpose()?;
-
         let parents = (0..data_only.height()).map(|i| {
             Ok(ParentRefs::new([
-                state_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::State, s))),
-                county_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::County, s))),
-                tract_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::Tract, s))),
-                group_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::Group, s))),
-                vtd_refs.and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::VTD, s))),
+                data.column("parent_state").ok()
+                    .map(|c| c.str()).transpose()?
+                    .and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::State, s))),
+                data.column("parent_county").ok()
+                    .map(|c| c.str()).transpose()?
+                    .and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::County, s))),
+                data.column("parent_tract").ok()
+                    .map(|c| c.str()).transpose()?
+                    .and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::Tract, s))),
+                data.column("parent_group").ok()
+                    .map(|c| c.str()).transpose()?
+                    .and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::Group, s))),
+                data.column("parent_vtd").ok()
+                    .map(|c| c.str()).transpose()?
+                    .and_then(|c| c.get(i).map(|s| GeoId::new(GeoType::VTD, s))),
             ]))
-        }).collect::<Result<Vec<_>>>()?;
+        }).collect::<Result<_>>()?;
 
         Ok((data_only, parents))
     }
 
     fn read_from_pack(&mut self, path: &Path) -> Result<()> {
         let layer_name = self.ty().to_str();
-        let entity_path = path.join(format!("data/{layer_name}.parquet"));
-        let geom_path = path.join(format!("geom/{layer_name}.geoparquet"));
         let adj_path = path.join(format!("adj/{layer_name}.csr.bin"));
+        let data_path = path.join(format!("data/{layer_name}.parquet"));
+        let geom_path = path.join(format!("geom/{layer_name}.geoparquet"));
+        let hull_path = path.join(format!("hull/{layer_name}.geoparquet"));
 
-        (self.data, self.parents) = self.unpack_data(common::read_from_parquet(&entity_path)?)?;
+        (self.data, self.parents) = self.unpack_data(common::read_from_parquet(&data_path)?)?;
 
         self.geo_ids = self.data.column("geo_id")?.str()?
             .into_no_null_iter()
@@ -51,8 +56,16 @@ impl MapLayer {
             .collect();
 
         if self.ty() != GeoType::State {
-            (self.adjacencies, self.shared_perimeters) = common::read_from_weighted_csr(&adj_path)?;
+            (self.adjacencies, self.edge_lengths) = common::read_from_weighted_csr(&adj_path)?;
             self.construct_graph();
+        }
+
+        if hull_path.exists() {
+            self.hulls = Some(
+                common::read_from_geoparquet(&hull_path)?.into_iter()
+                    .flat_map(|mp| mp.0)
+                    .collect()
+            );
         }
 
         if geom_path.exists() { 

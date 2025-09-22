@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use anyhow::Result;
-use geo::{MultiPolygon, Point, Rect};
+use geo::{MultiPolygon, Point, Polygon, Rect};
 use openmander_geom::Geometries;
 use openmander_graph::Graph;
 use polars::{frame::DataFrame, prelude::DataType};
@@ -12,13 +12,14 @@ use crate::{GeoId, GeoType, ParentRefs};
 pub struct MapLayer {
     ty: GeoType,
     pub(crate) geo_ids: Vec<GeoId>,
-    pub(crate) index: HashMap<GeoId, u32>, // Map between geo_ids and per-level contiguous indices
-    pub(crate) parents: Vec<ParentRefs>, // References to parent entities (higher level types)
-    pub(crate) data: DataFrame, // Entity data (incl. name, centroid, geographic data, election data)
-    pub(crate) adjacencies: Vec<Vec<u32>>,
-    pub(crate) shared_perimeters: Vec<Vec<f64>>,
-    pub(crate) graph: Arc<Graph>, // Graph representation of layer used for partitioning
-    pub(crate) geoms: Option<Geometries>, // Per-level geometry store, indexed by entities
+    pub(crate) index: HashMap<GeoId, u32>,  // Map between geo_ids and per-level contiguous indices
+    pub(crate) parents: Vec<ParentRefs>,    // References to parent entities (higher level types)
+    pub(crate) data: DataFrame,             // Entity data (incl. name, centroid, geographic data, election data)
+    pub(crate) adjacencies: Vec<Vec<u32>>,  // Adjacency list of contiguous indices
+    pub(crate) edge_lengths: Vec<Vec<f64>>, // Shared perimeter lengths for adjacencies
+    pub(crate) hulls: Option<Vec<Polygon<f64>>>,    // Approximate hulls for each entity (todo: remove option)
+    pub(crate) graph: Arc<Graph>,           // Graph representation of layer used for partitioning
+    pub(crate) geoms: Option<Geometries>,   // Per-level geometry store, indexed by entities
 }
 
 impl MapLayer {
@@ -30,14 +31,15 @@ impl MapLayer {
             parents: Vec::new(),
             data: DataFrame::empty(),
             adjacencies: Vec::new(),
-            shared_perimeters: Vec::new(),
+            edge_lengths: Vec::new(),
+            hulls: Some(Vec::new()),
             graph: Arc::new(Graph::default()),
             geoms: None,
         }
     }
 
     /// Create a MapLayer from a DataFrame and optional Geometries.
-    pub(crate) fn from_dataframe(ty: GeoType, df: DataFrame, geoms: Option<Geometries>) -> Result<Self> {
+    pub(crate) fn from_dataframe(ty: GeoType, df: DataFrame) -> Result<Self> {
         let size = df.height();
 
         let geo_ids = df.column("geo_id")?.str()?
@@ -56,74 +58,12 @@ impl MapLayer {
             parents: vec![ParentRefs::default(); size],
             data: df,
             adjacencies: vec![Vec::new(); size],
-            shared_perimeters: vec![Vec::new(); size],
+            edge_lengths: vec![Vec::new(); size],
+            hulls: None, // vec![Polygon::empty(); size],
             graph: Arc::default(),
-            geoms,
+            geoms: None,
         })
     }
-
-    /// Get the number of entities in this layer.
-    #[inline] pub fn len(&self) -> usize { self.geo_ids.len() }
-
-    /// Check if the layer is empty (no entities).
-    #[inline] pub fn is_empty(&self) -> bool { self.geo_ids.is_empty() }
-
-    /// Get the geographic type of this layer.
-    #[inline] pub fn ty(&self) -> GeoType { self.ty }
-
-    /// Get a reference to the list of GeoIds in this layer.
-    #[inline] pub fn geo_ids(&self) -> &Vec<GeoId> { &self.geo_ids }
-
-    /// Get a reference to the index mapping GeoIds to contiguous indices.
-    #[inline] pub fn index(&self) -> &HashMap<GeoId, u32> { &self.index }
-
-    /// Get a reference to the list of ParentRefs for each entity in this layer.
-    #[inline] pub fn parents(&self) -> &Vec<ParentRefs> { &self.parents }
-
-    /// Get a reference to the DataFrame containing entity data for this layer.
-    #[inline] pub fn data(&self) -> &DataFrame { &self.data }
-
-    /// Get a reference to the adjacency list for this layer.
-    #[inline] pub fn adjacencies(&self) -> &Vec<Vec<u32>> { &self.adjacencies }
-
-    /// Get a reference to the shared perimeter weights for this layer.
-    #[inline] pub fn shared_perimeters(&self) -> &Vec<Vec<f64>> { &self.shared_perimeters }
-
-    /// Get an Arc clone of the graph representation of this layer.
-    #[inline] pub fn graph_handle(&self) -> Arc<Graph> { self.graph.clone() }
-
-    /// Get a reference to the shape data (if any) for this layer.
-    #[inline] pub fn shapes(&self) -> Option<&Vec<MultiPolygon<f64>>> {
-        self.geoms.as_ref().and_then(|geoms| Some(geoms.shapes()))
-    }
-
-    /// Get the bounding rectangle of all geometries in this layer, if available.
-    #[inline] pub fn bounds(&self) -> Option<Rect<f64>> { self.geoms.as_ref()?.bounds() }
-
-    /// Get centroid lon/lat for each entity, preferring DataFrame columns if present, else computing from geometry.
-    pub fn centroids(&self) -> Vec<Point<f64>> {
-        if let (Some(lon_column), Some(lat_column)) = (
-            self.data.column("centroid_lon").ok()
-                .and_then(|column| column.f64().ok()),
-            self.data.column("centroid_lat").ok()
-                .and_then(|column| column.f64().ok())
-        ) {
-            assert_eq!(lon_column.len(), self.len(), "Expected centroid_lon length {} to match number of entities {}", lon_column.len(), self.len());
-            assert_eq!(lat_column.len(), self.len(), "Expected centroid_lat length {} to match number of entities {}", lat_column.len(), self.len());
-
-            lon_column.into_iter().zip(lat_column.into_iter())
-                .map(|(lon, lat)| Point::new(lon.unwrap_or(f64::NAN), lat.unwrap_or(f64::NAN)))
-                .collect()
-        } else if let Some(geoms) = &self.geoms {
-            assert_eq!(geoms.len(), self.len(), "Expected geoms length {} to match number of entities {}", geoms.len(), self.len());
-            geoms.centroids()
-        } else { vec![Point::new(f64::NAN, f64::NAN); self.len()] }
-    }
-
-    /// Get the union of all MultiPolygons in this layer into a single MultiPolygon.
-    /// Returns None if there are no geometries.
-    /// Note: this can be slow for large numbers of complex polygons.
-    #[inline] pub fn union(&self) -> Option<MultiPolygon<f64>> { self.geoms.as_ref()?.union() }
 
     /// Construct a graph representation of the layer for partitioning.
     /// Requires data, adjacencies, and shared_perimeters to be computed first.
@@ -156,10 +96,78 @@ impl MapLayer {
         self.graph = Arc::new(Graph::new(
             self.len(),
             &self.adjacencies,
-            &self.shared_perimeters,
+            &self.edge_lengths,
             weights_i64,
             weights_f64,
         ));
+    }
+
+    /// Get the number of entities in this layer.
+    #[inline] pub fn len(&self) -> usize { self.geo_ids.len() }
+
+    /// Check if the layer is empty (no entities).
+    #[inline] pub fn is_empty(&self) -> bool { self.geo_ids.is_empty() }
+
+    /// Get the geographic type of this layer.
+    #[inline] pub fn ty(&self) -> GeoType { self.ty }
+
+    /// Get a reference to the list of GeoIds in this layer.
+    #[inline] pub fn geo_ids(&self) -> &Vec<GeoId> { &self.geo_ids }
+
+    /// Get a reference to the index mapping GeoIds to contiguous indices.
+    #[inline] pub fn index(&self) -> &HashMap<GeoId, u32> { &self.index }
+
+    /// Get a reference to the list of ParentRefs for each entity in this layer.
+    #[inline] pub fn parents(&self) -> &Vec<ParentRefs> { &self.parents }
+
+    /// Get a reference to the DataFrame containing entity data for this layer.
+    #[inline] pub fn data(&self) -> &DataFrame { &self.data }
+
+    /// Get a reference to the adjacency list for this layer.
+    #[inline] pub fn adjacencies(&self) -> &Vec<Vec<u32>> { &self.adjacencies }
+
+    /// Get a reference to the shared perimeter weights for this layer.
+    #[inline] pub fn shared_perimeters(&self) -> &Vec<Vec<f64>> { &self.edge_lengths }
+
+    /// Get the approximate convex hulls of all MultiPolygons in this layer, if geometries are present.
+    #[inline] pub fn hulls(&self) -> Option<&Vec<Polygon<f64>>> { self.hulls.as_ref() }
+
+    /// Get an Arc clone of the graph representation of this layer.
+    #[inline] pub fn graph_handle(&self) -> Arc<Graph> { self.graph.clone() }
+
+    /// Get a reference to the shapes for this layer, if available.
+    #[inline] pub fn shapes(&self) -> Option<&Vec<MultiPolygon<f64>>> { Some(self.geoms.as_ref()?.shapes()) }
+
+    /// Get the bounding rectangle of all geometries in this layer, if available.
+    #[inline] pub fn bounds(&self) -> Option<Rect<f64>> { self.geoms.as_ref()?.bounds() }
+
+    /// Get the union of all MultiPolygons in this layer into a single MultiPolygon.
+    /// Note that this can be computationally expensive for large layers.
+    #[inline] pub fn union(&self) -> Option<MultiPolygon<f64>> { self.geoms.as_ref()?.union() }
+
+    /// Get centroid lon/lat for each entity, preferring DataFrame columns if present, else computing from geometry.
+    pub fn centroids(&self) -> Vec<Point<f64>> {
+        if let (Some(lon_column), Some(lat_column)) = (
+            self.data.column("centroid_lon").ok()
+                .and_then(|column| column.f64().ok()),
+            self.data.column("centroid_lat").ok()
+                .and_then(|column| column.f64().ok())
+        ) {
+            assert_eq!(lon_column.len(), self.len(), "Expected centroid_lon length {} to match number of entities {}", lon_column.len(), self.len());
+            assert_eq!(lat_column.len(), self.len(), "Expected centroid_lat length {} to match number of entities {}", lat_column.len(), self.len());
+
+            return lon_column.into_iter().zip(lat_column.into_iter())
+                .map(|(lon, lat)| Point::new(lon.unwrap_or(f64::NAN), lat.unwrap_or(f64::NAN)))
+                .collect()
+        }
+        
+        if let Some(geoms) = &self.geoms {
+            assert_eq!(geoms.len(), self.len(), "Expected geoms length {} to match number of entities {}", geoms.len(), self.len());
+
+            return geoms.centroids()
+        }
+
+        vec![Point::new(f64::NAN, f64::NAN); self.len()]
     }
 }
 
@@ -198,7 +206,7 @@ impl fmt::Debug for MapLayer {
         let mut sp_nnz = 0usize;
         let mut sp_sum = 0.0_f64;
         let mut sp_max = 0.0_f64;
-        for row in &self.shared_perimeters {
+        for row in &self.edge_lengths {
             sp_nnz += row.len();
             for &w in row {
                 sp_sum += w;

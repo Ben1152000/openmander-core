@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, fs::File, path::Path};
 
 use anyhow::{Context, Ok, Result};
+use geo::MultiPolygon;
 use openmander_common as common;
-use polars::prelude::*;
+use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
 
 use crate::{pack::manifest::{FileHash, Manifest}, GeoType, Map, MapLayer, ParentRefs};
 
@@ -25,11 +26,9 @@ impl MapLayer {
             "parent_vtd" => get_parents(&self.parents, GeoType::VTD),
         ]?;
 
-        Ok(
-            self.data
-                .inner_join(&parents_df, ["geo_id"], ["geo_id"])
-                .context("inner_join on 'geo_id' failed when preparing parquet")?
-        )
+        Ok(self.data
+            .inner_join(&parents_df, ["geo_id"], ["geo_id"])
+            .context("inner_join on 'geo_id' failed when preparing parquet")?)
     }
 
     fn write_to_pack(&self, path: &Path,
@@ -37,28 +36,37 @@ impl MapLayer {
         hashes: &mut BTreeMap<String, FileHash>
     ) -> Result<()> {
         let layer_name = self.ty().to_str();
-        let entity_path = &format!("data/{layer_name}.parquet");
-        let adj_path = &format!("adj/{layer_name}.csr.bin");
-        let geom_path = &format!("geom/{layer_name}.geoparquet");
+        let adj_file = &format!("adj/{layer_name}.csr.bin");
+        let data_file = &format!("data/{layer_name}.parquet");
+        let geom_file = &format!("geom/{layer_name}.geoparquet");
+        let hull_file = &format!("hull/{layer_name}.geoparquet");
 
         counts.insert(layer_name.into(), self.geo_ids.len());
 
         // entities
-        common::write_to_parquet(&path.join(entity_path), &self.pack_data()?)?;
-        let (k, h) = common::sha256_file(entity_path, path)?;
+        common::write_to_parquet(&path.join(data_file), &self.pack_data()?)?;
+        let (k, h) = common::sha256_file(data_file, path)?;
         hashes.insert(k, FileHash { sha256: h });
 
         // adjacencies (CSR)
         if self.ty() != GeoType::State {
-            common::write_to_weighted_csr(&path.join(adj_path), &self.adjacencies, &self.shared_perimeters)?;
-            let (k, h) = common::sha256_file(&adj_path, path)?;
+            common::write_to_weighted_csr(&path.join(adj_file), &self.adjacencies, &self.edge_lengths)?;
+            let (k, h) = common::sha256_file(&adj_file, path)?;
             hashes.insert(k, FileHash { sha256: h });
+        }
+
+        // convex hulls
+        if let Some(hulls) = &self.hulls {
+            common::write_to_geoparquet(&path.join(hull_file), &hulls.iter()
+                .map(|poly| MultiPolygon(vec![poly.clone()]))
+                .collect()
+            )?;
         }
 
         // geometries
         if let Some(geom) = &self.geoms {
-            common::write_to_geoparquet(&path.join(geom_path), &geom.shapes())?;
-            let (k, h) = common::sha256_file(geom_path, path)?;
+            common::write_to_geoparquet(&path.join(geom_file), &geom.shapes())?;
+            let (k, h) = common::sha256_file(geom_file, path)?;
             hashes.insert(k, FileHash { sha256: h });
         }
 
@@ -68,7 +76,7 @@ impl MapLayer {
 
 impl Map {
     pub fn write_to_pack(&self, path: &Path) -> Result<()> {
-        let dirs = ["data", "adj", "geom"];
+        let dirs = ["adj", "data", "geom", "hull"];
         common::ensure_dirs(path, &dirs)?;
 
         let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
@@ -81,8 +89,7 @@ impl Map {
         // Manifest
         let meta_path = path.join("manifest.json");
         let manifest = Manifest::new(path, counts, file_hashes);
-        let mut f = File::create(&meta_path)?;
-        serde_json::to_writer_pretty(&mut f, &manifest)?;
+        serde_json::to_writer_pretty(File::create(&meta_path)?, &manifest)?;
 
         Ok(())
     }

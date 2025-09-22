@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Context, Ok, Result};
 use openmander_common as common;
 use openmander_geom::Geometries;
 use polars::{frame::DataFrame, prelude::*, series::Series};
-use shapefile::{dbase::{FieldValue, Record}};
+use shapefile::dbase::{FieldValue, Record};
 
 use crate::{GeoId, GeoType, Map, MapLayer, ParentRefs};
 
@@ -12,7 +12,6 @@ impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.
     fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<Self> {
         let (shapes, records) = common::read_from_shapefile(path)?;
-        let epsg = common::epsg_from_shapefile(path);
 
         /// Convert a vector of records to a DataFrame (using TIGER/PL census format)
         fn records_to_dataframe(records: Vec<Record>, ty: GeoType) -> Result<DataFrame> {
@@ -92,16 +91,18 @@ impl MapLayer {
         let df = records_to_dataframe(records, ty)?
             .with_row_index("idx".into(), None)?;
 
+        let mut layer = Self::from_dataframe(ty, df)?;
+
         // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64>
-        let geoms = Geometries::new(
+        layer.geoms = Some(Geometries::new(
             &shapes.into_iter()
                 .map(|shape| common::shape_to_multipolygon(shape))
                 .collect::<Result<Vec<_>>>()
                 .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?,
-            epsg,
-        );
+            common::epsg_from_shapefile(path),
+        ));
 
-        Self::from_dataframe(ty, df, Some(geoms))
+        Ok(layer)
     }
 
     /// Initialize layer with a list of geo_ids, replacing existing data.
@@ -161,6 +162,7 @@ impl MapLayer {
         let geoms = self.geoms.as_mut()
             .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?;
         self.adjacencies = geoms.compute_adjacencies_fast(1e8)?;
+
         Ok(())
     }
 
@@ -168,7 +170,17 @@ impl MapLayer {
     fn compute_shared_perimeters(&mut self) -> Result<()> {
         let geoms = self.geoms.as_mut()
             .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
-        self.shared_perimeters = geoms.compute_shared_perimeters_fast(&self.adjacencies, 1e8)?;
+        self.edge_lengths = geoms.compute_shared_perimeters_fast(&self.adjacencies, 1e8)?;
+
+        Ok(())
+    }
+
+    /// Compute approximate convex hulls for all MultiPolygons in this layer, if geometries are present.
+    fn compute_approximate_hulls(&mut self, num_points: usize) -> Result<()> {
+        let geoms = self.geoms.as_ref()
+            .ok_or_else(|| anyhow!("Cannot compute hulls on empty geometry!"))?;
+        self.hulls = Some(geoms.approximate_hulls(num_points));
+
         Ok(())
     }
 }
@@ -305,15 +317,6 @@ impl Map {
         Ok(())
     }
 
-    /// Compute shared perimeters for all layers, if geometries exist.
-    fn compute_shared_perimeters(&mut self) -> Result<()> {
-        for layer in self.get_layers_mut() {
-            layer.compute_shared_perimeters()?;
-        }
-
-        Ok(())
-    }
-
     /// Build a map pack from the download files in `input_dir`
     pub fn build_pack(input_dir: &Path, state_code: &str, fips: &str, verbose: u8) -> Result<Self> {
         common::require_dir_exists(input_dir)?;
@@ -398,11 +401,18 @@ impl Map {
         map.compute_adjacencies()?;
 
         if verbose > 0 { eprintln!("[build_pack] computing shared perimeters"); }
-        map.compute_shared_perimeters()?;
+        for layer in map.get_layers_mut() {
+            layer.compute_shared_perimeters()?
+        }
+
+        if verbose > 0 { eprintln!("[build_pack] computing approximate hulls"); }
+        for layer in map.get_layers_mut() {
+            layer.compute_approximate_hulls(16)?
+        }
 
         if verbose > 0 { eprintln!("[build_pack] constructing graphs"); }
         for layer in map.get_layers_mut() {
-            layer.construct_graph();
+            layer.construct_graph()
         }
 
         Ok(map)

@@ -1,33 +1,11 @@
-use std::{collections::{HashMap, HashSet}, fs::File, io::{BufWriter, Write}, path::Path};
+use std::{collections::{HashMap, HashSet}, io::Write, path::Path};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use geo::{Coord, CoordsIter, LineString, MultiPolygon};
+use openmander_common as common;
 use openmander_map::GeoType;
 
 use crate::Plan;
-
-fn write_svg_header(writer: &mut impl Write, width: f64, height: f64) -> Result<()> {
-    writeln!(writer, r##"<?xml version="1.0" encoding="UTF-8" standalone="no"?>"##)?;
-    writeln!(writer, r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">"##)?;
-    writeln!(writer, r##"<rect width="100%" height="100%" fill="#ffffff"/>"##)?;
-    Ok(())
-}
-
-fn write_svg_footer(writer: &mut impl Write) -> Result<()> {
-    writeln!(writer, "</svg>")?;
-    Ok(())
-}
-
-fn write_svg_styles(writer: &mut impl Write) -> Result<()> {
-    writeln!(writer, r##"<defs>
-  <style>
-    .blk {{ fill: #e5e7eb; stroke: #111827; stroke-width: 0.5; fill-opacity: 0.85; }}
-    .edge {{ stroke: #2563eb; stroke-opacity: 0.35; stroke-width: 0.6; }}
-    .dist {{ vector-effect: non-scaling-stroke; }}
-  </style>
-</defs>"##)?;
-    Ok(())
-}
 
 /// Projection function: lon/lat -> SVG coords (x,y)
 type Projection = dyn Fn(&Coord<f64>) -> (f64, f64);
@@ -52,7 +30,7 @@ impl Plan {
     /// Draw dissolved districts using only frontier blocks + state boundary.
     pub fn to_svg_with_size(&self, path: &Path, width: i32, margin: i32) -> Result<()> {
         let bounds = self.map().get_layer(GeoType::Block).bounds()
-            .ok_or_else(|| anyhow!("[Plan::to_svg] Could not determine bounds; nothing to draw."))?;
+            .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?;
 
         let margin = margin as f64;
         let width = width as f64;
@@ -83,12 +61,9 @@ impl Plan {
         };
 
         // --- Write SVG ---
-        let file = File::create(path)
-            .with_context(|| format!("[Plan::to_svg] Failed to create {}", path.display()))?;
-        let mut writer = BufWriter::new(file);
-
-        write_svg_header(&mut writer, width, height)?;
-        write_svg_styles(&mut writer)?;
+        let mut writer = common::SvgWriter::new(path)?;
+        writer.write_header(width, height)?;
+        writer.write_styles()?;
 
         // Draw each district as a single dissolved path (holes supported via even-odd fill).
         for d in 1..=self.num_districts() as usize {
@@ -103,7 +78,7 @@ impl Plan {
             }
         }
 
-        write_svg_footer(&mut writer)?;
+        writer.write_footer()?;
         writer.flush()?;
         Ok(())
     }

@@ -8,5 +8,6 @@ anyhow = { workspace = true }
 geo = { workspace = true }
 polars = { workspace = true }
 
+openmander-common = { path = "../common" }
 openmander-map = { path = "../map" }
 openmander-partition = { path = "../partition" }

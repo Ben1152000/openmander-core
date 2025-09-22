@@ -38,14 +38,17 @@ impl Geometries {
     #[inline] pub fn epsg(&self) -> u32 { self.epsg.unwrap_or(4269) }
 
     /// Query the R-tree for bounding boxes intersecting the given envelope.
-    #[inline] pub fn query(&self, envelope: &AABB<[f64; 2]>) -> impl Iterator<Item=&BoundingBox> {
+    #[inline]
+    pub fn query(&self, envelope: &AABB<[f64; 2]>) -> impl Iterator<Item=&BoundingBox> {
         self.rtree.locate_in_envelope_intersecting(envelope)
     }
 
     /// Compute the bounding rectangle of all MultiPolygons.
-    #[inline] pub fn bounds(&self) -> Option<Rect<f64>> {
-        fn union(a: Rect<f64>, b: Rect<f64>) -> Rect<f64> {
-            Rect::new(
+    #[inline]
+    pub fn bounds(&self) -> Option<Rect<f64>> {
+        self.shapes.iter()
+            .filter_map(|polygon| polygon.bounding_rect())
+            .reduce(|a, b| Rect::new(
                 Coord {
                     x: a.min().x.min(b.min().x),
                     y: a.min().y.min(b.min().y),
@@ -54,16 +57,12 @@ impl Geometries {
                     x: a.max().x.max(b.max().x),
                     y: a.max().y.max(b.max().y),
                 }
-            )
-        }
-
-        self.shapes.iter()
-            .filter_map(|polygon| polygon.bounding_rect())
-            .reduce(union)
+            ))
     }
 
     /// Compute the centroids of all MultiPolygons.
-    #[inline] pub fn centroids(&self) -> Vec<Point<f64>> {
+    #[inline]
+    pub fn centroids(&self) -> Vec<Point<f64>> {
         self.shapes.iter()
             .map(|polygon| polygon.centroid()
                 .unwrap_or(Point::new(f64::NAN, f64::NAN)))
@@ -71,9 +70,9 @@ impl Geometries {
     }
 
     /// Compute the union of all MultiPolygons into a single MultiPolygon.
-    /// Returns None if there are no shapes.
-    /// Note: this can be slow for large numbers of complex polygons.
-    #[inline] pub fn union(&self) -> Option<MultiPolygon<f64>> {
+    /// This method may be slow for large numbers of complex polygons.
+    #[inline]
+    pub fn union(&self) -> Option<MultiPolygon<f64>> {
         self.shapes.iter().cloned().reduce(|a, b| a.union(&b))
     }
 }

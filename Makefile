@@ -1,4 +1,4 @@
-# Top-level Makefile for openmander-core
+# Top-level Makefile for openmander python bindings
 # Usage examples:
 #   make dev                       # build & install in venv (default MODE=release)
 #   make dev MODE=dev              # debug build via maturin develop
@@ -36,6 +36,9 @@ PROFILE_FLAG := $(if $(filter $(MODE),release),--release,)
 TARGET_FLAG  := $(if $(TARGET),--target $(TARGET),)
 WHEEL_DIR    := target/wheels
 
+# Make `help` the default when you just run `make`
+.DEFAULT_GOAL := help
+
 .PHONY: venv deps dev wheel test otool clean clean-all print-vars help prepare-target
 
 # Create/refresh the virtual environment (but don't auto-install deps here)
@@ -56,12 +59,12 @@ endif
 
 # Build & install the package into the venv (like editable)
 dev: deps prepare-target
-	. $(VENV)/bin/activate
+	source $(VENV)/bin/activate && \
 	$(MATURIN) develop $(PROFILE_FLAG) $(TARGET_FLAG) $(MANIFEST)
 
 # Build wheel(s) into target/wheels
 wheel: deps prepare-target
-	. $(VENV)/bin/activate
+	source $(VENV)/bin/activate && \
 	$(MATURIN) build $(PROFILE_FLAG) $(TARGET_FLAG) $(MANIFEST)
 
 # Run tests (from the bindings dir so relative tests work)

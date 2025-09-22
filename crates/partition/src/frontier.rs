@@ -56,9 +56,15 @@ impl FrontierSet {
     /// Read-only view of frontier nodes for part p.
     #[inline] pub fn get(&self, part: u32) -> &[usize] { &self.lists[part as usize] }
 
+    /// Iterator over frontier nodes for each part (as slices).
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &[usize]> + '_ {
+        self.lists.iter().map(|v| v.as_slice())
+    }
+
     /// Iterator over all nodes currently present (across all parts).
     #[inline]
-    pub fn _items_iter(&self) -> impl Iterator<Item = usize> + '_ {
+    pub fn _iter_all(&self) -> impl Iterator<Item = usize> + '_ {
         self.lists.iter().flat_map(|v| v.iter().copied())
     }
 

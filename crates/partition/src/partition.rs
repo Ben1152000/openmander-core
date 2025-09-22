@@ -8,12 +8,12 @@ use crate::frontier::FrontierSet;
 /// A partition of a graph into contiguous parts (districts).
 #[derive(Debug)]
 pub struct Partition {
-    num_parts: u32, // Fixed number of parts (including unassigned 0)
-    graph: Arc<Graph>, // Fixed graph structure
-    pub(crate) assignments: Array1<u32>, // Current part assignment for each node, len = n
-    pub(crate) boundary: Array1<bool>, // Whether each node is on a part boundary, len = n
-    pub(crate) frontiers: FrontierSet, // Nodes on the boundary of each part
-    pub(crate) part_sizes: Vec<usize>, // Number of nodes in each part, len = num_parts
+    num_parts: u32,                        // Fixed number of parts (including unassigned 0)
+    graph: Arc<Graph>,                     // Fixed graph structure
+    pub(crate) assignments: Array1<u32>,   // Current part assignment for each node, len = n
+    pub(crate) boundary: Array1<bool>,     // Whether each node is on a part boundary, len = n
+    pub(crate) frontiers: FrontierSet,     // Nodes on the boundary of each part
+    pub(crate) part_sizes: Vec<usize>,     // Number of nodes in each part, len = num_parts
     pub(crate) part_weights: WeightMatrix, // Aggregated weights for each part
 }
 

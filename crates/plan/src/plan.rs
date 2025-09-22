@@ -71,4 +71,12 @@ impl Plan {
 
         Ok(self.partition.equalize(series, tolerance, max_iter))
     }
+
+    /// Anneal to balance total weights across all districts.
+    #[inline]
+    pub fn anneal_balance(&mut self, series: &str, max_iter: usize, initial_temp: f64, final_temp: f64, boundary_factor: f64) -> Result<()> {
+        self.partition.anneal_balance(series, max_iter, initial_temp, final_temp, boundary_factor);
+
+        Ok(())
+    }
 }

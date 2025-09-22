@@ -1,4 +1,4 @@
-use rand::{seq::IteratorRandom, Rng};
+use rand::{distr::{weighted::WeightedIndex, Distribution}, seq::IteratorRandom, Rng};
 
 use crate::partition::Partition;
 
@@ -41,6 +41,15 @@ impl Partition {
             .map(|v| self.assignments[v])
             .filter(|&p| p != self.assignments[node])
             .choose(rng)
+    }
+
+    /// Select a random district, weighted by frontier size.
+    pub fn random_part_weighted_by_frontier<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<u32> {
+        let weights = self.frontiers.iter()
+            .map(|set| set.len().saturating_sub(1))
+            .collect::<Vec<_>>();
+        let dist = WeightedIndex::new(&weights).ok()?; // None if all weights are zero
+        Some(dist.sample(rng) as u32)
     }
 
     /// Randomly assign all nodes to contiguous districts.

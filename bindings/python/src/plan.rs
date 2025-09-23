@@ -31,7 +31,7 @@ impl Plan {
 
     /// Get the list of weight series available in the map's node weights.
     pub fn get_series<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        Ok(PyList::new_bound(py, self.inner.get_series()))
+        Ok(PyList::new_bound(py, self.inner.series()))
     }
 
     /// Set block assignments from a Python dict { "block_geoid": district:int }.

@@ -5,7 +5,7 @@ use anyhow::{bail, Ok, Result};
 use crate::{map::{GeoId, GeoType, Map}, partition::Partition};
 
 /// A districting plan, assigning blocks to districts.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Plan {
     map: Arc<Map>,
     num_districts: u32, // number of districts (excluding unassigned 0)
@@ -31,10 +31,7 @@ impl Plan {
     #[inline] pub fn num_districts(&self) -> u32 { self.num_districts }
 
     /// Get the list of weight series available in the map's node weights.
-    #[inline]
-    pub fn get_series(&self) -> Vec<&str> {
-        self.partition.graph().node_weights().series()
-    }
+    #[inline] pub fn series(&self) -> Vec<&str> { self.partition.graph().node_weights().series() }
 
     /// Set the block assignments for the plan.
     #[inline]

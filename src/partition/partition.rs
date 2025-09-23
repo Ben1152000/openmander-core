@@ -5,7 +5,7 @@ use ndarray::Array1;
 use crate::{graph::{Graph, WeightMatrix}, partition::FrontierSet};
 
 /// A partition of a graph into contiguous parts (districts).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Partition {
     num_parts: u32,                        // Fixed number of parts (including unassigned 0)
     graph: Arc<Graph>,                     // Fixed graph structure

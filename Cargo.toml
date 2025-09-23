@@ -7,25 +7,11 @@ repository = "https://github.com/Ben1152000/openmander-core"
 readme = "README.md"
 keywords = ["redistricting", "geospatial", "graphs", "partition"]
 categories = ["science", "data-structures", "algorithms", "geospatial"]
-include = ["src/**", "crates/**", "Cargo.toml", "README.md", "LICENSE*"]
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE*"]
 
 [dependencies]
-openmander-map = { path = "crates/map" }
-openmander-pack = { path = "crates/pack" }
-openmander-plan = { path = "crates/plan" }
-
-[workspace]
-members = ["crates/*", "cli", "bindings/python"]
-resolver = "2"
-
-[workspace.package]
-version = "0.1.3"
-edition = "2024"
-# license = "MIT OR Apache-2.0"
-
-[workspace.dependencies]
 ahash = "0.8"
-anyhow = "1"
+anyhow = { workspace = true }
 arrow-array = "56"
 arrow-schema = "56"
 geo = "0.30"
@@ -50,3 +36,15 @@ smallvec = "1.15"
 tempfile = "3"
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[workspace]
+members = ["cli", "bindings/python"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.3"
+edition = "2024"
+# license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1"

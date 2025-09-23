@@ -1,11 +1,17 @@
 #![doc = "OpenMander public API"]
+mod common;
+mod geom;
+mod graph;
+mod map;
+mod pack;
+mod partition;
+mod plan;
 
-// Re-export top-level types:
 #[doc(inline)]
-pub use openmander_map::{GeoId, GeoType, Map, MapLayer};
+pub use map::{GeoId, GeoType, Map, MapLayer, ParentRefs};
 
 #[doc(inline)]
-pub use openmander_plan::Plan;
+pub use plan::Plan;
 
 #[doc(inline)]
-pub use openmander_pack::*;
+pub use pack::{build_pack, download_pack, validate_pack};

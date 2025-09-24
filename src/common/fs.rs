@@ -32,7 +32,7 @@ pub(crate) fn require_dir_exists(path: &Path) -> Result<()> {
 
 /// Extracts the given `.zip` file to the target directory.
 /// If `delete_after` is `true`, removes the `.zip` file after a successful extraction.
-pub(crate) fn extract_zip(zip_path: &Path, dest_dir: &Path, delete_after: bool) -> anyhow::Result<()> {
+pub(crate) fn extract_zip(zip_path: &Path, dest_dir: &Path, delete_after: bool) -> Result<()> {
     let file = File::open(zip_path)
         .map_err(|e| anyhow!("failed to open {:?}: {}", zip_path, e))?;
     let mut archive = ZipArchive::new(file)

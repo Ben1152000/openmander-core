@@ -10,23 +10,19 @@ categories = ["science", "data-structures", "algorithms", "geospatial"]
 include = ["src/**", "Cargo.toml", "README.md", "LICENSE*"]
 
 [dependencies]
-ahash = "0.8"
 anyhow = { workspace = true }
-arrow-array = "56"
-arrow-schema = "56"
+
+# Core dependencies
+ahash = "0.8"
 geo = "0.30"
 geo-traits = "0.3"
-geoarrow-array = "0.5"
-geoarrow-schema = "0.5"
-geoparquet = "0.5"
 hex = "0.4"
 ndarray = { version = "0.15", features = ["rayon"] }
-parquet = "56"
-polars = { version = "0.50", features = ["csv", "parquet", "lazy"] }
+polars = { version = "0.50", default-features = false, features = ["csv", "parquet", "polars-ops", "lazy", "fmt"] }
 proj4rs = "0.1"
 rand = "0.9"
 regex = "1"
-reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 rstar = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -36,6 +32,16 @@ smallvec = "1.15"
 tempfile = "3"
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Arrow/Parquet stack for data storage
+arrow-array = "56"
+arrow-schema = "56"
+parquet = "56"
+
+# GeoArrow/GeoParquet stack for geometry storage
+geoarrow-array = "0.5"
+geoarrow-schema = "0.5"
+geoparquet = "0.5"
 
 [workspace]
 members = ["cli", "bindings/python"]
@@ -48,3 +54,13 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1"
+
+[profile.min]
+inherits = "release"
+opt-level = "z"
+debug = false
+strip = true
+lto = true
+codegen-units = 1
+incremental = false
+panic = "abort"

@@ -1,6 +1,6 @@
 use std::{fs::File, path::Path};
 
-use anyhow::{Result};
+use anyhow::Result;
 use polars::{frame::DataFrame, io::SerReader, prelude::{CsvReadOptions, CsvReader}};
 
 /// Reads a CSV file from `path` into a Polars DataFrame.

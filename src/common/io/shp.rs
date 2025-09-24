@@ -2,8 +2,7 @@ use std::{fs, path::Path};
 
 use anyhow::{bail, Context, Result};
 use regex::Regex;
-use shapefile as shp;
-use shapefile::{dbase::Record, Reader, Shape};
+use shapefile::{self as shp, dbase::Record, Reader, Shape};
 
 /// Convert shapefile::Polygon to geo::MultiPolygon<f64>
 fn shp_to_geo(p: &shp::Polygon) -> geo::MultiPolygon<f64> {

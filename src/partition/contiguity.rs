@@ -11,7 +11,7 @@ impl Partition {
 
     /// Check if a node borders a given part.
     pub(crate) fn node_borders_part(&self, node: usize, part: u32) -> bool {
-        assert!(node < self.graph().len(), "node {} out of range", node);
+        assert!(node < self.graph().node_count(), "node {} out of range", node);
         assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
 
         self.graph().edges(node).any(|v| self.assignments[v] == part)
@@ -29,7 +29,7 @@ impl Partition {
     /// Check if moving `node` to a new part does not break contiguity.
     /// If `part` is 0 (unassigned), only checks if removing `node` breaks its current part.
     pub(crate) fn check_node_contiguity(&self, node: usize, part: u32) -> bool {
-        assert!(node < self.graph().len(), "node {} out of range", node);
+        assert!(node < self.graph().node_count(), "node {} out of range", node);
         assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
 
         let prev = self.assignments[node];
@@ -72,11 +72,11 @@ impl Partition {
         if min_degree == 1 { return false }
 
         // Track which same-part neighbors have been reached.
-        let mut is_neighbor = vec![false; self.graph().len()];
+        let mut is_neighbor = vec![false; self.graph().node_count()];
         for &u in &neighbors { is_neighbor[u] = true }
 
         // BFS from one neighbor within `part`, forbidding `node`.
-        let mut visited = vec![false; self.graph().len()];
+        let mut visited = vec![false; self.graph().node_count()];
         visited[node] = true;
         visited[neighbors[start]] = true;
 
@@ -107,9 +107,9 @@ impl Partition {
 
         // Deduplicate and validate indices.
         let mut subgraph = Vec::with_capacity(nodes.len());
-        let mut in_subgraph = vec![false; self.graph().len()];
+        let mut in_subgraph = vec![false; self.graph().node_count()];
         for &u in nodes {
-            assert!(u < self.graph().len(), "node {} out of range", u);
+            assert!(u < self.graph().node_count(), "node {} out of range", u);
             if !in_subgraph[u] { in_subgraph[u] = true; subgraph.push(u); }
         }
 
@@ -118,7 +118,7 @@ impl Partition {
 
         // Check if the subgraph itself is contiguous.
         let mut seen = 1 as usize;
-        let mut visited = vec![false; self.graph().len()];
+        let mut visited = vec![false; self.graph().node_count()];
         let mut queue = VecDeque::from([subgraph[0]]);
         visited[subgraph[0]] = true;
         while let Some(u) = queue.pop_front() {
@@ -143,7 +143,7 @@ impl Partition {
         'by_part: for part in parts {
             // Build boundary set in part: vertices in p adjacent to the subgraph.
             let mut boundary = Vec::new();
-            let mut in_boundary = vec![false; self.graph().len()];
+            let mut in_boundary = vec![false; self.graph().node_count()];
             for &u in subgraph.iter().filter(|&&u| self.assignments[u] == part) {
                 for v in self.graph().edges(u).filter(|&v| !in_subgraph[v] && self.assignments[v] == part) {
                     if !in_boundary[v] { in_boundary[v] = true; boundary.push(v) }
@@ -154,7 +154,7 @@ impl Partition {
             if boundary.len() <= 1 { continue }
 
             // BFS within part p, forbidding S, early exit once all targets seen.
-            let mut visited = vec![false; self.graph().len()];
+            let mut visited = vec![false; self.graph().node_count()];
             visited[boundary[0]] = true;
 
             let mut remaining = boundary.len() - 1;
@@ -182,8 +182,8 @@ impl Partition {
     pub(crate) fn find_components(&self, part: u32) -> Vec<Vec<usize>> {
         let mut components = Vec::new();
 
-        let mut visited = vec![false; self.graph().len()];
-        for u in (0..self.graph().len()).filter(|&u| self.assignments[u] == part) {
+        let mut visited = vec![false; self.graph().node_count()];
+        for u in (0..self.graph().node_count()).filter(|&u| self.assignments[u] == part) {
             if !visited[u] {
                 visited[u] = true;
                 let mut component = Vec::new();
@@ -238,7 +238,7 @@ impl Partition {
                     continue;
                 }
 
-                let mut in_component = vec![false; self.graph().len()];
+                let mut in_component = vec![false; self.graph().node_count()];
                 for &u in &component { in_component[u] = true; }
 
                 // Score candidate destination districts by boundary shared-perimeter weight.
@@ -266,7 +266,7 @@ impl Partition {
     /// If removing `u` from its current part splits it, return the smaller component(s)
     /// of the *previous* part that become disconnected from the rest *without u*.
     pub(crate) fn cut_subgraph_within_part(&self, node: usize) -> Vec<usize> {
-        assert!(node < self.graph().len(), "node {} out of range", node);
+        assert!(node < self.graph().node_count(), "node {} out of range", node);
 
         let part = self.assignments[node];
         if part == 0 { return vec![] }
@@ -284,8 +284,8 @@ impl Partition {
             .collect::<Vec<_>>();
 
         // Index of component that reached v, or usize::MAX if unvisited
-        let mut in_component = vec![usize::MAX; self.graph().len()];
-        in_component[node] = self.graph().len(); // mark removed
+        let mut in_component = vec![usize::MAX; self.graph().node_count()];
+        in_component[node] = self.graph().node_count(); // mark removed
         for i in 0..neighbors.len() { in_component[neighbors[i]] = i }
 
         // One queue per component seed (each neighbor).

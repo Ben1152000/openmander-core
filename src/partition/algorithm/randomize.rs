@@ -4,20 +4,26 @@ use crate::partition::Partition;
 
 impl Partition {
     /// Select a random block from the map.
-    pub(crate) fn random_node(&self) -> usize {
-        rand::rng().random_range(0..self.graph().len())
+    pub(crate) fn random_node(&self, rng: &mut impl Rng) -> usize {
+        rng.random_range(0..self.graph().node_count())
+    }
+
+    /// Select a random block from a given district.
+    /// Tries a few random probes first, then falls back to full O(n) scan.
+    pub(crate) fn random_node_from_part(&self, part: u32, rng: &mut impl Rng) -> Option<usize> {
+        for _ in 0..32 { // Fast path: a few random probes
+            let i = self.random_node(rng);
+            if self.assignments[i] == part { return Some(i); }
+        }
+        self.assignments.iter().enumerate()
+            .filter_map(|(i, &p)| (p == part).then_some(i))
+            .choose(rng)
     }
 
     /// Select a random unassigned block from the map.
     /// Tries a few random probes first, then falls back to full O(n) scan.
     pub(crate) fn random_unassigned_node(&self, rng: &mut impl Rng) -> Option<usize> {
-        for _ in 0..32 { // Fast path: a few random probes
-            let i = rng.random_range(0..self.assignments.len());
-            if self.assignments[i] == 0 { return Some(i); }
-        }
-        self.assignments.iter().enumerate()
-            .filter_map(|(i, &part)| (part == 0).then_some(i))
-            .choose(rng)
+        self.random_node_from_part(0, rng)
     }
 
     /// Select a random unassigned block from the map that is on a district boundary.
@@ -28,15 +34,15 @@ impl Partition {
 
     /// Select a random neighbor of a given block.
     pub(crate) fn random_edge(&self, node: usize, rng: &mut impl Rng) -> Option<usize> {
-        assert!(node < self.graph().len(), "node {} out of range", node);
-        if self.graph().is_isolated(node) { return None }
+        assert!(node < self.graph().node_count(), "node {} out of range", node);
+        if self.graph().degree(node) == 0 { return None }
         Some(self.graph().edge(node, rng.random_range(0..self.graph().degree(node)) as usize).unwrap())
     }
 
     /// Select a random neighboring district of a given block.
     pub(crate) fn random_neighboring_part(&self, node: usize, rng: &mut impl Rng) -> Option<u32> {
-        assert!(node < self.graph().len(), "node {} out of range", node);
-        if self.graph().is_isolated(node) { return None }
+        assert!(node < self.graph().node_count(), "node {} out of range", node);
+        if self.graph().degree(node) == 0 { return None }
         self.graph().edges(node)
             .map(|v| self.assignments[v])
             .filter(|&p| p != self.assignments[node])

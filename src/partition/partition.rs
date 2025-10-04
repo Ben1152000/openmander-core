@@ -24,16 +24,16 @@ impl Partition {
         let graph: Arc<Graph> = graph.into();
 
         let mut part_sizes = vec![0; num_parts];
-        part_sizes[0] = graph.len();
+        part_sizes[0] = graph.node_count();
 
         let mut part_weights = graph.node_weights().copy_of_size(num_parts);
         part_weights.set_row_to_sum_of(0, graph.node_weights());
 
         Self {
             num_parts: num_parts as u32,
-            assignments: Array1::<u32>::zeros(graph.len()),
-            boundary: Array1::<bool>::from_elem(graph.len(), false),
-            frontiers: FrontierSet::new(num_parts, graph.len()),
+            assignments: Array1::<u32>::zeros(graph.node_count()),
+            boundary: Array1::<bool>::from_elem(graph.node_count(), false),
+            frontiers: FrontierSet::new(num_parts, graph.node_count()),
             part_sizes,
             part_weights,
             graph,
@@ -59,7 +59,7 @@ impl Partition {
         self.frontiers.clear();
 
         self.part_sizes.fill(0);
-        self.part_sizes[0] = self.graph.len();
+        self.part_sizes[0] = self.graph.node_count();
 
         self.part_weights.clear_all_rows();
         self.part_weights.set_row_to_sum_of(0, self.graph.node_weights());
@@ -142,9 +142,9 @@ impl Partition {
 
         // Deduplicate and validate indices.
         let mut subgraph = Vec::with_capacity(nodes.len());
-        let mut in_subgraph = vec![false; self.graph.len()];
+        let mut in_subgraph = vec![false; self.graph.node_count()];
         for &u in nodes {
-            assert!(u < self.graph.len(), "node {} out of range", u);
+            assert!(u < self.graph.node_count(), "node {} out of range", u);
             if !in_subgraph[u] { in_subgraph[u] = true; subgraph.push(u); }
         }
 
@@ -161,7 +161,7 @@ impl Partition {
         for &u in &subgraph { self.assignments[u] = part }
 
         let mut boundary = Vec::with_capacity(subgraph.len() * 2);
-        let mut in_boundary = vec![false; self.graph.len()];
+        let mut in_boundary = vec![false; self.graph.node_count()];
         for &u in &subgraph {
             if !in_boundary[u] { in_boundary[u] = true; boundary.push(u); }
             self.graph.edges(u).for_each(|v| {
@@ -216,12 +216,12 @@ impl Partition {
         if !self.part_borders_part(a, b) { return None } // parts must be adjacent
 
         // Update assignments.
-        for u in 0..self.graph.len() {
+        for u in 0..self.graph.node_count() {
             if self.assignments[u] == b { self.assignments[u] = a }
         }
 
         // Update boundary and frontier sets.
-        for u in (0..self.graph.len()).filter(|&u| self.assignments[u] == a) {
+        for u in (0..self.graph.node_count()).filter(|&u| self.assignments[u] == a) {
             self.boundary[u] = self.graph.edges(u)
                 .any(|v| self.assignments[v] != self.assignments[u]);
             self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);

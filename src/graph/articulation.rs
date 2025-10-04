@@ -6,7 +6,7 @@ impl Graph {
     /// If `node` is an articulation point in the underlying undirected graph (ignoring assignments),
     /// return the nodes in the smaller components created by removing `node`.
     pub(crate) fn cut_subgraph(&self, node: usize) -> Vec<usize> {
-        assert!(node < self.len(), "node {} out of range", node);
+        assert!(node < self.node_count(), "node {} out of range", node);
 
         // If fewer than 2 neighbors, node cannot be an articulation point.
         let neighbors = self.edges(node).collect::<Vec<_>>();
@@ -17,8 +17,8 @@ impl Graph {
             .collect::<Vec<_>>();
 
         // Index of component that reached v, or usize::MAX if unvisited
-        let mut in_component = vec![usize::MAX; self.len()];
-        in_component[node] = self.len(); // mark removed
+        let mut in_component = vec![usize::MAX; self.node_count()];
+        in_component[node] = self.node_count(); // mark removed
         for i in 0..neighbors.len() { in_component[neighbors[i]] = i }
 
         // One queue per component seed (each neighbor).

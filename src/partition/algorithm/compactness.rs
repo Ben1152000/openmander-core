@@ -12,7 +12,7 @@ impl Partition {
     /// Get the perimeter of a part in meters.
     #[inline]
     fn perimeter(&self, part: u32) -> f64 {
-        self.frontiers.get(part).iter()
+        self.frontiers.get(part as usize).iter()
             .flat_map(|&u| self.graph().edges_with_weights(u))
             .filter_map(|(v, w)| (self.assignments[v] != part).then_some(w))
             .sum()

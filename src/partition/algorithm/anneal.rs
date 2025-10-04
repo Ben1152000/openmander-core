@@ -60,7 +60,7 @@ impl Partition {
             let src = self.random_part_weighted_by_frontier(&mut rng).unwrap();
 
             // Pick random node on part boundary (where part size > 1)
-            let candidates = self.frontiers.get(src);
+            let candidates = self.frontiers.get(src as usize);
             let node = candidates[rng.random_range(0..candidates.len())];
 
             // Pick random destination part (that neighbors node)

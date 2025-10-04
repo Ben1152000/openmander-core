@@ -22,7 +22,7 @@ impl Partition {
         assert!(a < self.num_parts() && b < self.num_parts() && a != b, 
             "a and b must be distinct parts in range [0, {})", self.num_parts());
 
-        let a_frontier = self.frontiers.get(a);
+        let a_frontier = self.frontiers.get(a as usize);
         a_frontier.iter().any(|&u| self.node_borders_part(u, b))
     }
 

@@ -24,7 +24,7 @@ impl Partition {
     fn sample_neighboring_parts(&self, part: u32, samples: usize, rng: &mut impl Rng) -> Vec<u32> {
         assert!(part < self.num_parts(), "part {} out of range", part);
 
-        let frontier = self.frontiers.get(part);
+        let frontier = self.frontiers.get(part as usize);
         if frontier.is_empty() { return vec![] }
 
         let mut neighbors = HashSet::new();
@@ -59,7 +59,7 @@ impl Partition {
 
         while remaining > 0.0 {
             // Pick a random candidate on the boundary of src.
-            let candidates = self.frontiers.get(src);
+            let candidates = self.frontiers.get(src as usize);
             let node = candidates[rng.random_range(0..candidates.len())];
 
             // Skip if not adjacent.
@@ -136,7 +136,7 @@ impl Partition {
                 if let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
                     println!("Merged part {} into part {}, and split part {}", neighbor, smallest, part);
 
-                    let frontier = self.frontiers.get(part);
+                    let frontier = self.frontiers.get(part as usize);
                     if !frontier.is_empty() {
                         let node = frontier[rng.random_range(0..frontier.len())];
                         self.move_node_with_articulation(node, new_part);

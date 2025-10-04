@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ndarray::Array1;
 
-use crate::{graph::{Graph, WeightMatrix}, partition::FrontierSet};
+use crate::{graph::{Graph, WeightMatrix}, partition::MultiSet};
 
 /// A partition of a graph into contiguous parts (districts).
 #[derive(Clone, Debug)]
@@ -11,7 +11,7 @@ pub(crate) struct Partition {
     graph: Arc<Graph>,                     // Fixed graph structure
     pub(super) assignments: Array1<u32>,   // Current part assignment for each node, len = n
     pub(super) boundary: Array1<bool>,     // Whether each node is on a part boundary, len = n
-    pub(super) frontiers: FrontierSet,     // Nodes on the boundary of each part
+    pub(super) frontiers: MultiSet,     // Nodes on the boundary of each part
     pub(super) part_sizes: Vec<usize>,     // Number of nodes in each part, len = num_parts
     pub(super) part_weights: WeightMatrix, // Aggregated weights for each part
 }
@@ -33,7 +33,7 @@ impl Partition {
             num_parts: num_parts as u32,
             assignments: Array1::<u32>::zeros(graph.node_count()),
             boundary: Array1::<bool>::from_elem(graph.node_count(), false),
-            frontiers: FrontierSet::new(num_parts, graph.node_count()),
+            frontiers: MultiSet::new(num_parts, graph.node_count()),
             part_sizes,
             part_weights,
             graph,
@@ -50,7 +50,7 @@ impl Partition {
     #[inline] pub(crate) fn assignment(&self, node: usize) -> u32 { self.assignments[node] }
 
     /// Get the set of boundary nodes for a given part.
-    #[inline] pub(crate) fn frontier(&self, part: u32) -> &[usize] { self.frontiers.get(part) }
+    #[inline] pub(crate) fn frontier(&self, part: u32) -> &[usize] { self.frontiers.get(part as usize) }
 
     /// Clear all assignments, setting every node to unassigned (0).
     pub(crate) fn clear_assignments(&mut self) {
@@ -80,9 +80,13 @@ impl Partition {
         });
 
         // Recompute frontiers.
-        self.frontiers.rebuild(
-            self.assignments.as_slice().unwrap(),
-            self.boundary.as_slice().unwrap()
+        self.frontiers.rebuild_from(
+            self.assignments.as_slice().unwrap().iter()
+            .zip(self.boundary.as_slice().unwrap().iter())
+            .enumerate()
+            .filter_map(|(node, (&part, &on_boundary))| {
+                on_boundary.then_some((node, part as usize))
+            })
         );
 
         self.part_sizes.fill(0);
@@ -122,7 +126,11 @@ impl Partition {
 
         // Recompute frontier sets for `node` and its neighbors.
         for u in std::iter::once(node).chain(self.graph.edges(node)) {
-            self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
+            if self.boundary[u] {
+                self.frontiers.insert(u, self.assignments[u] as usize);
+            } else {
+                self.frontiers.remove(u);
+            }
         }
 
         // Update part sizes (subtract from old, add to new).
@@ -173,7 +181,11 @@ impl Partition {
         for &u in &boundary {
             self.boundary[u] = self.graph.edges(u)
                 .any(|v| self.assignments[v] != self.assignments[u]);
-            self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
+            if self.boundary[u] {
+                self.frontiers.insert(u, self.assignments[u] as usize);
+            } else {
+                self.frontiers.remove(u);
+            }
         }
 
         self.part_sizes[prev as usize] -= subgraph.len();
@@ -224,7 +236,11 @@ impl Partition {
         for u in (0..self.graph.node_count()).filter(|&u| self.assignments[u] == a) {
             self.boundary[u] = self.graph.edges(u)
                 .any(|v| self.assignments[v] != self.assignments[u]);
-            self.frontiers.refresh(u, self.assignments[u], self.boundary[u]);
+            if self.boundary[u] {
+                self.frontiers.insert(u, self.assignments[u] as usize);
+            } else {
+                self.frontiers.remove(u);
+            }
         }
 
         // update part_sizes

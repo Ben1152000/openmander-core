@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 mod algorithm;
 mod contiguity;
-mod frontier;
+mod multi_set;
+mod partition_set;
 mod partition;
-mod multiset;
 
-pub(self) use multiset::MultiSet;
+pub(self) use multi_set::MultiSet;
+pub(self) use partition_set::PartitionSet;
 pub(crate) use partition::Partition;

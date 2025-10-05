@@ -6,7 +6,7 @@ impl Partition {
     /// Check if a part is empty (has no assigned nodes).
     pub(crate) fn part_is_empty(&self, part: u32) -> bool {
         assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
-        self.part_sizes[part as usize] == 0
+        self.parts.get(part as usize).len() == 0
     }
 
     /// Check if a node borders a given part.
@@ -14,7 +14,7 @@ impl Partition {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
         assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
 
-        self.graph().edges(node).any(|v| self.assignments[v] == part)
+        self.graph().edges(node).any(|v| self.assignment(v) == part)
     }
 
     /// Check if part `a` borders part `b`.
@@ -32,14 +32,14 @@ impl Partition {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
         assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
 
-        let prev = self.assignments[node];
+        let prev = self.assignment(node);
 
         // No-op move: always fine.
         if part == prev { return true }
 
         // For a non-empty destination, require at least one adjacent node in that part.
         if part != 0 && !self.part_is_empty(part)
-            && !self.graph().edges(node).any(|v| self.assignments[v] == part)
+            && !self.graph().edges(node).any(|v| self.assignment(v) == part)
         { return false }
 
         // If currently unassigned, removing it can't break any real district.
@@ -47,7 +47,7 @@ impl Partition {
 
         // Collect neighbors in the same part as `node`.
         let neighbors = self.graph().edges(node)
-            .filter(|&v| self.assignments[v] == prev)
+            .filter(|&v| self.assignment(v) == prev)
             .collect::<Vec<_>>();
 
         // If fewer than 2 same-part neighbors, removing `node` cannot disconnect the part.
@@ -60,7 +60,7 @@ impl Partition {
 
         // Get the number of same-part neighbors for each neighbor.
         let neighbor_degrees = neighbors.iter()
-            .map(|&u| self.graph().edges(u).filter(|&v| self.assignments[v] == prev).count())
+            .map(|&u| self.graph().edges(u).filter(|&v| self.assignment(v) == prev).count())
             .collect::<Vec<_>>();
 
         // Heuristic: Start the BFS with the neighbor with fewest same-part neighbors.
@@ -83,7 +83,7 @@ impl Partition {
         let mut remaining = neighbors.len() - 1;
         let mut queue = VecDeque::from([neighbors[start]]);
         while let Some(u) = queue.pop_front() {
-            for v in self.graph().edges(u).filter(|&v| v != node && self.assignments[v] == prev) {
+            for v in self.graph().edges(u).filter(|&v| v != node && self.assignment(v) == prev) {
                 if !visited[v] {
                     visited[v] = true;
                     if is_neighbor[v] {
@@ -114,7 +114,7 @@ impl Partition {
         }
 
         // Ensure that at least one node in the subgraph is adjacent to the new part.
-        if !(part == 0 || self.part_is_empty(part) || subgraph.iter().any(|&u| self.graph().edges(u).any(|v| self.assignments[v] == part))) { return false }
+        if !(part == 0 || self.part_is_empty(part) || subgraph.iter().any(|&u| self.graph().edges(u).any(|v| self.assignment(v) == part))) { return false }
 
         // Check if the subgraph itself is contiguous.
         let mut seen = 1 as usize;
@@ -134,7 +134,7 @@ impl Partition {
 
         // Collect unique non-zero parts appearing in the subgraph.
         let mut parts = subgraph.iter()
-            .map(|&u| self.assignments[u])
+            .map(|&u| self.assignment(u))
             .filter(|&p| p != 0)
             .collect::<Vec<_>>();
         parts.sort_unstable();
@@ -144,8 +144,8 @@ impl Partition {
             // Build boundary set in part: vertices in p adjacent to the subgraph.
             let mut boundary = Vec::new();
             let mut in_boundary = vec![false; self.graph().node_count()];
-            for &u in subgraph.iter().filter(|&&u| self.assignments[u] == part) {
-                for v in self.graph().edges(u).filter(|&v| !in_subgraph[v] && self.assignments[v] == part) {
+            for &u in subgraph.iter().filter(|&&u| self.assignment(u) == part) {
+                for v in self.graph().edges(u).filter(|&v| !in_subgraph[v] && self.assignment(v) == part) {
                     if !in_boundary[v] { in_boundary[v] = true; boundary.push(v) }
                 }
             }
@@ -162,7 +162,7 @@ impl Partition {
 
             while let Some(u) = queue.pop_front() {
                 for v in self.graph().edges(u) {
-                    if !in_subgraph[v] && !visited[v] && self.assignments[v] == part {
+                    if !in_subgraph[v] && !visited[v] && self.assignment(v) == part {
                         visited[v] = true;
                         queue.push_back(v);
 
@@ -183,7 +183,7 @@ impl Partition {
         let mut components = Vec::new();
 
         let mut visited = vec![false; self.graph().node_count()];
-        for u in (0..self.graph().node_count()).filter(|&u| self.assignments[u] == part) {
+        for u in (0..self.graph().node_count()).filter(|&u| self.assignment(u) == part) {
             if !visited[u] {
                 visited[u] = true;
                 let mut component = Vec::new();
@@ -191,7 +191,7 @@ impl Partition {
                 while let Some(v) = queue.pop_front() {
                     component.push(v);
                     for w in self.graph().edges(v) {
-                        if self.assignments[w] == part && !visited[w] {
+                        if self.assignment(w) == part && !visited[w] {
                             visited[w] = true;
                             queue.push_back(w);
                         }
@@ -232,7 +232,7 @@ impl Partition {
                 if i == largest { continue }
 
                 // If the component borders an unassigned node, unassign the component.
-                if component.iter().any(|&u| self.graph().edges(u).any(|v| self.assignments[v] == 0)) {
+                if component.iter().any(|&u| self.graph().edges(u).any(|v| self.assignment(v) == 0)) {
                     self.move_subgraph(&component, part, false);
                     changed = true;
                     continue;
@@ -244,8 +244,8 @@ impl Partition {
                 // Score candidate destination districts by boundary shared-perimeter weight.
                 let mut scores: HashMap<u32, f64> = HashMap::new();
                 for &u in &component {
-                    for (v, weight) in self.graph().edges_with_weights(u).filter(|&(v, _)| !in_component[v] && self.assignments[v] != part) {
-                        *scores.entry(self.assignments[v]).or_insert(0.0) += weight;
+                    for (v, weight) in self.graph().edges_with_weights(u).filter(|&(v, _)| !in_component[v] && self.assignment(v) != part) {
+                        *scores.entry(self.assignment(v)).or_insert(0.0) += weight;
                     }
                 }
 
@@ -268,12 +268,12 @@ impl Partition {
     pub(crate) fn cut_subgraph_within_part(&self, node: usize) -> Vec<usize> {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
 
-        let part = self.assignments[node];
+        let part = self.assignment(node);
         if part == 0 { return vec![] }
 
         // Collect same-part neighbors of u.
         let neighbors = self.graph().edges(node)
-            .filter(|&v| self.assignments[v] == part)
+            .filter(|&v| self.assignment(v) == part)
             .collect::<Vec<_>>();
 
         // If fewer than 2 neighbors, node cannot be an articulation point.
@@ -337,7 +337,7 @@ impl Partition {
 
             for i in 0..neighbors.len() {
                 if let Some(u) = queues[i].pop_front() {
-                    for v in self.graph().edges(u).filter(|&v| v != node && self.assignments[v] == part) {
+                    for v in self.graph().edges(u).filter(|&v| v != node && self.assignment(v) == part) {
                         if in_component[v] == usize::MAX {
                             in_component[v] = i;
                             queues[i].push_back(v);

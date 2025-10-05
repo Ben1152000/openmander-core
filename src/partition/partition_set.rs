@@ -29,25 +29,35 @@ impl PartitionSet {
     /// Universe size (number of elements addressable by index).
     #[inline] pub fn num_elems(&self) -> usize { self.index.len() }
 
-    /// Move `elem` to `set`. Panics in debug if out of range.
-    #[inline] pub fn find(&self, elem: usize) -> usize {
+    /// Return the set that `elem` is currently in.
+    #[inline]
+    pub fn find(&self, elem: usize) -> usize {
         debug_assert!(elem < self.index.len(), "element out of range");
         self.index[elem].0
     }
 
-    /// Returns true if element is in any set.  
-    #[inline] pub fn get(&self, set: usize) -> &[usize] {
+    /// Returns a vector of the elements currently in `set`.
+    #[inline]
+    pub fn get(&self, set: usize) -> &[usize] {
         debug_assert!(set < self.sets.len(), "set out of range");
         &self.sets[set]
     }
 
+    /// Get a complete vector of assignments for each element.
+    #[inline]
+    pub fn assignments(&self) -> Vec<usize> {
+        self.index.iter().map(|&(set, _)| set).collect()
+    }
+
     /// Iterator over each set as a slice.
-    #[inline] pub fn iter_sets(&self) -> impl Iterator<Item = &[usize]> + '_ {
+    #[inline]
+    pub fn iter_sets(&self) -> impl Iterator<Item = &[usize]> + '_ {
         self.sets.iter().map(|v| v.as_slice())
     }
 
     /// Iterator over all elements in all sets.
-    #[inline] pub fn iter_all(&self) -> impl Iterator<Item = usize> + '_ {
+    #[inline]
+    pub fn iter_all(&self) -> impl Iterator<Item = usize> + '_ {
         self.sets.iter().flat_map(|v| v.iter().copied())
     }
 

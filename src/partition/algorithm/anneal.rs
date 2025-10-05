@@ -43,7 +43,7 @@ impl Partition {
         final_temp: f64,
         boundary_factor: f64,
     ) {
-        assert!(self.part_sizes[0] == 0, "part 0 (unassigned) must be empty");
+        assert!(self.parts.get(0).len() == 0, "part 0 (unassigned) must be empty");
         assert!(self.num_parts() > 2, "need at least two parts for anneal_balance");
         assert!(self.part_weights.contains(series), "part_weights must contain series '{series}'");
 
@@ -81,14 +81,14 @@ impl Partition {
             let weight_delta = 2.0 * node_weight * (node_weight + dest_weight - src_weight) / target;
 
             let boundary_delta = self.graph().edges_with_weights(node)
-                .filter_map(|(v, w)| (self.assignments[v] == src).then_some(w))
+                .filter_map(|(v, w)| (self.assignment(v) == src).then_some(w))
                 .sum::<f64>()
             - self.graph().edges_with_weights(node)
-                .filter_map(|(v, w)| (self.assignments[v] == dest).then_some(w))
+                .filter_map(|(v, w)| (self.assignment(v) == dest).then_some(w))
                 .sum::<f64>()
             - if bundle.len() > 0 {
                 self.graph().edges_with_weights(node)
-                    .filter(|&(v, _)| self.assignments[v] == src)
+                    .filter(|&(v, _)| self.assignment(v) == src)
                     .filter_map(|(v, w)| bundle.contains(&v).then_some(w))
                     .sum::<f64>()
             } else { 0.0 };

@@ -31,7 +31,7 @@ impl Partition {
         for _ in 0..samples {
             let node = frontier[rng.random_range(0..frontier.len())];
             neighbors.extend(self.graph().edges(node)
-                .map(|u| self.assignments[u])
+                .map(|u| self.assignment(u))
                 .filter(|&p| p != 0 && p != part));
         }
 

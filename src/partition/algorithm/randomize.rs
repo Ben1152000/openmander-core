@@ -13,9 +13,9 @@ impl Partition {
     pub(crate) fn random_node_from_part(&self, part: u32, rng: &mut impl Rng) -> Option<usize> {
         for _ in 0..32 { // Fast path: a few random probes
             let i = self.random_node(rng);
-            if self.assignments[i] == part { return Some(i); }
+            if self.assignment(i) == part { return Some(i); }
         }
-        self.assignments.iter().enumerate()
+        self.assignments().iter().enumerate()
             .filter_map(|(i, &p)| (p == part).then_some(i))
             .choose(rng)
     }
@@ -44,8 +44,8 @@ impl Partition {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
         if self.graph().degree(node) == 0 { return None }
         self.graph().edges(node)
-            .map(|v| self.assignments[v])
-            .filter(|&p| p != self.assignments[node])
+            .map(|v| self.assignment(v))
+            .filter(|&p| p != self.assignment(node))
             .choose(rng)
     }
 

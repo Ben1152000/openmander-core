@@ -1,18 +1,13 @@
-use std::sync::Arc;
+use std::{sync::Arc, vec};
 
-use ndarray::Array1;
-
-use crate::{graph::{Graph, WeightMatrix}, partition::MultiSet};
+use crate::{graph::{Graph, WeightMatrix}, partition::{MultiSet, PartitionSet}};
 
 /// A partition of a graph into contiguous parts (districts).
 #[derive(Clone, Debug)]
 pub(crate) struct Partition {
-    num_parts: u32,                        // Fixed number of parts (including unassigned 0)
     graph: Arc<Graph>,                     // Fixed graph structure
-    pub(super) assignments: Array1<u32>,   // Current part assignment for each node, len = n
-    pub(super) boundary: Array1<bool>,     // Whether each node is on a part boundary, len = n
-    pub(super) frontiers: MultiSet,     // Nodes on the boundary of each part
-    pub(super) part_sizes: Vec<usize>,     // Number of nodes in each part, len = num_parts
+    pub(super) parts: PartitionSet,        // Sets of nodes in each part (including unassigned 0)
+    pub(super) frontiers: MultiSet,        // Nodes on the boundary of each part
     pub(super) part_weights: WeightMatrix, // Aggregated weights for each part
 }
 
@@ -20,46 +15,44 @@ impl Partition {
     /// Construct an empty partition from a weighted graph reference and number of parts.
     pub(crate) fn new(num_parts: usize, graph: impl Into<Arc<Graph>>) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
-
         let graph: Arc<Graph> = graph.into();
-
-        let mut part_sizes = vec![0; num_parts];
-        part_sizes[0] = graph.node_count();
 
         let mut part_weights = graph.node_weights().copy_of_size(num_parts);
         part_weights.set_row_to_sum_of(0, graph.node_weights());
 
         Self {
-            num_parts: num_parts as u32,
-            assignments: Array1::<u32>::zeros(graph.node_count()),
-            boundary: Array1::<bool>::from_elem(graph.node_count(), false),
+            parts: PartitionSet::new(num_parts, graph.node_count()),
             frontiers: MultiSet::new(num_parts, graph.node_count()),
-            part_sizes,
             part_weights,
             graph,
         }
     }
 
     /// Get the number of parts in this partition (including unassigned 0).
-    #[inline] pub(crate) fn num_parts(&self) -> u32 { self.num_parts }
+    #[inline] pub(crate) fn num_parts(&self) -> u32 { self.parts.num_sets() as u32 }
+
+    /// Get the number of nodes in the underlying graph.
+    #[inline] pub(crate) fn num_nodes(&self) -> usize { self.graph.node_count() }
 
     /// Get a reference to the underlying graph.
     #[inline] pub(crate) fn graph(&self) -> &Graph { &self.graph }
 
     /// Get the part assignment of a given node.
-    #[inline] pub(crate) fn assignment(&self, node: usize) -> u32 { self.assignments[node] }
+    #[inline] pub(crate) fn assignment(&self, node: usize) -> u32 { self.parts.find(node) as u32 }
+
+    /// Get a complete vector of assignments for each node.
+    #[inline]
+    pub(crate) fn assignments(&self) -> Vec<u32> {
+        self.parts.assignments().iter().map(|&p| p as u32).collect()
+    }
 
     /// Get the set of boundary nodes for a given part.
     #[inline] pub(crate) fn frontier(&self, part: u32) -> &[usize] { self.frontiers.get(part as usize) }
 
     /// Clear all assignments, setting every node to unassigned (0).
     pub(crate) fn clear_assignments(&mut self) {
-        self.assignments.fill(0);
-        self.boundary.fill(false);
+        self.parts.clear();
         self.frontiers.clear();
-
-        self.part_sizes.fill(0);
-        self.part_sizes[0] = self.graph.node_count();
 
         self.part_weights.clear_all_rows();
         self.part_weights.set_row_to_sum_of(0, self.graph.node_weights());
@@ -67,34 +60,29 @@ impl Partition {
 
     /// Generate assignments map from GeoId to district.
     pub(crate) fn set_assignments(&mut self, assignments: Vec<u32>) {
-        assert!(assignments.len() == self.assignments.len(), "assignments.len() must equal number of nodes");
-        assert!(assignments.iter().all(|&p| p < self.num_parts), "all assignments must be in range [0, {})", self.num_parts);
+        assert!(assignments.len() == self.num_nodes(), "assignments.len() must equal number of nodes");
+        assert!(assignments.iter().all(|&p| p < self.num_parts()), "all assignments must be in range [0, {})", self.num_parts());
 
         // Copy assignments.
-        self.assignments.assign(&Array1::from(assignments));
+        self.parts.rebuild(&assignments.iter().map(|&p| p as usize).collect::<Vec<_>>());
 
         // Recompute boundary flags.
-        self.boundary.iter_mut().enumerate().for_each(|(u, flag)| {
-            *flag = self.graph.edges(u)
-                .any(|v| self.assignments[v] != self.assignments[u]);
-        });
+        let on_boundary = (0..self.num_nodes()).map(|u| {
+            let part = self.assignment(u);
+            self.graph.edges(u).any(|v| self.assignment(v) != part)
+        }).collect::<Vec<_>>();
 
         // Recompute frontiers.
         self.frontiers.rebuild_from(
-            self.assignments.as_slice().unwrap().iter()
-            .zip(self.boundary.as_slice().unwrap().iter())
-            .enumerate()
-            .filter_map(|(node, (&part, &on_boundary))| {
-                on_boundary.then_some((node, part as usize))
+            self.assignments().iter().enumerate()
+            .filter_map(|(node, &part)| {
+                on_boundary[node].then_some((node, part as usize))
             })
         );
 
-        self.part_sizes.fill(0);
-        for &part in &self.assignments { self.part_sizes[part as usize] += 1 }
-
         // Recompute per-part totals.
-        self.part_weights = WeightMatrix::copy_of_size(self.graph.node_weights(), self.num_parts as usize);
-        for (node, &part) in self.assignments.iter().enumerate() {
+        self.part_weights = WeightMatrix::copy_of_size(self.graph.node_weights(), self.num_parts() as usize);
+        for (node, &part) in self.assignments().iter().enumerate() {
             self.part_weights.add_row_from(part as usize, self.graph.node_weights(), node);
         }
     }
@@ -102,40 +90,32 @@ impl Partition {
     /// Move a single node to a different part, updating caches.
     /// `check` toggles whether to check contiguity constraints.
     pub(crate) fn move_node(&mut self, node: usize, part: u32, check: bool) {
-        assert!(node < self.assignments.len(), "node {} out of range", node);
-        assert!(part < self.num_parts, "part {} out of range [0, {})", part, self.num_parts);
+        assert!(node < self.num_nodes(), "node {} out of range", node);
+        assert!(part < self.num_parts(), "part {} out of range [0, {})", part, self.num_parts());
 
-        let prev = self.assignments[node];
+        let prev = self.assignment(node);
         if prev == part { return }
 
         // Ensure move will not break contiguity.
         if check { assert!(self.check_node_contiguity(node, part), "moving node {} would break contiguity of part {}", node, prev); }
 
         // Commit assignment.
-        self.assignments[node] = part;
-
-        // Recompute boundary flag for `node`.
-        self.boundary[node] = self.graph.edges(node)
-            .any(|u| self.assignments[u] != part);
-
-        // Recompute boundary flags for neighbors of `node`.
-        for u in self.graph.edges(node) {
-            self.boundary[u] = self.graph.edges(u)
-                .any(|v| self.assignments[v] != self.assignments[u]);
-        }
+        self.parts.move_to(node, part as usize);
 
         // Recompute frontier sets for `node` and its neighbors.
-        for u in std::iter::once(node).chain(self.graph.edges(node)) {
-            if self.boundary[u] {
-                self.frontiers.insert(u, self.assignments[u] as usize);
+        if self.graph.edges(node).any(|v| self.assignment(v) != part) {
+            self.frontiers.insert(node, self.assignment(node) as usize);
+        } else {
+            self.frontiers.remove(node);
+        }
+
+        for u in self.graph.edges(node) {
+            if self.graph.edges(u).any(|v| self.assignment(v) != self.assignment(u)) {
+                self.frontiers.insert(u, self.assignment(u) as usize);
             } else {
                 self.frontiers.remove(u);
             }
         }
-
-        // Update part sizes (subtract from old, add to new).
-        self.part_sizes[prev as usize] -= 1;
-        self.part_sizes[part as usize] += 1;
 
         // Update aggregated integer totals (subtract from old, add to new).
         self.part_weights.subtract_row_from(prev as usize, self.graph.node_weights(), node);
@@ -145,7 +125,7 @@ impl Partition {
     /// Move a connected subgraph to a different part, updating caches.
     /// `check` toggles whether to check contiguity constraints.
     pub(crate) fn move_subgraph(&mut self, nodes: &[usize], part: u32, check: bool) {
-        assert!(part < self.num_parts, "part {} out of range [0, {})", part, self.num_parts);
+        assert!(part < self.num_parts(), "part {} out of range [0, {})", part, self.num_parts());
         if nodes.is_empty() { return }
 
         // Deduplicate and validate indices.
@@ -162,11 +142,13 @@ impl Partition {
         // Check subgraph is connected AND removing it won't disconnect any source part.
         if check { assert!(self.check_subgraph_contiguity(&subgraph, part), "moving subgraph would break contiguity"); }
 
-        let prev = self.assignments[subgraph[0]];
-        assert!(subgraph.iter().all(|&u| self.assignments[u] == prev), "all nodes in subgraph must be in the same part");
+        let prev = self.assignment(subgraph[0]);
+        assert!(subgraph.iter().all(|&u| self.assignment(u) == prev), "all nodes in subgraph must be in the same part");
 
         // Commit assignment.
-        for &u in &subgraph { self.assignments[u] = part }
+        for &u in &subgraph {
+            self.parts.move_to(u, part as usize);
+        }
 
         let mut boundary = Vec::with_capacity(subgraph.len() * 2);
         let mut in_boundary = vec![false; self.graph.node_count()];
@@ -179,17 +161,12 @@ impl Partition {
 
         // Recompute boundary flags and frontier sets only where necessary.
         for &u in &boundary {
-            self.boundary[u] = self.graph.edges(u)
-                .any(|v| self.assignments[v] != self.assignments[u]);
-            if self.boundary[u] {
-                self.frontiers.insert(u, self.assignments[u] as usize);
+            if self.graph.edges(u).any(|v| self.assignment(v) != self.assignment(u)) {
+                self.frontiers.insert(u, self.assignment(u) as usize);
             } else {
                 self.frontiers.remove(u);
             }
         }
-
-        self.part_sizes[prev as usize] -= subgraph.len();
-        self.part_sizes[part as usize] += subgraph.len();
 
         // Batch-update per-part totals.
         self.part_weights.subtract_rows_from(prev as usize, self.graph.node_weights(), &subgraph);
@@ -199,11 +176,11 @@ impl Partition {
     /// Articulation-aware move: move `u` and (if needed) the minimal "dangling" component
     /// that would be cut off by removing `u`, so the source stays contiguous.
     pub(crate) fn move_node_with_articulation(&mut self, node: usize, part: u32) {
-        assert!(part < self.num_parts, "part must be in range [0, {})", self.num_parts);
-        if self.assignments[node] == part { return }
+        assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
+        if self.assignment(node) == part { return }
 
         // Ensure that `node` is adjacent to the new part, if it exists.
-        if !(self.part_is_empty(part) || self.graph.edges(node).any(|v| self.assignments[v] == part)) { return }
+        if !(self.part_is_empty(part) || self.graph.edges(node).any(|v| self.assignment(v) == part)) { return }
 
         // Find subgraph of all but largest "dangling" piece if removing `node` splits the district.
         let mut subgraph = self.cut_subgraph_within_part(node);
@@ -219,33 +196,31 @@ impl Partition {
     /// Returns the index of the eliminated part (if merge is successful).
     /// `check` toggles whether to check contiguity constraints.
     pub(crate) fn merge_parts(&mut self, a: u32, b: u32, check: bool) -> Option<u32> {
-        assert!(a < self.num_parts && b < self.num_parts && a != b,
-            "a and b must be distinct parts in range [0, {})", self.num_parts);
+        assert!(a < self.num_parts() && b < self.num_parts() && a != b,
+            "a and b must be distinct parts in range [0, {})", self.num_parts());
 
         // Choose `a` as the part to keep, `b` as the part to eliminate.
-        if self.part_sizes[a as usize] < self.part_sizes[b as usize] { return self.merge_parts(b, a, check) }
+        if self.parts.get(a as usize).len() < self.parts.get(b as usize).len() { return self.merge_parts(b, a, check) }
 
         if !self.part_borders_part(a, b) { return None } // parts must be adjacent
 
         // Update assignments.
         for u in 0..self.graph.node_count() {
-            if self.assignments[u] == b { self.assignments[u] = a }
+            if self.assignment(u) == b {
+                self.parts.move_to(u, a as usize);
+            }
         }
 
         // Update boundary and frontier sets.
-        for u in (0..self.graph.node_count()).filter(|&u| self.assignments[u] == a) {
-            self.boundary[u] = self.graph.edges(u)
-                .any(|v| self.assignments[v] != self.assignments[u]);
-            if self.boundary[u] {
-                self.frontiers.insert(u, self.assignments[u] as usize);
+        for u in 0..self.graph.node_count() {
+            if self.assignment(u) != a { continue }
+
+            if self.graph.edges(u).any(|v| self.assignment(v) != a) {
+                self.frontiers.insert(u, a as usize);
             } else {
                 self.frontiers.remove(u);
             }
         }
-
-        // update part_sizes
-        self.part_sizes[a as usize] += self.part_sizes[b as usize];
-        self.part_sizes[b as usize] = 0;
 
         // update part_weights
         self.part_weights.add_row(a as usize, b as usize);

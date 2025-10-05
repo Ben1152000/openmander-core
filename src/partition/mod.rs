@@ -2,6 +2,7 @@
 mod algorithm;
 mod contiguity;
 mod multi_set;
+mod ops;
 mod partition_set;
 mod partition;
 

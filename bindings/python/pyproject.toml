@@ -24,5 +24,4 @@ sdist-include = [
   "README.md",
   "LICENSE",
   "src/**",
-  "demo.ipynb",
 ]

@@ -76,4 +76,11 @@ impl Plan {
 
         Ok(())
     }
+
+    #[inline]
+    pub fn recombine(&mut self, a: u32, b: u32) -> Result<()> {
+        self.partition.recombine_parts(a, b);
+
+        Ok(())
+    }
 }

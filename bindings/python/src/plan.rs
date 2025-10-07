@@ -88,6 +88,13 @@ impl Plan {
         )
     }
 
+    pub fn recombine<'py>(&mut self, py: Python<'py>, a: u32, b: u32) -> PyResult<()> {
+        py.allow_threads(||
+            self.inner.recombine(a, b)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        )
+    }
+
     /// Load assignments from a CSV path (same validation as Rust `load_csv`)
     pub fn load_csv(&mut self, path: &str) -> PyResult<()> {
         self.inner.load_csv(&PathBuf::from(path))

@@ -174,10 +174,10 @@ impl MapLayer {
     }
 
     /// Compute approximate convex hulls for all MultiPolygons in this layer, if geometries are present.
-    fn compute_approximate_hulls(&mut self, num_points: usize) -> Result<()> {
+    fn compute_approximate_hulls(&mut self, max_points: usize, min_area: f64) -> Result<()> {
         let geoms = self.geoms.as_ref()
             .ok_or_else(|| anyhow!("Cannot compute hulls on empty geometry!"))?;
-        self.hulls = Some(geoms.approximate_hulls(num_points));
+        self.hulls = Some(geoms.approximate_hulls(max_points, min_area));
 
         Ok(())
     }
@@ -405,7 +405,7 @@ impl Map {
 
         if verbose > 0 { eprintln!("[build_pack] computing approximate hulls"); }
         for layer in map.get_layers_mut() {
-            layer.compute_approximate_hulls(16)?
+            layer.compute_approximate_hulls(4, 0.998)?
         }
 
         if verbose > 0 { eprintln!("[build_pack] constructing graphs"); }

@@ -60,6 +60,8 @@ impl MapLayer {
                 .map(|poly| MultiPolygon(vec![poly.clone()]))
                 .collect()
             )?;
+            let (k, h) = common::sha256_file(&hull_file, path)?;
+            hashes.insert(k, FileHash { sha256: h });
         }
 
         // geometries

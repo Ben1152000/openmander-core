@@ -52,7 +52,7 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
     common::download_big_file(pack_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
-    common::extract_zip(&zip_path, &pack_dir, true)?;
+    common::extract_zip(&zip_path, &path, true)?;
 
     if verbose > 0 { eprintln!("Downloaded pack to {}", pack_dir.display()); }
 

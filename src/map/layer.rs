@@ -15,9 +15,9 @@ pub struct MapLayer {
     pub(super) data: DataFrame,             // Entity data (incl. name, centroid, geographic data, election data)
     pub(super) adjacencies: Vec<Vec<u32>>,  // Adjacency list of contiguous indices
     pub(super) edge_lengths: Vec<Vec<f64>>, // Shared perimeter lengths for adjacencies
-    pub(super) hulls: Option<Vec<Polygon<f64>>>,    // Approximate hulls for each entity (todo: remove option)
     pub(super) graph: Arc<Graph>,           // Graph representation of layer used for partitioning
     pub(super) geoms: Option<Geometries>,   // Per-level geometry store, indexed by entities
+    pub(super) hulls: Option<Vec<Polygon<f64>>>,    // Approximate hulls for each entity (todo: remove option)
 }
 
 impl MapLayer {
@@ -57,9 +57,9 @@ impl MapLayer {
             data: df,
             adjacencies: vec![Vec::new(); size],
             edge_lengths: vec![Vec::new(); size],
-            hulls: None, // vec![Polygon::empty(); size],
             graph: Arc::default(),
             geoms: None,
+            hulls: None,
         })
     }
 
@@ -97,6 +97,7 @@ impl MapLayer {
             &self.edge_lengths,
             weights_i64,
             weights_f64,
+            &self.hulls().unwrap(),
         ));
     }
 

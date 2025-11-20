@@ -18,7 +18,7 @@ impl Plan {
         let map: Arc<Map> = map.into();
         let partition = Partition::new(
             num_districts as usize + 1,
-            map.get_layer(GeoType::Block).graph_handle()
+            map.get_layer(GeoType::Block).graph_handle(),
         );
 
         Self { map, num_districts, partition }

@@ -12,6 +12,7 @@ pub(crate) struct Partition {
     pub(super) parts: PartitionSet,        // Sets of nodes in each part (including unassigned 0)
     pub(super) frontiers: MultiSet,        // Nodes on the boundary of each part
     pub(super) part_weights: WeightMatrix, // Aggregated weights for each part
+    // pub(super) part_hulls: Vec<Polygon<f64>>,   // Convex hull for each part
 }
 
 impl Partition {
@@ -27,6 +28,7 @@ impl Partition {
             parts: PartitionSet::new(num_parts, graph.node_count()),
             frontiers: MultiSet::new(num_parts, graph.node_count()),
             part_weights,
+            // part_hulls: 
             graph,
         }
     }

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 mod algorithm;
 mod contiguity;
+mod hull_set;
 mod metrics;
 mod multi_set;
 mod ops;

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use geo::Polygon;
+
 use crate::graph::WeightMatrix;
 
 /// A weighted, undirected graph in compressed sparse row format.
@@ -10,13 +12,18 @@ pub(crate) struct Graph {
     edges: Vec<u32>,
     edge_weights: Vec<f64>,
     node_weights: WeightMatrix,
+    hulls: Vec<Polygon<f64>>,
 }
 
 impl Graph {
     /// Construct a graph from adjacency lists and node weights.
-    pub(crate) fn new(num_nodes: usize, edges: &[Vec<u32>], edge_weights: &[Vec<f64>],
+    pub(crate) fn new(
+        num_nodes: usize,
+        edges: &[Vec<u32>],
+        edge_weights: &[Vec<f64>],
         weights_i64: HashMap<String, Vec<i64>>,
         weights_f64: HashMap<String, Vec<f64>>,
+        hulls: &[Polygon<f64>],
     ) -> Self {
         assert!(edges.len() == num_nodes, "edges.len() must equal num_nodes");
         assert!(edge_weights.len() == num_nodes, "edge_weights.len() must equal num_nodes");
@@ -34,6 +41,7 @@ impl Graph {
             edges: edges.iter().flatten().copied().collect(),
             edge_weights: edge_weights.iter().flatten().copied().collect(),
             node_weights: WeightMatrix::new(num_nodes, weights_i64, weights_f64),
+            hulls: hulls.to_vec(),
         }
     }
 
@@ -72,6 +80,8 @@ impl Graph {
     pub(crate) fn edges_with_weights(&self, node: usize) -> impl Iterator<Item = (usize, f64)> + '_ {
         self.range(node).map(move |v| (self.edges[v] as usize, self.edge_weights[v]))
     }
+
+    #[inline] pub(crate) fn hulls(&self) -> &[Polygon<f64>] { &self.hulls }
 }
 
 #[cfg(test)]
@@ -96,6 +106,7 @@ mod tests {
             ],
             HashMap::new(),
             HashMap::new(),
+            &[],
         )
     }
 
@@ -171,6 +182,7 @@ mod tests {
             &[],
             HashMap::new(),
             HashMap::new(),
+            &vec![],
         );
 
         assert_eq!(graph.node_count(), 0);
@@ -186,6 +198,7 @@ mod tests {
             &[vec![], vec![], vec![]],
             HashMap::new(),
             HashMap::new(),
+            &vec![],
         );
 
         assert_eq!(graph.offsets, vec![0, 0, 0, 0]);
@@ -208,6 +221,7 @@ mod tests {
             &[],
             HashMap::new(),
             HashMap::new(),
+            &vec![],
         );
     }
 
@@ -220,6 +234,7 @@ mod tests {
             &[vec![]],
             HashMap::new(),
             HashMap::new(),
+            &vec![],
         );
     }
 
@@ -232,6 +247,7 @@ mod tests {
             &[vec![], vec![]],
             HashMap::new(),
             HashMap::new(),
+            &vec![],
         );
     }
 

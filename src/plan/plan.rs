@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{bail, Ok, Result};
+use anyhow::{bail, ensure, Ok, Result};
 
-use crate::{map::{GeoId, GeoType, Map}, partition::Partition};
+use crate::{Metric, Objective, map::{GeoId, GeoType, Map}, partition::Partition};
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Clone, Debug)]
@@ -19,6 +19,7 @@ impl Plan {
         let partition = Partition::new(
             num_districts as usize + 1,
             map.get_layer(GeoType::Block).graph_handle(),
+            map.get_layer(GeoType::State).graph_handle(),
         );
 
         Self { map, num_districts, partition }
@@ -56,6 +57,27 @@ impl Plan {
         Ok(assignments)
     }
 
+    /// Sum of a given series for each district (including unassigned 0).
+    #[inline]
+    pub fn district_totals(&self, series: &str) -> Result<Vec<f64>> {
+        ensure!(
+            self.partition.graph().node_weights().contains(series),
+            "part_weights missing series '{series}'"
+        );
+
+        Ok(self.partition.part_totals(series))
+    }
+
+    /// Compute a given metric for the current partition.
+    pub fn compute_metric(&self, metric: &Metric) -> Vec<f64> {
+        metric.compute(&self.partition)
+    }
+
+    /// Compute the objective value for the current partition.
+    pub fn compute_objective(&self, objective: &Objective) -> f64 {
+        objective.compute(&self.partition)
+    }
+
     /// Randomly assign all blocks to contiguous districts.
     #[inline] pub fn randomize(&mut self) -> Result<()> { Ok(self.partition.randomize()) }
 
@@ -80,6 +102,27 @@ impl Plan {
     #[inline]
     pub fn recombine(&mut self, a: u32, b: u32) -> Result<()> {
         self.partition.recombine_parts(a, b);
+
+        Ok(())
+    }
+
+    /// Improve balance of `series` across districts using a Tabu search heuristic.
+    #[inline]
+    pub fn tabu_balance(
+        &mut self,
+        series: &str,
+        max_iter: usize,
+        tabu_tenure: usize,
+        boundary_factor: f64,
+        candidates_per_iter: usize,
+    ) -> Result<()> {
+        self.partition.tabu_balance(
+            series,
+            max_iter,
+            tabu_tenure,
+            boundary_factor,
+            candidates_per_iter
+        );
 
         Ok(())
     }

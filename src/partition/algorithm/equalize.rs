@@ -118,7 +118,12 @@ impl Partition {
             // Find the worst-offending part (max absolute deviation).
             let largest_deviation = *deviations.iter()
                 .max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-            if largest_deviation <= allowed { break } // all parts within tolerance
+
+            // Exit if all parts are within tolerance.
+            if largest_deviation <= allowed {
+                println!("Equalization complete after {} iterations, max deviation {:.0}", i, largest_deviation);
+                return;
+            }
 
             // Select a random part (weighted by absolute deviation)
             let distribution = WeightedIndex::new(&deviations).unwrap();
@@ -134,8 +139,6 @@ impl Partition {
 
                 // If merged successfully, assign a random frontier to the eliminated district and equalize with part
                 if let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
-                    println!("Merged part {} into part {}, and split part {}", neighbor, smallest, part);
-
                     let frontier = self.frontiers.get(part as usize);
                     if !frontier.is_empty() {
                         let node = frontier[rng.random_range(0..frontier.len())];
@@ -154,11 +157,14 @@ impl Partition {
             let neighbors = neighbors.into_iter().collect::<Vec<_>>();
             let other = neighbors[rng.random_range(0..neighbors.len())];
 
-            println!("{} ({:.0}): Equalizing part {} (pop: {:.0}) and part {} (pop: {:.0})", 
-                i, largest_deviation, part, totals[part as usize - 1], other, totals[other as usize - 1]);
-
             self.equalize_parts(series, part, other, largest_deviation / 2.0);
-
         }
+
+        println!("Equalization incomplete, max deviation {:.0}",
+            (1..self.num_parts())
+                .map(|p| self.part_weights.get_as_f64(series, p as usize).unwrap())
+                .map(|total| (total - target).abs())
+                .max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+        );
     }
 }

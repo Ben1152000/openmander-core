@@ -53,10 +53,12 @@ impl MapLayer {
             .map(|(i, geo_id)| (geo_id.clone(), i as u32))
             .collect();
 
-        if self.ty() != GeoType::State {
-            (self.adjacencies, self.edge_lengths) = common::read_from_weighted_csr(&adj_path)?;
-            self.construct_graph();
-        }
+        // In the case of the state layer, populate adjacencies with dummy graph.
+        (self.adjacencies, self.edge_lengths) = if self.ty() != GeoType::State {
+            common::read_from_weighted_csr(&adj_path)?
+        } else { (vec![vec![]], vec![vec![]]) };
+
+        self.construct_graph();
 
         if hull_path.exists() {
             self.hulls = Some(

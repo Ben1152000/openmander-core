@@ -36,7 +36,7 @@ impl PartitionSet {
         self.index[elem].0
     }
 
-    /// Returns a vector of the elements currently in `set`.
+    /// Returns a reference to the elements currently in `set`.
     #[inline]
     pub fn get(&self, set: usize) -> &[usize] {
         debug_assert!(set < self.sets.len(), "set out of range");

@@ -18,17 +18,6 @@ impl Partition {
             .sum()
     }
 
-    /// Get the moment of a part (defined as the sum of the square weighted
-    /// distance from the population center).
-    #[allow(dead_code, unused_variables)]
-    fn moment(&self, part: u32) -> f64 { todo!() }
-
-    /// Compute the convex hull compactness score for a part (0 to 1).
-    /// Formula: area(part) / area(convex_hull(part))
-    /// If the convex hull area is zero, returns infinity.
-    #[allow(dead_code, unused_variables)]
-    pub(crate) fn convex_hull(&self, part: u32) -> f64 { todo!() }
-
     /// Compute the Polsby-Popper compactness score for a part.
     /// Formula: 4 * pi * area / (perimeter^2)
     /// If the perimeter is zero, returns infinity.
@@ -56,4 +45,15 @@ impl Partition {
     /// If the minimum bounding circle area is zero, returns infinity.
     #[allow(dead_code, unused_variables)]
     pub(crate) fn reock(&self, part: u32) -> f64 { todo!() }
+
+    /// Get the moment of a part (defined as the sum of the square weighted
+    /// distance from the population center).
+    #[allow(dead_code, unused_variables)]
+    fn moment(&self, part: u32) -> f64 { todo!() }
+
+    /// Compute the convex hull compactness score for a part (0 to 1).
+    /// Formula: area(part) / area(convex_hull(part))
+    /// If the convex hull area is zero, returns infinity.
+    #[allow(dead_code, unused_variables)]
+    pub(crate) fn convex_hull(&self, part: u32) -> f64 { todo!() }
 }

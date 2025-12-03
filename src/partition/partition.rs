@@ -9,6 +9,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) struct Partition {
     graph: Arc<Graph>,                     // Fixed graph structure
+    region: Arc<Graph>,                    // Reference to full region (for access to totals)
     pub(super) parts: PartitionSet,        // Sets of nodes in each part (including unassigned 0)
     pub(super) frontiers: MultiSet,        // Nodes on the boundary of each part
     pub(super) part_weights: WeightMatrix, // Aggregated weights for each part
@@ -17,9 +18,10 @@ pub(crate) struct Partition {
 
 impl Partition {
     /// Construct an empty partition from a weighted graph reference and number of parts.
-    pub(crate) fn new(num_parts: usize, graph: impl Into<Arc<Graph>>) -> Self {
+    pub(crate) fn new(num_parts: usize, graph: impl Into<Arc<Graph>>, region: impl Into<Arc<Graph>>) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
         let graph: Arc<Graph> = graph.into();
+        let region: Arc<Graph> = region.into();
 
         let mut part_weights = graph.node_weights().copy_of_size(num_parts);
         part_weights.set_row_to_sum_of(0, graph.node_weights());
@@ -30,6 +32,7 @@ impl Partition {
             part_weights,
             // part_hulls: 
             graph,
+            region,
         }
     }
 
@@ -90,6 +93,23 @@ impl Partition {
         for (node, &part) in self.assignments().iter().enumerate() {
             self.part_weights.add_row_from(part as usize, self.graph.node_weights(), node);
         }
+    }
+
+    /// Sum of a given series for a specific part.
+    pub(crate) fn part_total(&self, series: &str, part: u32) -> f64 {
+        self.part_weights.get_as_f64(series, part as usize).unwrap()
+    }
+
+    /// Sum of a given series for each part (including unassigned 0).
+    pub(crate) fn part_totals(&self, series: &str) -> Vec<f64> {
+        (0..self.num_parts())
+            .map(|part| self.part_total(series, part))
+            .collect::<Vec<_>>()
+    }
+
+    /// Get the total weight of the entire region for a given series.
+    pub(crate) fn region_total(&self, series: &str) -> f64 {
+        self.region.node_weights().get_as_f64(series, 0).unwrap()
     }
 
     /// Update part weight totals for a single node move (from prev to part).

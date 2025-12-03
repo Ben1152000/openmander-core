@@ -29,9 +29,18 @@ impl Plan {
         Ok(self.inner.num_districts())
     }
 
-    /// Get the list of weight series available in the map's node weights.
-    pub fn get_series<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        Ok(PyList::new_bound(py, self.inner.series()))
+    /// Get block assignments as a Python dict { "block_geoid": district:int }.
+    /// Includes zeros for unassigned blocks.
+    pub fn assignments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new_bound(py);
+        let assignments = self.inner.get_assignments()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        for (geo_id, district) in assignments {
+            dict.set_item(geo_id.id(), district)?;
+        }
+
+        Ok(dict)
     }
 
     /// Set block assignments from a Python dict { "block_geoid": district:int }.
@@ -53,18 +62,31 @@ impl Plan {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Get block assignments as a Python dict { "block_geoid": district:int }.
-    /// Includes zeros for unassigned blocks.
-    pub fn get_assignments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new_bound(py);
-        let assignments = self.inner.get_assignments()
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    /// Get the list of weight series available in the map's node weights.
+    pub fn series<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        Ok(PyList::new_bound(py, self.inner.series()))
+    }
 
-        for (geo_id, district) in assignments {
-            dict.set_item(geo_id.id(), district)?;
-        }
+    /// Sum of a weight series for each district (excluding unassigned 0).
+    pub fn district_totals<'py>(&self, py: Python<'py>, series: &str) -> PyResult<Vec<f64>> {
+        py.allow_threads(|| {
+            self.inner.district_totals(series)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
 
-        Ok(dict)
+    /// Compute metric values for the current partition.
+    pub fn compute_metric<'py>(&self, py: Python<'py>, metric: &crate::Metric) -> PyResult<Vec<f64>> {
+        py.allow_threads(||
+            Ok(self.inner.compute_metric(&metric.inner))
+        )
+    }
+
+    /// Compute objective value for the current partition.
+    pub fn compute_objective<'py>(&self, py: Python<'py>, objective: &crate::Objective) -> PyResult<f64> {
+        py.allow_threads(||
+            Ok(self.inner.compute_objective(&objective.inner))
+        )
     }
 
     /// Randomize partition into contiguous districts
@@ -81,11 +103,46 @@ impl Plan {
         )
     }
 
-    pub fn anneal_balance<'py>(&mut self, py: Python<'py>, series: &str, max_iter: usize, initial_temp: f64, final_temp: f64, boundary_factor: f64) -> PyResult<()> {
+    pub fn anneal_balance<'py>(&mut self,
+        py: Python<'py>,
+        series: &str,
+        max_iter: usize,
+        initial_temp: f64,
+        final_temp: f64,
+        boundary_factor: f64
+    ) -> PyResult<()> {
         py.allow_threads(||
             self.inner.anneal_balance(series, max_iter, initial_temp, final_temp, boundary_factor)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         )
+    }
+
+    /// Improve balance using a Tabu search heuristic.
+    ///
+    /// Parameters
+    /// ----------
+    /// series : str
+    ///     Name of the node-weight series (e.g., total population).
+    /// max_iter : int
+    ///     Maximum number of Tabu iterations.
+    /// tabu_tenure : int
+    ///     Iterations for which the reverse move is tabu.
+    /// boundary_factor : float
+    ///     0.0 = population balance only, 1.0 = boundary length only.
+    /// candidates_per_iter : int
+    ///     How many random neighbor moves to sample per iteration.
+    pub fn tabu_balance<'py>(&mut self,
+        py: Python<'py>,
+        series: &str,
+        max_iter: usize,
+        tabu_tenure: usize,
+        boundary_factor: f64,
+        candidates_per_iter: usize,
+    ) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.inner.tabu_balance(series, max_iter, tabu_tenure, boundary_factor, candidates_per_iter)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
     }
 
     pub fn recombine<'py>(&mut self, py: Python<'py>, a: u32, b: u32) -> PyResult<()> {

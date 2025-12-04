@@ -119,6 +119,120 @@ impl Partition {
         }
     }
 
+    /// Run simulated annealing to optimize a generic objective function.
+    /// This is the generalized version of `anneal_balance` that works with any `Objective`.
+    /// 
+    /// The algorithm maximizes the objective value (higher is better).
+    /// At the end, the partition is restored to the best state found during the search.
+    /// 
+    /// Parameters:
+    /// - `objective`: The objective to maximize
+    /// - `max_iter`: Total number of annealing iterations
+    /// - `initial_temp`: Starting temperature for annealing
+    /// - `final_temp`: Final temperature for annealing
+    /// - `finish_temp_iter`: Iteration at which to reach final_temp (must be <= max_iter)
+    ///                       After this iteration, temperature stays at final_temp
+    pub(crate) fn anneal(&mut self,
+        objective: &crate::objective::Objective,
+        max_iter: usize,
+        initial_temp: f64,
+        final_temp: f64,
+        finish_temp_iter: usize,
+    ) {
+        assert!(self.parts.get(0).len() == 0, "part 0 (unassigned) must be empty");
+        assert!(self.num_parts() > 2, "need at least two parts for annealing");
+        assert!(finish_temp_iter <= max_iter, "finish_temp_iter must be <= max_iter");
+
+        let mut rng = rand::rng();
+
+        // Compute initial objective value
+        let mut current_objective = objective.compute(self);
+        
+        // Track the best solution found
+        let mut best_objective = current_objective;
+        let mut best_assignments = self.assignments();
+
+        for i in 0..max_iter {
+            // Pick random part, weighted by frontier size (more boundary = more opportunities)
+            let src = self.random_part_weighted_by_frontier(&mut rng).unwrap();
+
+            // Pick random node on part boundary
+            let candidates = self.frontiers.get(src as usize);
+            let node = candidates[rng.random_range(0..candidates.len())];
+
+            // Pick random destination part (that neighbors node)
+            let dest = self.random_neighboring_part(node, &mut rng).unwrap();
+
+            // Collect articulation bundle (if necessary to maintain contiguity)
+            let bundle =
+                if self.check_node_contiguity(node, dest) { vec![] }
+                else { self.cut_subgraph_within_part(node) };
+
+            // Apply the move temporarily to compute new objective
+            let prev_src = src;
+            if bundle.is_empty() {
+                self.move_node(node, dest, false);
+            } else {
+                let subgraph = bundle.iter().chain(std::iter::once(&node)).copied().collect::<Vec<_>>();
+                self.move_subgraph(&subgraph, dest, false);
+            }
+
+            // Compute new objective value
+            let new_objective = objective.compute(self);
+            
+            // Delta: negative of improvement (for minimization in Metropolis criterion)
+            // We want to maximize objective, so delta = current - new
+            // Positive delta = worse, negative delta = better
+            let delta = current_objective - new_objective;
+            
+            // Temperature: cool until finish_temp_iter, then stay at final_temp
+            let temp = if i < finish_temp_iter {
+                temp_geometric(initial_temp, final_temp, finish_temp_iter, i)
+            } else {
+                final_temp
+            };
+            
+            let accept = accept_metropolis(delta, temp, &mut rng);
+
+            if i % 1000 == 0 {
+                println!("Iter {}: part {} -> part {} | temp {:.8} | current_obj {:.4} | new_obj {:.4} | best_obj {:.4} | delta {:.4} | prob {:.3} | accept {}",
+                    i, prev_src, dest, temp,
+                    current_objective,
+                    new_objective,
+                    best_objective,
+                    delta,
+                    if delta <= 0.0 { 1.0 } else { (-delta / temp).exp() },
+                    accept,
+                );
+            }
+
+            if accept {
+                // Keep the move
+                current_objective = new_objective;
+                
+                // Update best if this is better
+                if new_objective > best_objective {
+                    best_objective = new_objective;
+                    best_assignments = self.assignments();
+                }
+            } else {
+                // Revert the move
+                if bundle.is_empty() {
+                    self.move_node(node, prev_src, false);
+                } else {
+                    let subgraph = bundle.iter().chain(std::iter::once(&node)).copied().collect::<Vec<_>>();
+                    self.move_subgraph(&subgraph, prev_src, false);
+                }
+            }
+        }
+        
+        // Restore the best solution found
+        if current_objective < best_objective {
+            println!("Restoring best solution: {:.4} -> {:.4}", current_objective, best_objective);
+            self.set_assignments(best_assignments);
+        }
+    }
+
     /// Implement simulated annealing with energy function, hard constraints
     #[allow(dead_code, unused_variables)]
     pub(crate) fn anneal_optimize(&mut self) { todo!() }

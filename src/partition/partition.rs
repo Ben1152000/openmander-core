@@ -25,12 +25,13 @@ impl Partition {
         let mut part_weights = units_graph.node_weights().copy_of_size(num_parts);
         part_weights.set_row_to_sum_of(0, units_graph.node_weights());
 
+        // Instantiate graph with a zero-length edge between each part (to be updated later).
         let part_graph = Graph::new(
             num_parts,
-            &vec![vec![]; num_parts],
-            &vec![vec![]; num_parts],
+            &vec![(0..num_parts as u32).collect::<Vec<_>>(); num_parts],
+            &vec![vec![0.0; num_parts]; num_parts],
             part_weights,
-            &vec![],
+            &vec![], // To be implemented later
         );
 
         Self {
@@ -101,14 +102,15 @@ impl Partition {
         }
 
         // Rebuild part graph.
-        // Todo: compute part adjacencies
         self.part_graph = Graph::new(
             self.num_parts() as usize,
-            &vec![vec![]; self.num_parts() as usize],
-            &vec![vec![]; self.num_parts() as usize],
+            &vec![(0..self.num_parts()).collect::<Vec<_>>(); self.num_parts() as usize],
+            &vec![vec![0.0; self.num_parts() as usize]; self.num_parts() as usize],
             part_weights,
             &vec![],
         );
+
+        // Todo: compute part adjacencies
     }
 
     /// Sum of a given series for a specific part.
@@ -148,7 +150,7 @@ impl Partition {
             node,
         );
 
-        // Todo: update graph of parts
+        // Todo: update edge lengths of parts
     }
 
     /// Update part weight totals for a subgraph move (from prev to part).
@@ -165,6 +167,6 @@ impl Partition {
             subgraph,
         );
 
-        // Todo: update graph of parts
+        // Todo: update edge lengths of parts
     }
 }

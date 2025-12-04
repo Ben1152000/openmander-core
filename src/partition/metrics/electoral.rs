@@ -8,8 +8,8 @@ impl Partition {
     pub(crate) fn competitiveness(&self, dem_series: &str, rep_series: &str, threshold: f64) -> f64 {
         let mut competitive_seats = 0;
         for part in 1..self.num_parts() {
-            let dem_votes = self.part_weights.get_as_f64(dem_series, part as usize).unwrap_or(0.0);
-            let rep_votes = self.part_weights.get_as_f64(rep_series, part as usize).unwrap_or(0.0);
+            let dem_votes = self.part_weights().get_as_f64(dem_series, part as usize).unwrap_or(0.0);
+            let rep_votes = self.part_weights().get_as_f64(rep_series, part as usize).unwrap_or(0.0);
             let total_votes = dem_votes + rep_votes;
             if total_votes == 0.0 { continue; }
 

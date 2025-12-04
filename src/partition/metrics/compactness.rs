@@ -6,7 +6,7 @@ impl Partition {
     /// Get the area of a part in square meters.
     #[inline]
     fn area(&self, part: u32) -> f64 {
-        self.part_weights.get_as_f64("area_m2", part as usize).unwrap()
+        self.part_weights().get_as_f64("area_m2", part as usize).unwrap()
     }
 
     /// Get the perimeter of a part in meters.

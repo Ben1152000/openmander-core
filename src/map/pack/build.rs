@@ -157,7 +157,7 @@ impl MapLayer {
 
     /// Compute adjacencies for the layer geometries, if it exists.
     fn compute_adjacencies(&mut self) -> Result<()> {
-        let geoms = self.geoms.as_mut()
+        let geoms = self.geoms.as_ref()
             .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?;
         self.adjacencies = geoms.compute_adjacencies_fast(1e8)?;
 
@@ -166,11 +166,44 @@ impl MapLayer {
 
     /// Compute shared perimeters for the layer geometries, if it exists.
     fn compute_shared_perimeters(&mut self) -> Result<()> {
-        let geoms = self.geoms.as_mut()
+        let geoms = self.geoms.as_ref()
             .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
         self.edge_lengths = geoms.compute_shared_perimeters_fast(&self.adjacencies, 1e8)?;
 
         Ok(())
+    }
+
+    /// Compute outer perimeters for the layer geometries (Block layer),
+    /// returning a DataFrame suitable for `merge_block_data`.
+    ///
+    /// The returned DataFrame has:
+    ///   - "GEOID" (String) – block IDs
+    ///   - "outer_perimeter_m" (f64) – outer perimeter length in meters
+    fn compute_outer_perimeters(&self) -> Result<DataFrame> {
+        let geoms = self.geoms.as_ref()
+            .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
+
+        // Compute outer perimeter length for each geometry
+        let outer_perimeters = geoms.compute_outer_perimeters_fast(1e8)?;
+
+        // Sanity check against number of geo_ids
+        assert_eq!(outer_perimeters.len(), self.geo_ids.len(),
+            "compute_outer_perimeters: length mismatch (got {}, expected {})",
+            outer_perimeters.len(),
+            self.geo_ids.len(),
+        );
+
+        // Build a String GEOID column from the layer's geo_ids
+        let geo_ids = self.geo_ids.iter()
+            .map(|gid| gid.id().to_string())
+            .collect::<Vec<_>>();
+
+        let df = DataFrame::new(vec![
+            Column::new("GEOID".into(), geo_ids),
+            Column::new("outer_perimeter_m".into(), outer_perimeters),
+        ])?;
+
+        Ok(df)
     }
 
     /// Compute approximate convex hulls for all MultiPolygons in this layer, if geometries are present.
@@ -315,6 +348,17 @@ impl Map {
         Ok(())
     }
 
+    /// Compute outer perimeters at the block level and aggregate them
+    /// to all higher layers using `merge_block_data`.
+    fn compute_outer_perimeters(&mut self) -> Result<()> {
+        self.merge_block_data(
+            self.get_layer(GeoType::Block).compute_outer_perimeters()?, 
+            "GEOID"
+        )?;
+
+        Ok(())
+    }
+
     /// Build a map pack from the download files in `input_dir`
     pub(crate) fn build_pack(input_dir: &Path, state_code: &str, fips: &str, verbose: u8) -> Result<Self> {
         common::require_dir_exists(input_dir)?;
@@ -402,6 +446,9 @@ impl Map {
         for layer in map.get_layers_mut() {
             layer.compute_shared_perimeters()?
         }
+
+        if verbose > 0 { eprintln!("[build_pack] computing outer perimeters"); }
+        map.compute_outer_perimeters()?;
 
         if verbose > 0 { eprintln!("[build_pack] computing approximate hulls"); }
         for layer in map.get_layers_mut() {

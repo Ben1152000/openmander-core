@@ -8,31 +8,37 @@ use crate::{
 /// A partition of a graph into contiguous parts (districts).
 #[derive(Clone, Debug)]
 pub(crate) struct Partition {
-    graph: Arc<Graph>,                     // Fixed graph structure
-    region: Arc<Graph>,                    // Reference to full region (for access to totals)
-    pub(super) parts: PartitionSet,        // Sets of nodes in each part (including unassigned 0)
-    pub(super) frontiers: MultiSet,        // Nodes on the boundary of each part
-    pub(super) part_weights: WeightMatrix, // Aggregated weights for each part
-    // pub(super) part_hulls: Vec<Polygon<f64>>,   // Convex hull for each part
+    pub(super) parts: PartitionSet,  // Sets of nodes in each part (including unassigned 0)
+    pub(super) frontiers: MultiSet,  // Nodes on the boundary of each part
+    pub(super) part_graph: Graph,    // Graph structure for parts (including aggregated weights)
+    units_graph: Arc<Graph>,         // Reference to unit graph (for access to weights)
+    region_graph: Arc<Graph>,        // Reference to full region (for access to totals)
 }
 
 impl Partition {
     /// Construct an empty partition from a weighted graph reference and number of parts.
-    pub(crate) fn new(num_parts: usize, graph: impl Into<Arc<Graph>>, region: impl Into<Arc<Graph>>) -> Self {
+    pub(crate) fn new(num_parts: usize, units_graph: impl Into<Arc<Graph>>, region_graph: impl Into<Arc<Graph>>) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
-        let graph: Arc<Graph> = graph.into();
-        let region: Arc<Graph> = region.into();
+        let units_graph: Arc<Graph> = units_graph.into();
+        let region_graph: Arc<Graph> = region_graph.into();
 
-        let mut part_weights = graph.node_weights().copy_of_size(num_parts);
-        part_weights.set_row_to_sum_of(0, graph.node_weights());
+        let mut part_weights = units_graph.node_weights().copy_of_size(num_parts);
+        part_weights.set_row_to_sum_of(0, units_graph.node_weights());
+
+        let part_graph = Graph::new(
+            num_parts,
+            &vec![vec![]; num_parts],
+            &vec![vec![]; num_parts],
+            part_weights,
+            &vec![],
+        );
 
         Self {
-            parts: PartitionSet::new(num_parts, graph.node_count()),
-            frontiers: MultiSet::new(num_parts, graph.node_count()),
-            part_weights,
-            // part_hulls: 
-            graph,
-            region,
+            parts: PartitionSet::new(num_parts, units_graph.node_count()),
+            frontiers: MultiSet::new(num_parts, units_graph.node_count()),
+            part_graph,
+            units_graph,
+            region_graph,
         }
     }
 
@@ -40,10 +46,10 @@ impl Partition {
     #[inline] pub(crate) fn num_parts(&self) -> u32 { self.parts.num_sets() as u32 }
 
     /// Get the number of nodes in the underlying graph.
-    #[inline] pub(crate) fn num_nodes(&self) -> usize { self.graph.node_count() }
+    #[inline] pub(crate) fn num_nodes(&self) -> usize { self.units_graph.node_count() }
 
     /// Get a reference to the underlying graph.
-    #[inline] pub(crate) fn graph(&self) -> &Graph { &self.graph }
+    #[inline] pub(crate) fn graph(&self) -> &Graph { &self.units_graph }
 
     /// Get the part assignment of a given node.
     #[inline] pub(crate) fn assignment(&self, node: usize) -> u32 { self.parts.find(node) as u32 }
@@ -62,8 +68,8 @@ impl Partition {
         self.parts.clear();
         self.frontiers.clear();
 
-        self.part_weights.clear_all_rows();
-        self.part_weights.set_row_to_sum_of(0, self.graph.node_weights());
+        self.part_graph.node_weights_mut().clear_all_rows();
+        self.part_graph.node_weights_mut().set_row_to_sum_of(0, self.units_graph.node_weights());
     }
 
     /// Generate assignments map from GeoId to district.
@@ -77,7 +83,7 @@ impl Partition {
         // Recompute boundary flags.
         let on_boundary = (0..self.num_nodes()).map(|u| {
             let part = self.assignment(u);
-            self.graph.edges(u).any(|v| self.assignment(v) != part)
+            self.units_graph.edges(u).any(|v| self.assignment(v) != part)
         }).collect::<Vec<_>>();
 
         // Recompute frontiers.
@@ -89,38 +95,76 @@ impl Partition {
         );
 
         // Recompute per-part totals.
-        self.part_weights = WeightMatrix::copy_of_size(self.graph.node_weights(), self.num_parts() as usize);
+        let mut part_weights = WeightMatrix::copy_of_size(self.units_graph.node_weights(), self.num_parts() as usize);
         for (node, &part) in self.assignments().iter().enumerate() {
-            self.part_weights.add_row_from(part as usize, self.graph.node_weights(), node);
+            part_weights.add_row_from(part as usize, self.units_graph.node_weights(), node);
         }
+
+        // Rebuild part graph.
+        // Todo: compute part adjacencies
+        self.part_graph = Graph::new(
+            self.num_parts() as usize,
+            &vec![vec![]; self.num_parts() as usize],
+            &vec![vec![]; self.num_parts() as usize],
+            part_weights,
+            &vec![],
+        );
     }
 
     /// Sum of a given series for a specific part.
     pub(crate) fn part_total(&self, series: &str, part: u32) -> f64 {
-        self.part_weights.get_as_f64(series, part as usize).unwrap()
+        self.part_graph.node_weights().get_as_f64(series, part as usize).unwrap()
     }
 
     /// Sum of a given series for each part (including unassigned 0).
     pub(crate) fn part_totals(&self, series: &str) -> Vec<f64> {
         (0..self.num_parts())
             .map(|part| self.part_total(series, part))
-            .collect::<Vec<_>>()
+            .collect()
     }
 
     /// Get the total weight of the entire region for a given series.
     pub(crate) fn region_total(&self, series: &str) -> f64 {
-        self.region.node_weights().get_as_f64(series, 0).unwrap()
+        self.region_graph.node_weights().get_as_f64(series, 0).unwrap()
     }
 
+    /// Get a reference to the part weights matrix.
+    pub(super) fn part_weights(&self) -> &WeightMatrix { self.part_graph.node_weights() }
+
+    /// Get a mutable reference to the part weights matrix.
+    pub(super) fn part_weights_mut(&mut self) -> &mut WeightMatrix { self.part_graph.node_weights_mut() }
+
     /// Update part weight totals for a single node move (from prev to part).
-    pub(super) fn update_part_totals_for_node_move(&mut self, node: usize, prev: u32, part: u32) {
-        self.part_weights.subtract_row_from(prev as usize, self.graph.node_weights(), node);
-        self.part_weights.add_row_from(part as usize, self.graph.node_weights(), node);
+    pub(super) fn update_on_node_move(&mut self, node: usize, prev: u32, part: u32) {
+        // Add/subtract node weights from part totals.
+        self.part_graph.node_weights_mut().subtract_row_from(
+            prev as usize,
+            self.units_graph.node_weights(),
+            node,
+        );
+        self.part_graph.node_weights_mut().add_row_from(
+            part as usize,
+            self.units_graph.node_weights(),
+            node,
+        );
+
+        // Todo: update graph of parts
     }
 
     /// Update part weight totals for a subgraph move (from prev to part).
-    pub(super) fn update_part_totals_for_subgraph_move(&mut self, subgraph: &[usize], prev: u32, part: u32) {
-        self.part_weights.subtract_rows_from(prev as usize, self.graph.node_weights(), subgraph);
-        self.part_weights.add_rows_from(part as usize, self.graph.node_weights(), subgraph);
+    pub(super) fn update_on_subgraph_move(&mut self, subgraph: &[usize], prev: u32, part: u32) {
+        // Add/subtract node weights from part totals.
+        self.part_graph.node_weights_mut().subtract_rows_from(
+            prev as usize,
+            self.units_graph.node_weights(),
+            subgraph,
+        );
+        self.part_graph.node_weights_mut().add_rows_from(
+            part as usize,
+            self.units_graph.node_weights(),
+            subgraph,
+        );
+
+        // Todo: update graph of parts
     }
 }

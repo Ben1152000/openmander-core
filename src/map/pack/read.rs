@@ -58,8 +58,6 @@ impl MapLayer {
             common::read_from_weighted_csr(&adj_path)?
         } else { (vec![vec![]], vec![vec![]]) };
 
-        self.construct_graph();
-
         if hull_path.exists() {
             self.hulls = Some(
                 common::read_from_geoparquet(&hull_path)?.into_iter()
@@ -67,6 +65,8 @@ impl MapLayer {
                     .collect()
             );
         }
+
+        self.construct_graph();
 
         if geom_path.exists() { 
             self.geoms = Some(Geometries::new(

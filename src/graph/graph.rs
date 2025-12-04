@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
 use geo::Polygon;
 
 use crate::graph::WeightMatrix;
 
 /// A weighted, undirected graph in compressed sparse row format.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Graph {
     size: usize,
     offsets: Vec<u32>,
@@ -21,8 +19,7 @@ impl Graph {
         num_nodes: usize,
         edges: &[Vec<u32>],
         edge_weights: &[Vec<f64>],
-        weights_i64: HashMap<String, Vec<i64>>,
-        weights_f64: HashMap<String, Vec<f64>>,
+        node_weights: WeightMatrix,
         hulls: &[Polygon<f64>],
     ) -> Self {
         assert!(edges.len() == num_nodes, "edges.len() must equal num_nodes");
@@ -40,7 +37,7 @@ impl Graph {
             ).collect::<Vec<u32>>(),
             edges: edges.iter().flatten().copied().collect(),
             edge_weights: edge_weights.iter().flatten().copied().collect(),
-            node_weights: WeightMatrix::new(num_nodes, weights_i64, weights_f64),
+            node_weights,
             hulls: hulls.to_vec(),
         }
     }
@@ -53,6 +50,9 @@ impl Graph {
 
     /// Get a reference to the node weights matrix.
     #[inline] pub(crate) fn node_weights(&self) -> &WeightMatrix { &self.node_weights }
+
+    /// Get a mutable reference to the node weights matrix.
+    #[inline] pub(crate) fn node_weights_mut(&mut self) -> &mut WeightMatrix { &mut self.node_weights }
 
     /// Get the range of edges for a given node.
     #[inline]
@@ -87,7 +87,6 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn make_test_graph() -> Graph {
         Graph::new(
@@ -104,8 +103,7 @@ mod tests {
                 vec![2.0, 3.5, 0.5],
                 vec![0.5],
             ],
-            HashMap::new(),
-            HashMap::new(),
+            WeightMatrix::empty(4),
             &[],
         )
     }
@@ -180,8 +178,7 @@ mod tests {
             0,
             &[],
             &[],
-            HashMap::new(),
-            HashMap::new(),
+            WeightMatrix::empty(0),
             &vec![],
         );
 
@@ -196,8 +193,7 @@ mod tests {
             3,
             &[vec![], vec![], vec![]],
             &[vec![], vec![], vec![]],
-            HashMap::new(),
-            HashMap::new(),
+            WeightMatrix::empty(3),
             &vec![],
         );
 
@@ -219,8 +215,7 @@ mod tests {
             0,
             &[vec![]],
             &[],
-            HashMap::new(),
-            HashMap::new(),
+            WeightMatrix::empty(0),
             &vec![],
         );
     }
@@ -232,8 +227,7 @@ mod tests {
             0,
             &[],
             &[vec![]],
-            HashMap::new(),
-            HashMap::new(),
+            WeightMatrix::empty(0),
             &vec![],
         );
     }
@@ -245,8 +239,7 @@ mod tests {
             2,
             &[vec![1], vec![]],
             &[vec![], vec![]],
-            HashMap::new(),
-            HashMap::new(),
+            WeightMatrix::empty(2),
             &vec![],
         );
     }

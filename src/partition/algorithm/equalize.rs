@@ -13,7 +13,7 @@ impl Partition {
             "series '{}' not found in node weights", series);
 
         (1..self.num_parts())
-            .map(|p| (p, self.part_weights.get_as_f64(series, p as usize).unwrap()))
+            .map(|p| (p, self.part_weights().get_as_f64(series, p as usize).unwrap()))
             .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
             .unwrap()
     }
@@ -48,8 +48,8 @@ impl Partition {
         let mut rng = rand::rng();
 
         // Define src as the part with surplus weight.
-        let a_total = self.part_weights.get_as_f64(series, a as usize).unwrap();
-        let b_total = self.part_weights.get_as_f64(series, b as usize).unwrap();
+        let a_total = self.part_weights().get_as_f64(series, a as usize).unwrap();
+        let b_total = self.part_weights().get_as_f64(series, b as usize).unwrap();
         let (src, dest, src_total, dest_total) =
             if a_total >= b_total { (a, b, a_total, b_total) }
             else { (b, a, b_total, a_total) };
@@ -99,7 +99,7 @@ impl Partition {
 
         // Compute target population and tolerance band (ignoring unassigned part 0).
         let total = (1..self.num_parts())
-            .map(|part| self.part_weights.get_as_f64(series, part as usize).unwrap())
+            .map(|part| self.part_weights().get_as_f64(series, part as usize).unwrap())
             .sum::<f64>();
         let target = total / ((self.num_parts() - 1) as f64);
         let allowed = target * tolerance;
@@ -109,7 +109,7 @@ impl Partition {
         // Iterate until all parts are within tolerance, or we give up.
         for i in 0..max_iter {
             let totals = (1..self.num_parts())
-                .map(|p| self.part_weights.get_as_f64(series, p as usize).unwrap())
+                .map(|p| self.part_weights().get_as_f64(series, p as usize).unwrap())
                 .collect::<Vec<_>>();
             let deviations = totals.iter()
                 .map(|&total| (total - target).abs())
@@ -133,7 +133,7 @@ impl Partition {
             if totals[part as usize - 1] > target * 2.0 {
                 let (smallest, _) = self.part_with_min_weight(series);
                 let (neighbor, _) = self.sample_neighboring_parts(smallest, 8, &mut rng).iter()
-                    .map(|&p| (p, self.part_weights.get_as_f64(series, p as usize).unwrap()))
+                    .map(|&p| (p, self.part_weights().get_as_f64(series, p as usize).unwrap()))
                     .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
                     .unwrap();
 
@@ -162,7 +162,7 @@ impl Partition {
 
         println!("Equalization incomplete, max deviation {:.0}",
             (1..self.num_parts())
-                .map(|p| self.part_weights.get_as_f64(series, p as usize).unwrap())
+                .map(|p| self.part_weights().get_as_f64(series, p as usize).unwrap())
                 .map(|total| (total - target).abs())
                 .max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
         );

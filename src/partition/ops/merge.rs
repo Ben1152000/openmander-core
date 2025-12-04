@@ -32,8 +32,8 @@ impl Partition {
         }
 
         // update part_weights
-        self.part_weights.add_row(a as usize, b as usize);
-        self.part_weights.clear_row(b as usize);
+        self.part_weights_mut().add_row(a as usize, b as usize);
+        self.part_weights_mut().clear_row(b as usize);
 
         Some(b)
     }

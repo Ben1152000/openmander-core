@@ -99,6 +99,24 @@ impl Plan {
         Ok(())
     }
 
+    /// Run simulated annealing to optimize a generic objective function.
+    /// 
+    /// The algorithm maximizes the objective value (higher is better).
+    /// 
+    /// Parameters:
+    /// - `objective`: The objective to maximize
+    /// - `max_iter`: Total number of annealing iterations
+    /// - `initial_temp`: Starting temperature for annealing
+    /// - `final_temp`: Final temperature for annealing
+    /// - `finish_temp_iter`: Iteration at which to reach final_temp (must be <= max_iter)
+    ///                       After this iteration, temperature stays at final_temp
+    #[inline]
+    pub fn anneal(&mut self, objective: &Objective, max_iter: usize, initial_temp: f64, final_temp: f64, finish_temp_iter: usize) -> Result<()> {
+        self.partition.anneal(objective, max_iter, initial_temp, final_temp, finish_temp_iter);
+
+        Ok(())
+    }
+
     #[inline]
     pub fn recombine(&mut self, a: u32, b: u32) -> Result<()> {
         self.partition.recombine_parts(a, b);

@@ -117,6 +117,39 @@ impl Plan {
         )
     }
 
+    /// Run simulated annealing to optimize a generic objective function.
+    ///
+    /// The algorithm maximizes the objective value (higher is better).
+    /// If you want to include compactness or boundary considerations, add them
+    /// as metrics in your objective.
+    ///
+    /// Parameters
+    /// ----------
+    /// objective : Objective
+    ///     The objective to maximize.
+    /// max_iter : int
+    ///     Total number of annealing iterations.
+    /// initial_temp : float
+    ///     Starting temperature for annealing.
+    /// final_temp : float
+    ///     Final temperature for annealing.
+    /// finish_temp_iter : int
+    ///     Iteration at which to reach final_temp (must be <= max_iter).
+    ///     After this iteration, temperature stays at final_temp.
+    pub fn anneal<'py>(&mut self,
+        py: Python<'py>,
+        objective: &crate::Objective,
+        max_iter: usize,
+        initial_temp: f64,
+        final_temp: f64,
+        finish_temp_iter: usize
+    ) -> PyResult<()> {
+        py.allow_threads(||
+            self.inner.anneal(&objective.inner, max_iter, initial_temp, final_temp, finish_temp_iter)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        )
+    }
+
     /// Improve balance using a Tabu search heuristic.
     ///
     /// Parameters

@@ -2,6 +2,9 @@ use rand::Rng;
 
 use crate::partition::Partition;
 
+/// Epsilon threshold for treating small deltas as improvements (handles floating point precision).
+const EPSILON: f64 = 1e-10;
+
 /// Geometric cooling schedule for temperature `T`.
 ///
 /// Parameters
@@ -23,10 +26,17 @@ fn temp_geometric(initial_temp: f64, final_temp: f64, max_iter: usize, iter: usi
     if final_temp < initial_temp { temp.max(final_temp) } else { temp.min(final_temp) }
 }
 
+/// Calculate acceptance probability for a move with given delta and temperature.
+/// Returns 1.0 if delta <= 0 (improvement), otherwise exp(-delta/temp).
+/// Uses epsilon to treat tiny positive deltas as improvements (handles floating point precision).
+fn acceptance_probability(delta: f64, temp: f64) -> f64 {
+    if delta < -EPSILON { 1.0 } else { ((-delta - EPSILON) / temp).exp() }
+}
+
 /// Metropolis acceptance criterion for simulated annealing in temperature space.
 /// Accept if `delta <= 0` or with probability `exp(-delta / T)`.
 fn accept_metropolis<R: Rng + ?Sized>(delta: f64, temp: f64, rng: &mut R) -> bool {
-    delta <= 0.0 || rng.random::<f64>() < (-delta / temp).exp()
+    delta < -EPSILON || rng.random::<f64>() < acceptance_probability(delta, temp)
 }
 
 impl Partition {
@@ -119,118 +129,466 @@ impl Partition {
         }
     }
 
-    /// Run simulated annealing to optimize a generic objective function.
+    /// Run simulated annealing to optimize a generic objective function with adaptive temperature.
     /// This is the generalized version of `anneal_balance` that works with any `Objective`.
     /// 
     /// The algorithm maximizes the objective value (higher is better).
     /// At the end, the partition is restored to the best state found during the search.
     /// 
+    /// Two-phase adaptive annealing:
+    /// 1. Find initial temperature where average acceptance probability ≈ 0.9
+    /// 2. Cool geometrically at specified rate with early stopping (stops after N iters without improvement)
+    /// 
     /// Parameters:
     /// - `objective`: The objective to maximize
-    /// - `max_iter`: Total number of annealing iterations
-    /// - `initial_temp`: Starting temperature for annealing
-    /// - `final_temp`: Final temperature for annealing
-    /// - `finish_temp_iter`: Iteration at which to reach final_temp (must be <= max_iter)
-    ///                       After this iteration, temperature stays at final_temp
+    /// - `max_iter`: Safety maximum iterations (prevents infinite loops)
+    /// - `init_temp`: Initial temperature guess for phase 1 (default: 1.0)
+    /// - `cooling_rate`: Geometric cooling rate (temp *= rate each iteration, e.g., 0.99999)
+    /// - `early_stop_iters`: Stop phase 3 after this many iterations without improvement
+    /// - `window_size`: Rolling window size for measuring acceptance rates (default: 1000)
     pub(crate) fn anneal(&mut self,
         objective: &crate::objective::Objective,
         max_iter: usize,
-        initial_temp: f64,
-        final_temp: f64,
-        finish_temp_iter: usize,
+        init_temp: f64,
+        cooling_rate: f64,
+        early_stop_iters: usize,
+        window_size: usize,
+        log_every: usize,
     ) {
         assert!(self.parts.get(0).len() == 0, "part 0 (unassigned) must be empty");
         assert!(self.num_parts() > 2, "need at least two parts for annealing");
-        assert!(finish_temp_iter <= max_iter, "finish_temp_iter must be <= max_iter");
+        assert!(cooling_rate > 0.0 && cooling_rate < 1.0, "cooling_rate must be in (0, 1)");
 
         let mut rng = rand::rng();
-
-        // Compute initial objective value
         let mut current_objective = objective.compute(self);
-        
-        // Track the best solution found
         let mut best_objective = current_objective;
         let mut best_assignments = self.assignments();
+        let mut total_iter = 0;
+        let mut best_iter = 0;
 
-        for i in 0..max_iter {
-            // Pick random part, weighted by frontier size (more boundary = more opportunities)
-            let src = self.random_part_weighted_by_frontier(&mut rng).unwrap();
+        // Phase 1: Find initial temperature where average acceptance probability ≈ 0.9
+        let temp = self.find_initial_temp(
+            objective,
+            init_temp,
+            0.9,
+            window_size,
+            log_every,
+            &mut current_objective,
+            &mut best_objective,
+            &mut best_assignments,
+            &mut total_iter,
+            max_iter,
+            &mut rng,
+            &mut best_iter,
+        );
 
-            // Pick random node on part boundary
-            let candidates = self.frontiers.get(src as usize);
-            let node = candidates[rng.random_range(0..candidates.len())];
+        // Phase 2: Cool with early stopping (stop after N iters without improvement)
+        self.cool_to_target_acceptance(
+            objective,
+            temp,
+            cooling_rate,
+            0.1,
+            window_size,
+            log_every,
+            &mut current_objective,
+            &mut best_objective,
+            &mut best_assignments,
+            &mut total_iter,
+            max_iter,
+            &mut rng,
+            early_stop_iters,
+        );
 
-            // Pick random destination part (that neighbors node)
-            let dest = self.random_neighboring_part(node, &mut rng).unwrap();
+        // Restore the best solution found
+        if current_objective < best_objective {
+            self.set_assignments(best_assignments);
+        }
+    }
 
-            // Collect articulation bundle (if necessary to maintain contiguity)
-            let bundle =
-                if self.check_node_contiguity(node, dest) { vec![] }
-                else { self.cut_subgraph_within_part(node) };
-
-            // Apply the move temporarily to compute new objective
-            let prev_src = src;
-            if bundle.is_empty() {
-                self.move_node(node, dest, false);
-            } else {
-                let subgraph = bundle.iter().chain(std::iter::once(&node)).copied().collect::<Vec<_>>();
-                self.move_subgraph(&subgraph, dest, false);
+    /// Phase 1: Find initial temperature where average acceptance probability reaches target (typically 0.9)
+    /// Uses binary search to adaptively find the right temperature.
+    fn find_initial_temp(
+        &mut self,
+        objective: &crate::objective::Objective,
+        init_temp: f64,
+        target_prob: f64,
+        window_size: usize,
+        log_every: usize,
+        current_objective: &mut f64,
+        best_objective: &mut f64,
+        best_assignments: &mut Vec<u32>,
+        total_iter: &mut usize,
+        max_iter: usize,
+        rng: &mut impl Rng,
+        best_iter: &mut usize,
+    ) -> f64 {
+        let mut temp = init_temp;
+        let mut temp_low = init_temp * 0.000001;  // Lower bound for binary search (very low)
+        let mut temp_high = init_temp * 100.0; // Upper bound for binary search
+        
+        let mut search_iter = 0;
+        
+        // Binary search for the right temperature - keep going until we find it or hit max_iter
+        loop {
+            let avg_prob = self.measure_average_probability(
+                objective,
+                temp,
+                window_size,
+                log_every,
+                current_objective,
+                best_objective,
+                best_assignments,
+                total_iter,
+                max_iter,
+                rng,
+                best_iter,
+            );
+            
+            // Check if we're close enough to target (within 1%)
+            if (avg_prob - target_prob).abs() < 0.01 {
+                return temp;
             }
-
-            // Compute new objective value
-            let new_objective = objective.compute(self);
             
-            // Delta: negative of improvement (for minimization in Metropolis criterion)
-            // We want to maximize objective, so delta = current - new
-            // Positive delta = worse, negative delta = better
-            let delta = current_objective - new_objective;
-            
-            // Temperature: cool until finish_temp_iter, then stay at final_temp
-            let temp = if i < finish_temp_iter {
-                temp_geometric(initial_temp, final_temp, finish_temp_iter, i)
+            // Adjust temperature bounds
+            if avg_prob < target_prob {
+                // Need higher temperature
+                temp_low = temp;
             } else {
-                final_temp
-            };
-            
-            let accept = accept_metropolis(delta, temp, &mut rng);
-
-            if i % 1000 == 0 {
-                println!("Iter {}: part {} -> part {} | temp {:.8} | current_obj {:.4} | new_obj {:.4} | best_obj {:.4} | delta {:.4} | prob {:.3} | accept {}",
-                    i, prev_src, dest, temp,
-                    current_objective,
-                    new_objective,
-                    best_objective,
-                    delta,
-                    if delta <= 0.0 { 1.0 } else { (-delta / temp).exp() },
-                    accept,
-                );
+                // Need lower temperature
+                temp_high = temp;
             }
-
-            if accept {
-                // Keep the move
-                current_objective = new_objective;
-                
-                // Update best if this is better
-                if new_objective > best_objective {
-                    best_objective = new_objective;
-                    best_assignments = self.assignments();
-                }
+            
+            // Binary search midpoint
+            let new_temp = (temp_low + temp_high) / 2.0;
+            
+            // If we're stuck at the same temperature, expand the search range downward
+            if (new_temp - temp).abs() < 1e-10 && avg_prob > target_prob {
+                // Need to go lower, expand lower bound
+                temp_low = temp_low * 0.1;
+                temp = (temp_low + temp_high) / 2.0;
             } else {
-                // Revert the move
-                if bundle.is_empty() {
-                    self.move_node(node, prev_src, false);
-                } else {
-                    let subgraph = bundle.iter().chain(std::iter::once(&node)).copied().collect::<Vec<_>>();
-                    self.move_subgraph(&subgraph, prev_src, false);
-                }
+                temp = new_temp;
+            }
+            
+            search_iter += 1;
+            
+            // Safety check
+            if *total_iter >= max_iter {
+                return temp;
+            }
+        }
+    }
+
+    /// Phase 2: Cool geometrically with early stopping based on no improvement
+    fn cool_to_target_acceptance(
+        &mut self,
+        objective: &crate::objective::Objective,
+        mut temp: f64,
+        cooling_rate: f64,
+        target_prob: f64,
+        window_size: usize,
+        log_every: usize,
+        current_objective: &mut f64,
+        best_objective: &mut f64,
+        best_assignments: &mut Vec<u32>,
+        total_iter: &mut usize,
+        max_iter: usize,
+        rng: &mut impl Rng,
+        early_stop_iters: usize,
+    ) {
+        let mut iters_since_improvement = 0;
+        let initial_best = *best_objective;
+        let mut best_iter = *total_iter;
+        
+        // For printing: non-overlapping windows
+        let mut window_prob_sum = 0.0;
+        let mut window_count = 0;
+        
+        loop {
+            let prev_best = *best_objective;
+            
+            // Perform one iteration
+            let (_, delta) = self.anneal_iteration(
+                objective,
+                temp,
+                current_objective,
+                best_objective,
+                best_assignments,
+                total_iter,
+                rng,
+            );
+            
+            // Calculate acceptance probability for this move
+            let prob = acceptance_probability(delta, temp);
+            
+            // Accumulate for printing window (non-overlapping)
+            window_prob_sum += prob;
+            window_count += 1;
+            
+            // Check if we improved the best objective
+            if *best_objective > prev_best {
+                iters_since_improvement = 0;
+                best_iter = *total_iter;
+            } else {
+                iters_since_improvement += 1;
+            }
+            
+            // Print progress every log_every iterations (non-overlapping windows)
+            if *total_iter % log_every == 0 {
+                let avg_prob = window_prob_sum / window_count as f64;
+                self.print_progress_with_avg_prob_and_curr(objective, *total_iter, *current_objective, *best_objective, temp, avg_prob, prob, delta, best_iter);
+                // Reset window for next period
+                window_prob_sum = 0.0;
+                window_count = 0;
+            }
+            
+            // Early stopping check
+            if iters_since_improvement >= early_stop_iters {
+                return;
+            }
+            
+            // Cool temperature
+            temp *= cooling_rate;
+            
+            // Safety check
+            if *total_iter >= max_iter {
+                return;
+            }
+        }
+    }
+
+    /// Measure average acceptance probability at a given temperature over a window of iterations
+    fn measure_average_probability(
+        &mut self,
+        objective: &crate::objective::Objective,
+        temp: f64,
+        window_size: usize,
+        log_every: usize,
+        current_objective: &mut f64,
+        best_objective: &mut f64,
+        best_assignments: &mut Vec<u32>,
+        total_iter: &mut usize,
+        max_iter: usize,
+        rng: &mut impl Rng,
+        best_iter: &mut usize,
+    ) -> f64 {
+        let mut prob_sum = 0.0;
+        let mut count = 0;
+        
+        // For printing: accumulate over non-overlapping windows
+        let mut window_prob_sum = 0.0;
+        let mut window_count = 0;
+        
+        for _ in 0..window_size {
+            if *total_iter >= max_iter {
+                break;
+            }
+            
+            let prev_best = *best_objective;
+            
+            let (_, delta) = self.anneal_iteration(
+                objective,
+                temp,
+                current_objective,
+                best_objective,
+                best_assignments,
+                total_iter,
+                rng,
+            );
+            
+            // Track best iteration
+            if *best_objective > prev_best {
+                *best_iter = *total_iter;
+            }
+            
+            // Calculate acceptance probability for this move
+            let prob = acceptance_probability(delta, temp);
+            prob_sum += prob;
+            count += 1;
+            
+            // Accumulate for printing window
+            window_prob_sum += prob;
+            window_count += 1;
+            
+            // Print progress every log_every iterations (non-overlapping windows)
+            if *total_iter % log_every == 0 {
+                let avg_prob = window_prob_sum / window_count as f64;
+                self.print_progress_with_avg_prob_and_curr(objective, *total_iter, *current_objective, *best_objective, temp, avg_prob, prob, delta, *best_iter);
+                // Reset window for next period
+                window_prob_sum = 0.0;
+                window_count = 0;
             }
         }
         
-        // Restore the best solution found
-        if current_objective < best_objective {
-            println!("Restoring best solution: {:.4} -> {:.4}", current_objective, best_objective);
-            self.set_assignments(best_assignments);
+        if count > 0 {
+            prob_sum / count as f64
+        } else {
+            0.0
         }
+    }
+
+    /// Perform a single annealing iteration (propose move, accept/reject)
+    /// Returns (accepted, delta) tuple
+    fn anneal_iteration(
+        &mut self,
+        objective: &crate::objective::Objective,
+        temp: f64,
+        current_objective: &mut f64,
+        best_objective: &mut f64,
+        best_assignments: &mut Vec<u32>,
+        total_iter: &mut usize,
+        rng: &mut impl Rng,
+    ) -> (bool, f64) {
+        // Pick random part, weighted by frontier size
+        let src = self.random_part_weighted_by_frontier(rng).unwrap();
+
+        // Pick random node on part boundary
+        let candidates = self.frontiers.get(src as usize);
+        let node = candidates[rng.random_range(0..candidates.len())];
+
+        // Pick random destination part (that neighbors node)
+        let dest = self.random_neighboring_part(node, rng).unwrap();
+
+        // Collect articulation bundle (if necessary to maintain contiguity)
+        let bundle =
+            if self.check_node_contiguity(node, dest) { vec![] }
+            else { self.cut_subgraph_within_part(node) };
+
+        // Apply the move temporarily to compute new objective
+        let prev_src = src;
+        if bundle.is_empty() {
+            self.move_node(node, dest, false);
+        } else {
+            let subgraph = bundle.iter().chain(std::iter::once(&node)).copied().collect::<Vec<_>>();
+            self.move_subgraph(&subgraph, dest, false);
+        }
+
+        // Compute new objective value
+        let new_objective = objective.compute(self);
+        
+        // Delta: negative of improvement (for minimization in Metropolis criterion)
+        let delta = *current_objective - new_objective;
+        
+        let accept = accept_metropolis(delta, temp, rng);
+
+        if accept {
+            // Keep the move
+            *current_objective = new_objective;
+            
+            // Update best if this is better
+            if new_objective > *best_objective {
+                *best_objective = new_objective;
+                *best_assignments = self.assignments();
+            }
+        } else {
+            // Revert the move
+            if bundle.is_empty() {
+                self.move_node(node, prev_src, false);
+            } else {
+                let subgraph = bundle.iter().chain(std::iter::once(&node)).copied().collect::<Vec<_>>();
+                self.move_subgraph(&subgraph, prev_src, false);
+            }
+        }
+
+        *total_iter += 1;
+        (accept, delta)
+    }
+
+    /// Print progress information (for phase 3 where we don't have rolling window)
+    fn print_progress(
+        &self,
+        objective: &crate::objective::Objective,
+        iter: usize,
+        current_objective: f64,
+        best_objective: f64,
+        temp: f64,
+        delta: f64,
+    ) {
+        let comp_str = objective.metrics()
+            .iter()
+            .map(|metric| {
+                let score = metric.compute_score(self);
+                format!("{}={:.4}", metric.short_name(), score)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        
+        // Calculate acceptance probability for this single move
+        let prob = acceptance_probability(delta, temp);
+        
+        println!("Iter {}: obj {:.4} | {} | best {:.4} | temp {:.12e} | prob {:.8}",
+            iter,
+            current_objective,
+            comp_str,
+            best_objective,
+            temp,
+            prob,
+        );
+    }
+
+    /// Print progress information with average probability over rolling window
+    fn print_progress_with_avg_prob(
+        &self,
+        objective: &crate::objective::Objective,
+        iter: usize,
+        current_objective: f64,
+        best_objective: f64,
+        temp: f64,
+        avg_prob: f64,
+    ) {
+        let comp_str = objective.metrics()
+            .iter()
+            .map(|metric| {
+                let score = metric.compute_score(self);
+                format!("{}={:.4}", metric.short_name(), score)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        
+        println!("Iter {}: obj {:.4} | {} | best {:.4} | temp {:.12e} | prob {:.8}",
+            iter,
+            current_objective,
+            comp_str,
+            best_objective,
+            temp,
+            avg_prob,
+        );
+    }
+
+    /// Print progress information with both average probability and current move probability
+    fn print_progress_with_avg_prob_and_curr(
+        &self,
+        objective: &crate::objective::Objective,
+        iter: usize,
+        current_objective: f64,
+        best_objective: f64,
+        temp: f64,
+        avg_prob: f64,
+        curr_prob: f64,
+        delta: f64,
+        best_iter: usize,
+    ) {
+        let comp_str = objective.metrics()
+            .iter()
+            .map(|metric| {
+                let score = metric.compute_score(self);
+                format!("{}={:.4}", metric.short_name(), score)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        
+        let delta_print = if delta < 0.0 { delta.min(EPSILON) } else { delta };
+        println!("Iter {}: obj {:.12e} | {} | best {:.12e} @ {} | temp {:.12e} | prob {:.8} | curr_prob {:.8} | delta {:.8e}",
+            iter,
+            current_objective,
+            comp_str,
+            best_objective,
+            best_iter,
+            temp,
+            avg_prob,
+            curr_prob,
+            delta_print,
+        );
     }
 
     /// Implement simulated annealing with energy function, hard constraints

@@ -75,10 +75,17 @@ impl Plan {
         })
     }
 
-    /// Compute metric values for the current partition.
+    /// Compute metric values for the current partition (per-district scores).
     pub fn compute_metric<'py>(&self, py: Python<'py>, metric: &crate::Metric) -> PyResult<Vec<f64>> {
         py.allow_threads(||
             Ok(self.inner.compute_metric(&metric.inner))
+        )
+    }
+
+    /// Compute the aggregated score for a metric for the current partition.
+    pub fn compute_metric_score<'py>(&self, py: Python<'py>, metric: &crate::Metric) -> PyResult<f64> {
+        py.allow_threads(||
+            Ok(self.inner.compute_metric_score(&metric.inner))
         )
     }
 
@@ -123,29 +130,38 @@ impl Plan {
     /// If you want to include compactness or boundary considerations, add them
     /// as metrics in your objective.
     ///
+    /// Three-phase adaptive annealing:
+    /// 1. Find initial temperature where acceptance rate ≈ 0.9
+    /// 2. Cool geometrically at specified rate until acceptance rate ≈ 0.1
+    /// 3. Run at final temperature with early stopping (stops after N iters without improvement)
+    ///
     /// Parameters
     /// ----------
     /// objective : Objective
     ///     The objective to maximize.
     /// max_iter : int
-    ///     Total number of annealing iterations.
-    /// initial_temp : float
-    ///     Starting temperature for annealing.
-    /// final_temp : float
-    ///     Final temperature for annealing.
-    /// finish_temp_iter : int
-    ///     Iteration at which to reach final_temp (must be <= max_iter).
-    ///     After this iteration, temperature stays at final_temp.
+    ///     Safety maximum iterations (prevents infinite loops).
+    /// init_temp : float, optional
+    ///     Initial temperature guess for phase 1 (default: 1.0).
+    /// cooling_rate : float, optional
+    ///     Geometric cooling rate (temp *= rate each iteration, default: 0.99999).
+    /// early_stop_iters : int, optional
+    ///     Stop phase 3 after this many iterations without improvement (default: 100000).
+    /// window_size : int, optional
+    ///     Rolling window size for measuring acceptance rates (default: 1000).
+    #[pyo3(signature = (objective, max_iter, init_temp=1.0, cooling_rate=0.99999, early_stop_iters=100000, window_size=1000, log_every=1000))]
     pub fn anneal<'py>(&mut self,
         py: Python<'py>,
         objective: &crate::Objective,
         max_iter: usize,
-        initial_temp: f64,
-        final_temp: f64,
-        finish_temp_iter: usize
+        init_temp: f64,
+        cooling_rate: f64,
+        early_stop_iters: usize,
+        window_size: usize,
+        log_every: usize,
     ) -> PyResult<()> {
         py.allow_threads(||
-            self.inner.anneal(&objective.inner, max_iter, initial_temp, final_temp, finish_temp_iter)
+            self.inner.anneal(&objective.inner, max_iter, init_temp, cooling_rate, early_stop_iters, window_size, log_every)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         )
     }

@@ -64,15 +64,21 @@ impl Objective {
     pub(crate) fn metrics(&self) -> &[Metric] { &self.metrics }
 
     /// Evaluate this objective for a given partition.
+    /// Returns the weighted average of metric scores.
     pub(crate) fn compute(&self, partition: &Partition) -> f64 {
-        let mut total = 0.0;
+        let mut weighted_sum = 0.0;
+        let total_weight: f64 = self.weights.iter().sum();
 
         for (metric, &weight) in self.metrics.iter().zip(&self.weights) {
-            let value = metric.compute(partition);
-            total += weight * value.iter().sum::<f64>();
+            let score = metric.compute_score(partition);
+            weighted_sum += weight * score;
         }
 
-        total
+        if total_weight > 0.0 {
+            weighted_sum / total_weight
+        } else {
+            0.0
+        }
     }
 }
 

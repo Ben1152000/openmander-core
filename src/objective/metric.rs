@@ -46,15 +46,38 @@ impl Metric {
         Self { kind: MetricKind::Proportionality { dem_series, rep_series } }
     }
 
-    /// Evaluate this metric for a given partition.
+    /// Get a short name for this metric (for display purposes).
+    pub(crate) fn short_name(&self) -> &str {
+        match &self.kind {
+            MetricKind::PopulationDeviation { .. } => "PopulationEquality",
+            MetricKind::Compactness => "CompactnessPolsbyPopper",
+            MetricKind::Competitiveness { .. } => "Competitiveness",
+            MetricKind::Proportionality { .. } => "Proportionality",
+        }
+    }
+
+    /// Evaluate this metric for a given partition, returning per-district scores.
     pub(crate) fn compute(&self, partition: &Partition) -> Vec<f64> {
         match &self.kind {
             MetricKind::PopulationDeviation { series } => {
+                let n = (partition.num_parts() - 1) as f64;  // Number of districts
                 let total = partition.region_total(series);
-                let average = total / (partition.num_parts() as f64 - 1.0);
+                let m = total / n;  // Average population
+                let k = 1.0 / ((n - 1.0) * (n - 1.0));  // k = 1/(N-1)^2
 
                 (1..partition.num_parts())
-                    .map(|part| (partition.part_total(series, part) - average) / average)
+                    .map(|part| {
+                        let x = partition.part_total(series, part);
+                        let epsilon = ((x - m) / m).powi(2);
+                        
+                        if x <= m {
+                            // 0 ≤ x ≤ m: metric is (1-epsilon)/(1+epsilon)
+                            (1.0 - epsilon) / (1.0 + epsilon)
+                        } else {
+                            // m < x ≤ N*m: metric is (1-k*epsilon)/(1+epsilon)
+                            (1.0 - k * epsilon) / (1.0 + epsilon)
+                        }
+                    })
                     .collect()
             }
             MetricKind::Compactness => {
@@ -98,6 +121,16 @@ impl Metric {
             MetricKind::Proportionality { dem_series, rep_series } =>
                 todo!(),
         }
+    }
+
+    /// Compute the overall score for this metric by aggregating per-district scores.
+    /// Currently uses average for all metrics, but can be customized per metric type in the future.
+    pub(crate) fn compute_score(&self, partition: &Partition) -> f64 {
+        let values = self.compute(partition);
+        if values.is_empty() {
+            return 0.0;
+        }
+        values.iter().sum::<f64>() / values.len() as f64
     }
 }
 

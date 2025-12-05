@@ -5,7 +5,7 @@ use crate::partition::Partition;
 impl Partition {
     /// Get the area of a part in square meters.
     #[inline]
-    fn area(&self, part: u32) -> f64 {
+    pub(crate) fn area(&self, part: u32) -> f64 {
         self.part_weights().get_as_f64("area_m2", part as usize).unwrap()
     }
 
@@ -48,7 +48,7 @@ impl Partition {
     /// Get the moment of a part (defined as the sum of the square weighted
     /// distance from the population center).
     #[allow(unused_variables)]
-    fn moment(&self, part: u32) -> f64 { todo!() }
+    pub(crate) fn moment(&self, part: u32) -> f64 { todo!() }
 
     /// Compute the convex hull compactness score for a part (0 to 1).
     /// Formula: area(part) / area(convex_hull(part))

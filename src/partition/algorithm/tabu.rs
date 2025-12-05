@@ -24,7 +24,7 @@ impl Partition {
         assert!(self.parts.get(0).is_empty(), "part 0 (unassigned) must be empty");
         assert!(self.num_parts() > 2, "need at least two parts for tabu_balance");
         assert!(
-            self.part_weights.contains(series),
+            self.part_weights().contains(series),
             "part_weights must contain series '{series}'"
         );
 
@@ -32,7 +32,7 @@ impl Partition {
 
         // --- 1. Compute target part weight (same as anneal_balance) ---
         let part_values = (0..self.num_parts())
-            .map(|part| self.part_weights.get_as_f64(series, part as usize).unwrap())
+            .map(|part| self.part_weights().get_as_f64(series, part as usize).unwrap())
             .collect::<Vec<_>>();
         let target = part_values.iter().sum::<f64>() / (self.num_parts() - 1) as f64;
 
@@ -40,7 +40,7 @@ impl Partition {
         let mut pop_cost = 0.0;
         for part in 1..self.num_parts() {
             let w = self
-                .part_weights
+                .part_weights()
                 .get_as_f64(series, part as usize)
                 .unwrap();
             let diff = w - target;
@@ -132,11 +132,11 @@ impl Partition {
                             .sum::<f64>();
 
                     let src_weight = self
-                        .part_weights
+                        .part_weights()
                         .get_as_f64(series, src as usize)
                         .unwrap();
                     let dest_weight = self
-                        .part_weights
+                        .part_weights()
                         .get_as_f64(series, dest as usize)
                         .unwrap();
 

@@ -37,6 +37,15 @@ impl WeightMatrix {
         weights
     }
 
+    /// Create an empty WeightMatrix with zero series.
+    pub(crate) fn empty(size: usize) -> Self {
+        Self {
+            series: HashMap::new(),
+            i64: Array2::<i64>::zeros((size, 0)),
+            f64: Array2::<f64>::zeros((size, 0)),
+        }
+    }
+
     /// Get a list of available weight series names.
     #[inline]
     pub(crate) fn series(&self) -> Vec<&str> {

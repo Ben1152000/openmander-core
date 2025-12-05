@@ -32,7 +32,7 @@ impl Partition {
         }
 
         // Update aggregated integer totals (subtract from old, add to new).
-        self.update_part_totals_for_node_move(node, prev, part);
+        self.update_on_node_move(node, prev, part);
     }
 
     /// Move a connected subgraph to a different part, updating caches.
@@ -82,7 +82,7 @@ impl Partition {
         }
 
         // Batch-update per-part totals.
-        self.update_part_totals_for_subgraph_move(&subgraph, prev, part);
+        self.update_on_subgraph_move(&subgraph, prev, part);
     }
 
     /// Articulation-aware move: move `u` and (if needed) the minimal "dangling" component

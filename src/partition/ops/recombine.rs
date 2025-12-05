@@ -171,7 +171,7 @@ impl Partition {
 
         self.move_subgraph(&subtree, other, false);
 
-        println!("a population: {}", self.part_weights.get_as_f64("T_20_CENS_Total", a as usize).unwrap());
-        println!("b population: {}", self.part_weights.get_as_f64("T_20_CENS_Total", b as usize).unwrap());
+        println!("a population: {}", self.part_weights().get_as_f64("T_20_CENS_Total", a as usize).unwrap());
+        println!("b population: {}", self.part_weights().get_as_f64("T_20_CENS_Total", b as usize).unwrap());
     }
 }

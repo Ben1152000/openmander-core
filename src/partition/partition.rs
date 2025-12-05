@@ -101,14 +101,27 @@ impl Partition {
             part_weights.add_row_from(part as usize, self.unit_graph.node_weights(), node);
         }
 
+        // Recompute edge weights between parts.
         let mut edge_weights = vec![vec![0.0; self.num_parts() as usize]; self.num_parts() as usize];
         for part in 0..self.num_parts() {
-            for &u in self.frontiers.get(part as usize).iter() {
-                for (v, w) in self.graph().edges_with_weights(u) {
-                    let other = self.assignment(v);
-                    if other != part { edge_weights[part as usize][other as usize] += w }
+            for &node in self.frontiers.get(part as usize).iter() {
+                for (edge, weight) in self.graph().edges_with_weights(node) {
+                    let other = self.assignment(edge);
+                    if other != part { 
+                        edge_weights[part as usize][other as usize] += weight;
+                        edge_weights[other as usize][part as usize] += weight;
+                    }
                 }
             }
+        }
+
+        // Account for exterior edge weights
+        for part in 1..self.num_parts() {
+            let exterior = part_weights
+                .get_as_f64("outer_perimeter_m", part as usize)
+                .unwrap_or(0.0);
+            edge_weights[part as usize][0] += exterior;
+            edge_weights[0][part as usize] += exterior;
         }
 
         // Rebuild part graph.
@@ -175,17 +188,17 @@ impl Partition {
         }
 
         // Account for exterior edge weights
-        // let exterior = self.unit_graph.node_weights()
-        //     .get_as_f64("outer_perimeter_m", node)
-        //     .unwrap_or(0.0);
-        // if prev != 0 {
-        //     self.part_graph.edge_weights_mut()[(prev * size + 0) as usize] -= exterior;
-        //     self.part_graph.edge_weights_mut()[(0 * size + prev) as usize] -= exterior;
-        // }
-        // if next != 0 {
-        //     self.part_graph.edge_weights_mut()[(next * size + 0) as usize] += exterior;
-        //     self.part_graph.edge_weights_mut()[(0 * size + next) as usize] += exterior;
-        // }
+        let exterior = self.unit_graph.node_weights()
+            .get_as_f64("outer_perimeter_m", node)
+            .unwrap_or(0.0);
+        if prev != 0 {
+            self.part_graph.edge_weights_mut()[(prev * size + 0) as usize] -= exterior;
+            self.part_graph.edge_weights_mut()[(0 * size + prev) as usize] -= exterior;
+        }
+        if next != 0 {
+            self.part_graph.edge_weights_mut()[(next * size + 0) as usize] += exterior;
+            self.part_graph.edge_weights_mut()[(0 * size + next) as usize] += exterior;
+        }
     }
 
     /// Update part weight totals for a subgraph move (from prev to next part).
@@ -204,7 +217,7 @@ impl Partition {
 
         // Update edge weights between parts.
         let size = self.num_parts();
-        let in_subgraph = subgraph.iter().collect::<HashSet<_>>();
+        let in_subgraph = subgraph.iter().copied().collect::<HashSet<_>>();
         for &node in subgraph {
             for (edge, weight) in self.unit_graph.edges_with_weights(node) {
                 let part = self.assignment(edge);
@@ -219,9 +232,20 @@ impl Partition {
                     self.part_graph.edge_weights_mut()[(part * size + next) as usize] += weight;
                 }
             }
-        }
 
-        // Todo: Account for exterior edge weights
+            // Account for exterior edge weights
+            let exterior = self.unit_graph.node_weights()
+                .get_as_f64("outer_perimeter_m", node)
+                .unwrap_or(0.0);
+            if prev != 0 {
+                self.part_graph.edge_weights_mut()[(prev * size + 0) as usize] -= exterior;
+                self.part_graph.edge_weights_mut()[(0 * size + prev) as usize] -= exterior;
+            }
+            if next != 0 {
+                self.part_graph.edge_weights_mut()[(next * size + 0) as usize] += exterior;
+                self.part_graph.edge_weights_mut()[(0 * size + next) as usize] += exterior;
+            }
+        }
     }
 
     pub(super) fn update_on_merge_parts(&mut self, target: u32, source: u32) {
@@ -234,7 +258,7 @@ impl Partition {
         for part in 0..size {
             if part != target && part != source {
                 self.part_graph.edge_weights_mut()[(target * size + part) as usize] += self.part_graph.edge_weights()[(source * size + part) as usize];
-                self.part_graph.edge_weights_mut()[(part * size + target) as usize] += self.part_graph.edge_weights()[(part * size + target) as usize];
+                self.part_graph.edge_weights_mut()[(part * size + target) as usize] += self.part_graph.edge_weights()[(part * size + source) as usize];
             }
             self.part_graph.edge_weights_mut()[(source * size + part) as usize] = 0.0;
             self.part_graph.edge_weights_mut()[(part * size + source) as usize] = 0.0;

@@ -1,6 +1,6 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{HashMap, HashSet}, sync::Arc};
 
-use anyhow::{bail, ensure, Ok, Result};
+use anyhow::{ensure, Ok, Result};
 
 use crate::{Metric, Objective, map::{GeoId, GeoType, Map}, partition::Partition};
 
@@ -32,7 +32,7 @@ impl Plan {
     #[inline] pub fn num_districts(&self) -> u32 { self.num_districts }
 
     /// Get the list of weight series available in the map's node weights.
-    #[inline] pub fn series(&self) -> Vec<&str> { self.partition.graph().node_weights().series() }
+    #[inline] pub fn series(&self) -> HashSet<String> { self.partition.series() }
 
     /// Set the block assignments for the plan.
     #[inline]
@@ -61,8 +61,8 @@ impl Plan {
     #[inline]
     pub fn district_totals(&self, series: &str) -> Result<Vec<f64>> {
         ensure!(
-            self.partition.graph().node_weights().contains(series),
-            "part_weights missing series '{series}'"
+            self.partition.series().contains(series),
+            "[Plan.district_totals] part_weights missing series '{series}'"
         );
 
         Ok(self.partition.part_totals(series))
@@ -84,9 +84,10 @@ impl Plan {
     /// Equalize total weights across all districts using greedy swaps.
     #[inline]
     pub fn equalize(&mut self, series: &str, tolerance: f64, max_iter: usize) -> Result<()> {
-        if !self.partition.graph().node_weights().contains(series) {
-            bail!("[Plan.equalize] Population column '{}' not found in node weights", series);
-        }
+        ensure!(
+            self.partition.series().contains(series),
+            "[Plan.equalize] Population column '{series}' not found in node weights"
+        );
 
         Ok(self.partition.equalize(series, tolerance, max_iter))
     }

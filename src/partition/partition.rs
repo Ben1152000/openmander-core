@@ -44,25 +44,27 @@ impl Partition {
     }
 
     /// Get the number of parts in this partition (including unassigned 0).
-    #[inline] pub(crate) fn num_parts(&self) -> u32 { self.parts.num_sets() as u32 }
+    pub(crate) fn num_parts(&self) -> u32 { self.parts.num_sets() as u32 }
 
     /// Get the number of nodes in the underlying graph.
-    #[inline] pub(crate) fn num_nodes(&self) -> usize { self.unit_graph.node_count() }
+    pub(crate) fn num_nodes(&self) -> usize { self.unit_graph.node_count() }
+
+    /// Get the list of weight series available in the map's node weights.
+    pub(crate) fn series(&self) -> HashSet<String> { self.unit_graph.node_weights().series() }
 
     /// Get a reference to the underlying graph.
-    #[inline] pub(crate) fn graph(&self) -> &Graph { &self.unit_graph }
+    pub(super) fn graph(&self) -> &Graph { &self.unit_graph }
 
     /// Get the part assignment of a given node.
-    #[inline] pub(crate) fn assignment(&self, node: usize) -> u32 { self.parts.find(node) as u32 }
+    pub(crate) fn assignment(&self, node: usize) -> u32 { self.parts.find(node) as u32 }
 
     /// Get a complete vector of assignments for each node.
-    #[inline]
     pub(crate) fn assignments(&self) -> Vec<u32> {
         self.parts.assignments().iter().map(|&p| p as u32).collect()
     }
 
     /// Get the set of boundary nodes for a given part.
-    #[inline] pub(crate) fn frontier(&self, part: u32) -> &[usize] { self.frontiers.get(part as usize) }
+    pub(crate) fn frontier(&self, part: u32) -> &[usize] { self.frontiers.get(part as usize) }
 
     /// Clear all assignments, setting every node to unassigned (0).
     pub(crate) fn clear_assignments(&mut self) {

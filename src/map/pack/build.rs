@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, path::Path};
 
-use anyhow::{anyhow, bail, Context, Ok, Result};
+use anyhow::{Context, Ok, Result, anyhow, bail, ensure};
 use polars::{frame::DataFrame, prelude::*, series::Series};
 use shapefile::dbase::{FieldValue, Record};
 
@@ -124,9 +124,11 @@ impl MapLayer {
     /// Merge new dataframe into self.data, preserving geo_id
     fn merge_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
         // Assert size of dataframe matches self.data
-        if df.height() != self.data.height() {
-            bail!("insert_data: size of dataframe ({:?}) does not match expected size: {:?}.", df.height(), self.data.height());
-        }
+        ensure!(
+            df.height() == self.data.height(),
+            "insert_data: size of dataframe ({:?}) does not match expected size: {:?}.",
+            df.height(), self.data.height()
+        );
 
         // Assert id_col exists and has type String
         df.column(id_col)

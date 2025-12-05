@@ -1,6 +1,6 @@
 use std::{fs::File, path::Path};
 
-use anyhow::{bail, Context, Ok, Result};
+use anyhow::{Context, Ok, Result, ensure};
 use polars::{frame::DataFrame, io::{SerReader, SerWriter}, prelude::{CsvReader, CsvWriter, DataType, NamedFrom}, series::Series};
 
 use crate::{map::{GeoId, GeoType}, plan::Plan};
@@ -16,13 +16,9 @@ impl Plan {
 
         let block_layer = self.map().get_layer(GeoType::Block);
 
-        // assert CSV has at least two columns
-        if df.width() < 2 { bail!("[Plan.from_csv] CSV file must have two columns: geo_id,district"); }
-
-        // assert CSV has correct number of rows
-        if df.height() != block_layer.len() {
-            bail!("[Plan.from_csv] CSV file has {} rows, expected {}", df.height(), block_layer.len());
-        }
+        // Ensure CSV has at the correct number of rows and columns.
+        ensure!(df.width() >= 2, "[Plan.from_csv] CSV file must have two columns: geo_id,district");
+        ensure!(df.height() == block_layer.len(), "[Plan.from_csv] CSV file has {} rows, expected {}", df.height(), block_layer.len());
 
         // Populate plan.assignments from CSV
         let blocks = df.column(df.get_column_names()[0])?.cast(&DataType::String)?;
@@ -32,9 +28,8 @@ impl Plan {
             .zip(districts.u32()?.into_no_null_iter())
             .map(|(block, district)| {
                 let geo_id = GeoId::new(GeoType::Block, block);
-                if !block_layer.geo_ids().contains(&geo_id) {
-                    bail!("[Plan.from_csv] GeoId {} in CSV not found in map", geo_id.id());
-                }
+                ensure!(block_layer.geo_ids().contains(&geo_id), "[Plan.from_csv] GeoId {} in CSV not found in map", geo_id.id());
+
                 Ok((geo_id, district))
             })
             .collect::<Result<_>>()?;

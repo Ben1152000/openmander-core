@@ -106,14 +106,14 @@ def main(
         competitiveness_weight: Weight for competitiveness metric
         competitiveness_threshold: Threshold for competitiveness metric
         window_size: Rolling window size for measuring acceptance rates (default: 1000)
-        base_path: Base path for packs (default: ../../../packs/)
+        base_path: Base path for packs (default: ../../packs/)
         log_file: Path to log file for annealing output (default: None = stdout)
         artifacts_path: Path to artifacts directory (default: ./artifacts)
     """
     # Setup paths
     if base_path is None:
         # From demo/run.py: demo -> python -> bindings -> openmander-core -> workspace_root
-        base_path = Path(__file__).parent.parent.parent.parent.parent / 'packs'
+        base_path = Path(__file__).parent.parent.parent / 'packs'
     else:
         base_path = Path(base_path)
     

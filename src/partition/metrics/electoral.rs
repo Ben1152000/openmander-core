@@ -1,25 +1,19 @@
-use std::f64::{consts::PI, INFINITY};
-
 use crate::partition::Partition;
 
 impl Partition {
+    // Get the competitiveness score for a part.
+    // Formula: piecewise quadratic based on partisan lean and threshold
+    pub(crate) fn competitiveness(&self, part: u32, dem_series: &str, rep_series: &str, threshold: f64) -> f64 {
+        let dem_votes = self.part_total(dem_series, part);
+        let rep_votes = self.part_total(rep_series, part);
+        let total_votes = dem_votes + rep_votes;
+        if total_votes == 0.0 { return 0.0 }
 
-    // competitiveness:
-    pub(crate) fn competitiveness(&self, dem_series: &str, rep_series: &str, threshold: f64) -> f64 {
-        let mut competitive_seats = 0;
-        for part in 1..self.num_parts() {
-            let dem_votes = self.part_weights().get_as_f64(dem_series, part as usize).unwrap_or(0.0);
-            let rep_votes = self.part_weights().get_as_f64(rep_series, part as usize).unwrap_or(0.0);
-            let total_votes = dem_votes + rep_votes;
-            if total_votes == 0.0 { continue; }
-
-            let dem_share = dem_votes / total_votes;
-            let rep_share = rep_votes / total_votes;
-
-            if (dem_share - rep_share).abs() <= threshold {
-                competitive_seats += 1;
-            }
+        let lean = (dem_votes - rep_votes).abs() / (2.0 * total_votes);
+        if lean <= threshold {
+            1.0 - 2.0 / threshold * lean * lean
+        } else {
+            2.0 / (0.5 - threshold) * (0.5 - lean) * (0.5 - lean)
         }
-        competitive_seats as f64
     }
 }

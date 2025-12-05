@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
     graph::{Graph, WeightMatrix},
@@ -11,19 +11,19 @@ pub(crate) struct Partition {
     pub(super) parts: PartitionSet,  // Sets of nodes in each part (including unassigned 0)
     pub(super) frontiers: MultiSet,  // Nodes on the boundary of each part
     pub(super) part_graph: Graph,    // Graph structure for parts (including aggregated weights)
-    units_graph: Arc<Graph>,         // Reference to unit graph (for access to weights)
-    region_graph: Arc<Graph>,        // Reference to full region (for access to totals)
+    unit_graph: Arc<Graph>,          // Reference to graph of basic units (census block)
+    region_graph: Arc<Graph>,        // Reference to full region graph (state)
 }
 
 impl Partition {
     /// Construct an empty partition from a weighted graph reference and number of parts.
-    pub(crate) fn new(num_parts: usize, units_graph: impl Into<Arc<Graph>>, region_graph: impl Into<Arc<Graph>>) -> Self {
+    pub(crate) fn new(num_parts: usize, unit_graph: impl Into<Arc<Graph>>, region_graph: impl Into<Arc<Graph>>) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
-        let units_graph: Arc<Graph> = units_graph.into();
+        let unit_graph: Arc<Graph> = unit_graph.into();
         let region_graph: Arc<Graph> = region_graph.into();
 
-        let mut part_weights = units_graph.node_weights().copy_of_size(num_parts);
-        part_weights.set_row_to_sum_of(0, units_graph.node_weights());
+        let mut part_weights = unit_graph.node_weights().copy_of_size(num_parts);
+        part_weights.set_row_to_sum_of(0, unit_graph.node_weights());
 
         // Instantiate graph with a zero-length edge between each part (to be updated later).
         let part_graph = Graph::new(
@@ -35,10 +35,10 @@ impl Partition {
         );
 
         Self {
-            parts: PartitionSet::new(num_parts, units_graph.node_count()),
-            frontiers: MultiSet::new(num_parts, units_graph.node_count()),
+            parts: PartitionSet::new(num_parts, unit_graph.node_count()),
+            frontiers: MultiSet::new(num_parts, unit_graph.node_count()),
             part_graph,
-            units_graph,
+            unit_graph: unit_graph,
             region_graph,
         }
     }
@@ -47,10 +47,10 @@ impl Partition {
     #[inline] pub(crate) fn num_parts(&self) -> u32 { self.parts.num_sets() as u32 }
 
     /// Get the number of nodes in the underlying graph.
-    #[inline] pub(crate) fn num_nodes(&self) -> usize { self.units_graph.node_count() }
+    #[inline] pub(crate) fn num_nodes(&self) -> usize { self.unit_graph.node_count() }
 
     /// Get a reference to the underlying graph.
-    #[inline] pub(crate) fn graph(&self) -> &Graph { &self.units_graph }
+    #[inline] pub(crate) fn graph(&self) -> &Graph { &self.unit_graph }
 
     /// Get the part assignment of a given node.
     #[inline] pub(crate) fn assignment(&self, node: usize) -> u32 { self.parts.find(node) as u32 }
@@ -70,7 +70,7 @@ impl Partition {
         self.frontiers.clear();
 
         self.part_graph.node_weights_mut().clear_all_rows();
-        self.part_graph.node_weights_mut().set_row_to_sum_of(0, self.units_graph.node_weights());
+        self.part_graph.node_weights_mut().set_row_to_sum_of(0, self.unit_graph.node_weights());
     }
 
     /// Generate assignments map from GeoId to district.
@@ -84,7 +84,7 @@ impl Partition {
         // Recompute boundary flags.
         let on_boundary = (0..self.num_nodes()).map(|u| {
             let part = self.assignment(u);
-            self.units_graph.edges(u).any(|v| self.assignment(v) != part)
+            self.unit_graph.edges(u).any(|v| self.assignment(v) != part)
         }).collect::<Vec<_>>();
 
         // Recompute frontiers.
@@ -96,21 +96,29 @@ impl Partition {
         );
 
         // Recompute per-part totals.
-        let mut part_weights = WeightMatrix::copy_of_size(self.units_graph.node_weights(), self.num_parts() as usize);
+        let mut part_weights = WeightMatrix::copy_of_size(self.unit_graph.node_weights(), self.num_parts() as usize);
         for (node, &part) in self.assignments().iter().enumerate() {
-            part_weights.add_row_from(part as usize, self.units_graph.node_weights(), node);
+            part_weights.add_row_from(part as usize, self.unit_graph.node_weights(), node);
+        }
+
+        let mut edge_weights = vec![vec![0.0; self.num_parts() as usize]; self.num_parts() as usize];
+        for part in 0..self.num_parts() {
+            for &u in self.frontiers.get(part as usize).iter() {
+                for (v, w) in self.graph().edges_with_weights(u) {
+                    let other = self.assignment(v);
+                    if other != part { edge_weights[part as usize][other as usize] += w }
+                }
+            }
         }
 
         // Rebuild part graph.
         self.part_graph = Graph::new(
             self.num_parts() as usize,
             &vec![(0..self.num_parts()).collect::<Vec<_>>(); self.num_parts() as usize],
-            &vec![vec![0.0; self.num_parts() as usize]; self.num_parts() as usize],
+            &edge_weights,
             part_weights,
             &vec![],
         );
-
-        // Todo: compute part adjacencies
     }
 
     /// Sum of a given series for a specific part.
@@ -136,37 +144,100 @@ impl Partition {
     /// Get a mutable reference to the part weights matrix.
     pub(super) fn part_weights_mut(&mut self) -> &mut WeightMatrix { self.part_graph.node_weights_mut() }
 
-    /// Update part weight totals for a single node move (from prev to part).
-    pub(super) fn update_on_node_move(&mut self, node: usize, prev: u32, part: u32) {
-        // Add/subtract node weights from part totals.
+    /// Update part weight totals for a single node move (from prev to next part).
+    pub(super) fn update_on_node_move(&mut self, node: usize, prev: u32, next: u32) {
+        // Update node weights between part totals.
         self.part_graph.node_weights_mut().subtract_row_from(
             prev as usize,
-            self.units_graph.node_weights(),
+            self.unit_graph.node_weights(),
             node,
         );
         self.part_graph.node_weights_mut().add_row_from(
-            part as usize,
-            self.units_graph.node_weights(),
+            next as usize,
+            self.unit_graph.node_weights(),
             node,
         );
 
-        // Todo: update edge lengths of parts
+        // Update edge weights between parts.
+        let size = self.num_parts();
+        for (edge, weight) in self.unit_graph.edges_with_weights(node) {
+            let part = self.assignment(edge);
+            if part != prev {
+                // Subtract edge weight from (prev, part)
+                self.part_graph.edge_weights_mut()[(prev * size + part) as usize] -= weight;
+                self.part_graph.edge_weights_mut()[(part * size + prev) as usize] -= weight;
+            }
+            if part != next {
+                // Add edge weight to (next, part)
+                self.part_graph.edge_weights_mut()[(next * size + part) as usize] += weight;
+                self.part_graph.edge_weights_mut()[(part * size + next) as usize] += weight;
+            }
+        }
+
+        // Account for exterior edge weights
+        // let exterior = self.unit_graph.node_weights()
+        //     .get_as_f64("outer_perimeter_m", node)
+        //     .unwrap_or(0.0);
+        // if prev != 0 {
+        //     self.part_graph.edge_weights_mut()[(prev * size + 0) as usize] -= exterior;
+        //     self.part_graph.edge_weights_mut()[(0 * size + prev) as usize] -= exterior;
+        // }
+        // if next != 0 {
+        //     self.part_graph.edge_weights_mut()[(next * size + 0) as usize] += exterior;
+        //     self.part_graph.edge_weights_mut()[(0 * size + next) as usize] += exterior;
+        // }
     }
 
-    /// Update part weight totals for a subgraph move (from prev to part).
-    pub(super) fn update_on_subgraph_move(&mut self, subgraph: &[usize], prev: u32, part: u32) {
+    /// Update part weight totals for a subgraph move (from prev to next part).
+    pub(super) fn update_on_subgraph_move(&mut self, subgraph: &[usize], prev: u32, next: u32) {
         // Add/subtract node weights from part totals.
         self.part_graph.node_weights_mut().subtract_rows_from(
             prev as usize,
-            self.units_graph.node_weights(),
+            self.unit_graph.node_weights(),
             subgraph,
         );
         self.part_graph.node_weights_mut().add_rows_from(
-            part as usize,
-            self.units_graph.node_weights(),
+            next as usize,
+            self.unit_graph.node_weights(),
             subgraph,
         );
 
-        // Todo: update edge lengths of parts
+        // Update edge weights between parts.
+        let size = self.num_parts();
+        let in_subgraph = subgraph.iter().collect::<HashSet<_>>();
+        for &node in subgraph {
+            for (edge, weight) in self.unit_graph.edges_with_weights(node) {
+                let part = self.assignment(edge);
+                if part != prev && !in_subgraph.contains(&edge) {
+                    // Subtract edge weight from (prev, part)
+                    self.part_graph.edge_weights_mut()[(prev * size + part) as usize] -= weight;
+                    self.part_graph.edge_weights_mut()[(part * size + prev) as usize] -= weight;
+                }
+                if part != next {
+                    // Add edge weight to (next, part)
+                    self.part_graph.edge_weights_mut()[(next * size + part) as usize] += weight;
+                    self.part_graph.edge_weights_mut()[(part * size + next) as usize] += weight;
+                }
+            }
+        }
+
+        // Todo: Account for exterior edge weights
+    }
+
+    pub(super) fn update_on_merge_parts(&mut self, target: u32, source: u32) {
+        // Update part weights.
+        self.part_graph.node_weights_mut().add_row(target as usize, source as usize);
+        self.part_graph.node_weights_mut().clear_row(source as usize);
+
+        // Update edge weights between parts.
+        let size = self.num_parts();
+        for part in 0..size {
+            if part != target && part != source {
+                self.part_graph.edge_weights_mut()[(target * size + part) as usize] += self.part_graph.edge_weights()[(source * size + part) as usize];
+                self.part_graph.edge_weights_mut()[(part * size + target) as usize] += self.part_graph.edge_weights()[(part * size + target) as usize];
+            }
+            self.part_graph.edge_weights_mut()[(source * size + part) as usize] = 0.0;
+            self.part_graph.edge_weights_mut()[(part * size + source) as usize] = 0.0;
+        }
     }
 }

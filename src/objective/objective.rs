@@ -5,7 +5,7 @@
 //! sum of metric values. More advanced schemes (lexicographic ordering,
 //! epsilon-constraints, etc.) can be layered on top later.
 
-use crate::objective::metric::Metric;
+use crate::objective::Metric;
 use crate::partition::Partition;
 
 /// A multi-objective scalarization: metrics + corresponding weights.
@@ -61,7 +61,7 @@ impl Objective {
     }
 
     /// Internal accessor for metrics.
-    pub(crate) fn metrics(&self) -> &[Metric] { &self.metrics }
+    pub(crate) fn _metrics(&self) -> &[Metric] { &self.metrics }
 
     /// Evaluate this objective for a given partition.
     pub(crate) fn compute(&self, partition: &Partition) -> f64 {

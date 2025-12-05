@@ -48,6 +48,12 @@ impl Graph {
     /// Get the number of edges in the graph.
     #[inline] pub(crate) fn edge_count(&self) -> usize { self.edges.len() }
 
+    /// Get a reference to the edge weights vector.
+    #[inline] pub(crate) fn edge_weights(&self) -> &Vec<f64> { &self.edge_weights }
+
+    /// Get a mutable reference to the edge weights vector.
+    #[inline] pub(crate) fn edge_weights_mut(&mut self) -> &mut Vec<f64> { &mut self.edge_weights }
+
     /// Get a reference to the node weights matrix.
     #[inline] pub(crate) fn node_weights(&self) -> &WeightMatrix { &self.node_weights }
 

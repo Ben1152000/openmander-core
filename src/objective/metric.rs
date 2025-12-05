@@ -47,6 +47,7 @@ impl Metric {
     }
 
     /// Evaluate this metric for a given partition.
+    #[allow(unused_variables)]
     pub(crate) fn compute(&self, partition: &Partition) -> Vec<f64> {
         match &self.kind {
             MetricKind::PopulationDeviation { series } => {
@@ -64,35 +65,7 @@ impl Metric {
             }
             MetricKind::Competitiveness { dem_series, rep_series, threshold } => {
                 (1..partition.num_parts())
-                    .map(|part| {
-                        let dem = partition.part_total(dem_series, part);
-                        let rep = partition.part_total(rep_series, part);
-                        let total = dem + rep;
-                        
-                        if total == 0.0 {
-                            return 0.0;
-                        }
-                        
-                        let x = dem / total;
-                        let t = *threshold;
-                        
-                        // Piecewise quadratic formula for competitiveness
-                        if x <= 0.5 - t {
-                            // Left tail: a * x^2
-                            let a = 4.0 / (1.0 - 2.0 * t);
-                            a * x * x
-                        } else if x >= 0.5 + t {
-                            // Right tail: a * (1 - x)^2
-                            let a = 4.0 / (1.0 - 2.0 * t);
-                            let diff = 1.0 - x;
-                            a * diff * diff
-                        } else {
-                            // Middle competitive range: 1 - b * (0.5 - x)^2
-                            let b = 2.0 / t;
-                            let diff = 0.5 - x;
-                            1.0 - b * diff * diff
-                        }
-                    })
+                    .map(|part| partition.competitiveness(part, dem_series, rep_series, *threshold))
                     .collect()
             }
             MetricKind::Proportionality { dem_series, rep_series } =>

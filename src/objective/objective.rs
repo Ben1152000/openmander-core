@@ -5,7 +5,7 @@
 //! sum of metric values. More advanced schemes (lexicographic ordering,
 //! epsilon-constraints, etc.) can be layered on top later.
 
-use crate::objective::metric::Metric;
+use crate::objective::Metric;
 use crate::partition::Partition;
 
 /// A multi-objective scalarization: metrics + corresponding weights.

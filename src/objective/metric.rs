@@ -60,23 +60,14 @@ impl Metric {
     pub(crate) fn compute(&self, partition: &Partition) -> Vec<f64> {
         match &self.kind {
             MetricKind::PopulationDeviation { series } => {
-                let n = (partition.num_parts() - 1) as f64;  // Number of districts
                 let total = partition.region_total(series);
-                let m = total / n;  // Average population
-                let k = 1.0 / ((n - 1.0) * (n - 1.0));  // k = 1/(N-1)^2
+                let average = total / (partition.num_parts() - 1) as f64;
 
                 (1..partition.num_parts())
                     .map(|part| {
-                        let x = partition.part_total(series, part);
-                        let epsilon = ((x - m) / m).powi(2);
-                        
-                        if x <= m {
-                            // 0 ≤ x ≤ m: metric is (1-epsilon)/(1+epsilon)
-                            (1.0 - epsilon) / (1.0 + epsilon)
-                        } else {
-                            // m < x ≤ N*m: metric is (1-k*epsilon)/(1+epsilon)
-                            (1.0 - k * epsilon) / (1.0 + epsilon)
-                        }
+                        let deviation = partition.part_total(series, part) / average - 1.0;
+                        let limit = if deviation <= 0.0 { 1 } else { partition.num_parts() - 2 };
+                        (1.0 - deviation.powi(2) / limit.pow(2) as f64) / (1.0 + deviation.powi(2))
                     })
                     .collect()
             }
@@ -87,39 +78,11 @@ impl Metric {
             }
             MetricKind::Competitiveness { dem_series, rep_series, threshold } => {
                 (1..partition.num_parts())
-                    .map(|part| {
-                        let dem = partition.part_total(dem_series, part);
-                        let rep = partition.part_total(rep_series, part);
-                        let total = dem + rep;
-                        
-                        if total == 0.0 {
-                            return 0.0;
-                        }
-                        
-                        let x = dem / total;
-                        let t = *threshold;
-                        
-                        // Piecewise quadratic formula for competitiveness
-                        if x <= 0.5 - t {
-                            // Left tail: a * x^2
-                            let a = 4.0 / (1.0 - 2.0 * t);
-                            a * x * x
-                        } else if x >= 0.5 + t {
-                            // Right tail: a * (1 - x)^2
-                            let a = 4.0 / (1.0 - 2.0 * t);
-                            let diff = 1.0 - x;
-                            a * diff * diff
-                        } else {
-                            // Middle competitive range: 1 - b * (0.5 - x)^2
-                            let b = 2.0 / t;
-                            let diff = 0.5 - x;
-                            1.0 - b * diff * diff
-                        }
-                    })
+                    .map(|part| partition.competitiveness(part, dem_series, rep_series, *threshold))
                     .collect()
             }
             MetricKind::Proportionality { dem_series, rep_series } =>
-                todo!(),
+                todo!("{dem_series}, {rep_series}"),
         }
     }
 
@@ -127,10 +90,7 @@ impl Metric {
     /// Currently uses average for all metrics, but can be customized per metric type in the future.
     pub(crate) fn compute_score(&self, partition: &Partition) -> f64 {
         let values = self.compute(partition);
-        if values.is_empty() {
-            return 0.0;
-        }
-        values.iter().sum::<f64>() / values.len() as f64
+        if values.is_empty() { 0.0 } else { values.iter().sum::<f64>() / values.len() as f64 }
     }
 }
 

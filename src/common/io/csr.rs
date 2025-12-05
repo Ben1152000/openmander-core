@@ -1,6 +1,6 @@
 use std::{fs::File, io::{BufReader, BufWriter, Read, Write}, path::Path};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, ensure};
 
 /// Write adjacency list to a simple CSR binary file.
 /// Layout: "CSR1" | n(u64) | nnz(u64) | indptr[u64; n+1] | indices[u32; nnz]
@@ -48,9 +48,7 @@ pub(crate) fn _read_from_adjacency_csr(path: &Path) -> Result<Vec<Vec<u32>>> {
     // Header
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
-    if &magic != b"CSR1" {
-        bail!("Invalid CSR magic: expected 'CSR1'");
-    }
+    ensure!(&magic == b"CSR1", "Invalid CSR magic: expected 'CSR1'");
 
     let mut buf8 = [0u8; 8];
     reader.read_exact(&mut buf8)?;
@@ -67,9 +65,7 @@ pub(crate) fn _read_from_adjacency_csr(path: &Path) -> Result<Vec<Vec<u32>>> {
     }
 
     let nnz = indptr[n] as usize;
-    if nnz != nnz_hdr {
-        bail!("CSR nnz mismatch: header {} vs indptr {}", nnz_hdr, nnz);
-    }
+    ensure!(nnz == nnz_hdr, "CSR nnz mismatch: header {} vs indptr {}", nnz_hdr, nnz);
 
     // indices
     let mut indices = vec![0u32; nnz];
@@ -84,17 +80,15 @@ pub(crate) fn _read_from_adjacency_csr(path: &Path) -> Result<Vec<Vec<u32>>> {
 
 /// Write weighted adjacency list to a CSR binary file.
 pub(crate) fn write_to_weighted_csr(path: &Path, adjacencies: &[Vec<u32>], weights: &[Vec<f64>]) -> Result<()> {
-    let n = adjacencies.len();
-    if weights.len() != n { bail!("weights len ({}) != adj_list len ({})", weights.len(), n); }
+    // let n = adjacencies.len();
+    ensure!(weights.len() == adjacencies.len(), "weights len ({}) != adj_list len ({})", weights.len(), adjacencies.len());
 
     // Validate row shapes and build prefix sums
-    let mut indptr: Vec<u64> = Vec::with_capacity(n + 1);
+    let mut indptr: Vec<u64> = Vec::with_capacity(adjacencies.len() + 1);
     indptr.push(0);
     let mut nnz: u64 = 0;
     for (row_i, (nbrs, wts)) in adjacencies.iter().zip(weights).enumerate() {
-        if nbrs.len() != wts.len() {
-            bail!("row {}: neighbors len ({}) != weights len ({})", row_i, nbrs.len(), wts.len());
-        }
+        ensure!(nbrs.len() == wts.len(), "row {}: neighbors len ({}) != weights len ({})", row_i, nbrs.len(), wts.len());
         nnz += nbrs.len() as u64;
         indptr.push(nnz);
     }
@@ -103,7 +97,7 @@ pub(crate) fn write_to_weighted_csr(path: &Path, adjacencies: &[Vec<u32>], weigh
 
     // Header
     writer.write_all(b"CSRW")?;
-    writer.write_all(&(n as u64).to_le_bytes())?;
+    writer.write_all(&(adjacencies.len() as u64).to_le_bytes())?;
     writer.write_all(&nnz.to_le_bytes())?;
 
     // indptr
@@ -138,7 +132,7 @@ pub(crate) fn read_from_weighted_csr(path: &Path) -> Result<(Vec<Vec<u32>>, Vec<
     // Header
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
-    if &magic != b"CSRW" { bail!("Invalid CSR magic: expected 'CSRW'"); }
+    ensure!(&magic == b"CSRW", "Invalid CSR magic: expected 'CSRW'");
 
     let mut b8 = [0u8; 8];
     reader.read_exact(&mut b8)?;
@@ -153,7 +147,7 @@ pub(crate) fn read_from_weighted_csr(path: &Path) -> Result<(Vec<Vec<u32>>, Vec<
         reader.read_exact(&mut b8)?;
         *o = u64::from_le_bytes(b8);
     }
-    if indptr[n] as usize != nnz { bail!("CSR nnz mismatch: header {} vs indptr {}", nnz, indptr[n]); }
+    ensure!(indptr[n] as usize == nnz, "CSR nnz mismatch: header {} vs indptr {}", nnz, indptr[n]);
 
     // indices
     let mut indices = vec![0u32; nnz];

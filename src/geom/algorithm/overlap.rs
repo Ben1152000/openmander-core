@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, ensure};
 use geo::{BoundingRect, Relate};
 use rstar::AABB;
 
@@ -23,9 +23,7 @@ impl Geometries {
                 let im = self.shapes()[i].relate(&self.shapes()[j]);
 
                 // Overlap (including containment/equality) = intersects but not merely touching.
-                if im.is_intersects() && !im.is_touches() {
-                    bail!("Overlapping geometries found: {i} and {j}");
-                }
+                ensure!(!im.is_intersects() || im.is_touches(), "Overlapping geometries found: {i} and {j}");
             }
         }
         

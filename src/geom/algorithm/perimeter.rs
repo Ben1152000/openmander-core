@@ -8,7 +8,9 @@ use crate::geom::Geometries;
 impl Geometries {
     /// For each polygon and its adjacency list, compute the shared perimeter with each neighbor.
     /// Compute shared perimeters by matching identical edges (fast; no boolean ops).
-    /// `scale` controls float -> integer key rounding (e.g., 1e9 for ~1e-9°).
+    ///
+    /// Edges are matched by snapping their endpoints with `scale` (e.g. 1e9 for ~1e-9°),
+    /// after reprojecting to a metric CRS.
     pub(crate) fn compute_shared_perimeters_fast(&self, adjacencies: &Vec<Vec<u32>>, scale: f64) -> Result<Vec<Vec<f64>>> {
         #[derive(Clone, Copy, PartialEq, Eq, Hash)]
         struct EdgeKey { ax: i64, ay: i64, bx: i64, by: i64 }
@@ -84,4 +86,77 @@ impl Geometries {
 
         Ok(out)
     }
+
+    /// For each polygon, compute the length of its boundary that is not shared with
+    /// any neighboring polygon (i.e., the "outer" perimeter along the union boundary).
+    ///
+    /// Edges are matched by snapping their endpoints with `scale` (e.g. 1e9 for ~1e-9°),
+    /// after reprojecting to a metric CRS.
+    pub(crate) fn compute_outer_perimeters_fast(&self, scale: f64) -> Result<Vec<f64>> {
+        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+        struct EdgeKey { ax: i64, ay: i64, bx: i64, by: i64 }
+
+        #[inline]
+        fn query(c: Coord<f64>, s: f64) -> (i64, i64) {
+            ((c.x * s).round() as i64, (c.y * s).round() as i64)
+        }
+
+        #[inline]
+        fn edge_key(a: Coord<f64>, b: Coord<f64>, s: f64) -> EdgeKey {
+            let (ax, ay) = query(a, s);
+            let (bx, by) = query(b, s);
+            // normalize so (a,b) == (b,a)
+            if (ax, ay) <= (bx, by) {
+                EdgeKey { ax, ay, bx, by }
+            } else {
+                EdgeKey { ax: bx, ay: by, bx: ax, by: ay }
+            }
+        }
+
+        #[inline]
+        fn ring_lines<'a>(
+            ring: &'a LineString<f64>
+        ) -> impl Iterator<Item = (Coord<f64>, Coord<f64>)> + 'a {
+            // Assumes closed rings (first == last). If not closed, add closing edge yourself.
+            ring.0.windows(2).map(|w| (w[0], w[1]))
+        }
+
+        // Work in a metric CRS for correct Euclidean lengths
+        let projected_shapes = self.reproject_to_metric()?;
+
+        // Map each unique edge to (owning polygon, length). If an edge is seen twice
+        // (shared between two polygons), we drop it from this map. At the end, the
+        // remaining edges are those that belong to exactly one polygon → outer perimeter.
+        let mut edge_owner: HashMap<EdgeKey, (u32, f64)> = HashMap::new();
+
+        for (i, mp) in projected_shapes.iter().enumerate() {
+            for poly in mp {
+                // exterior + interiors
+                for ring in std::iter::once(poly.exterior()).chain(poly.interiors().iter()) {
+                    for (a, b) in ring_lines(ring) {
+                        let len = Euclidean.length(&Line::new(a, b));
+                        if len == 0.0 {
+                            continue;
+                        }
+
+                        let key = edge_key(a, b, scale);
+                        // If we've already seen this edge once, it's shared → remove it.
+                        if edge_owner.remove(&key).is_none() {
+                            // First time we see this edge: record owner + length
+                            edge_owner.insert(key, (i as u32, len));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Accumulate remaining (unmatched) edge lengths per polygon
+        let mut outer = vec![0.0_f64; self.len()];
+        for (_key, (owner, len)) in edge_owner.into_iter() {
+            outer[owner as usize] += len;
+        }
+
+        Ok(outer)
+    }
+
 }

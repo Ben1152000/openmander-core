@@ -64,7 +64,10 @@ impl Plan {
 
     /// Get the list of weight series available in the map's node weights.
     pub fn series<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        Ok(PyList::new_bound(py, self.inner.series()))
+        let mut series = self.inner.series().into_iter().collect::<Vec<_>>();
+        series.sort();
+
+        Ok(PyList::new_bound(py, series))
     }
 
     /// Sum of a weight series for each district (excluding unassigned 0).

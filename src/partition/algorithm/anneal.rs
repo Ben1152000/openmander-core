@@ -55,13 +55,13 @@ impl Partition {
     ) {
         assert!(self.parts.get(0).len() == 0, "part 0 (unassigned) must be empty");
         assert!(self.num_parts() > 2, "need at least two parts for anneal_balance");
-        assert!(self.part_weights.contains(series), "part_weights must contain series '{series}'");
+        assert!(self.part_weights().contains(series), "part_weights must contain series '{series}'");
 
         let mut rng = rand::rng();
 
         // Compute target part weight (average over all parts).
         let part_values = (0..self.num_parts())
-            .map(|part| self.part_weights.get_as_f64(series, part as usize).unwrap())
+            .map(|part| self.part_weights().get_as_f64(series, part as usize).unwrap())
             .collect::<Vec<_>>();
         let target = part_values.iter().sum::<f64>() / (self.num_parts() - 1) as f64;
 
@@ -86,8 +86,8 @@ impl Partition {
                 + bundle.iter()
                     .map(|&u| self.graph().node_weights().get_as_f64(series, u).unwrap())
                     .sum::<f64>();
-            let src_weight = self.part_weights.get_as_f64(series, src as usize).unwrap();
-            let dest_weight = self.part_weights.get_as_f64(series, dest as usize).unwrap();
+            let src_weight = self.part_weights().get_as_f64(series, src as usize).unwrap();
+            let dest_weight = self.part_weights().get_as_f64(series, dest as usize).unwrap();
             let weight_delta = 2.0 * node_weight * (node_weight + dest_weight - src_weight) / target;
 
             let boundary_delta = self.graph().edges_with_weights(node)

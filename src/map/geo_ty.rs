@@ -39,6 +39,20 @@ impl GeoType {
         }
     }
 
+    /// Create a GeoType from a string representation.
+    #[inline]
+    pub fn from_str(string: &str) -> Option<GeoType> {
+        match string.to_lowercase().as_str() {
+            "state"  => Some(GeoType::State),
+            "county" => Some(GeoType::County),
+            "tract"  => Some(GeoType::Tract),
+            "group"  => Some(GeoType::Group),
+            "vtd"    => Some(GeoType::VTD),
+            "block"  => Some(GeoType::Block),
+            _ => None,
+        }
+    }
+
     /// Get the expected length of the GEOID string for this GeoType.
     #[inline]
     pub(super) fn id_len(&self) -> usize {

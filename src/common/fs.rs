@@ -1,13 +1,13 @@
 use std::{fs::{File, create_dir_all}, io::{Read}, path::Path};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, ensure};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
 /// Create the directory if it doesn’t exist; error if a non-directory exists there.
 pub(crate) fn ensure_dir_exists(path: &Path) -> Result<()> {
     if path.exists() {
-        if !path.is_dir() { bail!("Path exists but is not a directory: {}", path.display()); }
+        ensure!(path.is_dir(), "Path exists but is not a directory: {}", path.display());
     } else {
         create_dir_all(path)
             .with_context(|| format!("Failed to create directory {}", path.display()))?;
@@ -25,8 +25,8 @@ pub(crate) fn ensure_dirs(base: &Path, dirs: &[&str]) -> Result<()> {
 
 /// Error unless the directory already exists.
 pub(crate) fn require_dir_exists(path: &Path) -> Result<()> {
-    if !path.exists() { bail!("Directory does not exist: {}", path.display()); }
-    if !path.is_dir() { bail!("Path exists but is not a directory: {}", path.display()); }
+    ensure!(path.exists(), "Directory does not exist: {}", path.display());
+    ensure!(path.is_dir(), "Path exists but is not a directory: {}", path.display());
     Ok(())
 }
 

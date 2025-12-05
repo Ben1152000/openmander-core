@@ -22,4 +22,30 @@ impl Map {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner: Arc::new(map) })
     }
+
+    /// Write an SVG for a given layer.
+    ///
+    /// Parameters
+    /// ----------
+    /// path : str
+    ///     Output SVG path.
+    /// layer : str, default="block"
+    ///     One of: "state", "county", "tract", "group", "vtd", "block".
+    /// series : Optional[str]
+    ///     Optional column name in the layer's dataframe to use for coloring.
+    #[pyo3(text_signature = "(self, path, layer='block', series=None)")]
+    pub fn to_svg(&self, path: &str, layer: Option<&str>, series: Option<&str>) -> PyResult<()> {
+        // Determine which layer to use (default = "block")
+        let layer = layer.unwrap_or("block");
+        let ty = openmander_core::GeoType::from_str(layer).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "Unknown layer {:?}. Expected one of: state, county, tract, group, vtd, block",
+                layer
+            ))
+        })?;
+
+        self.inner.as_ref().get_layer(ty)
+            .to_svg(&std::path::PathBuf::from(path), series)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
 }

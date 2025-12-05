@@ -4,20 +4,20 @@ use anyhow::Result;
 use geo::{MultiPolygon, Point, Polygon, Rect};
 use polars::{frame::DataFrame, prelude::DataType};
 
-use crate::{geom::Geometries, graph::Graph, map::{GeoId, GeoType, ParentRefs}};
+use crate::{geom::Geometries, graph::{Graph, WeightMatrix}, map::{GeoId, GeoType, ParentRefs}};
 
 /// A single planar partition Layer of the map, containing entities and their relationships.
 pub struct MapLayer {
     ty: GeoType,
     pub(super) geo_ids: Vec<GeoId>,
-    pub(super) index: HashMap<GeoId, u32>,  // Map between geo_ids and per-level contiguous indices
-    pub(super) parents: Vec<ParentRefs>,    // References to parent entities (higher level types)
-    pub(super) data: DataFrame,             // Entity data (incl. name, centroid, geographic data, election data)
-    pub(super) adjacencies: Vec<Vec<u32>>,  // Adjacency list of contiguous indices
-    pub(super) edge_lengths: Vec<Vec<f64>>, // Shared perimeter lengths for adjacencies
-    pub(super) graph: Arc<Graph>,           // Graph representation of layer used for partitioning
-    pub(super) geoms: Option<Geometries>,   // Per-level geometry store, indexed by entities
-    pub(super) hulls: Option<Vec<Polygon<f64>>>,    // Approximate hulls for each entity (todo: remove option)
+    pub(super) index: HashMap<GeoId, u32>,        // Map between geo_ids and per-level contiguous indices
+    pub(super) parents: Vec<ParentRefs>,          // References to parent entities (higher level types)
+    pub(super) data: DataFrame,                   // Entity data (incl. name, centroid, geographic data, election data)
+    pub(super) adjacencies: Vec<Vec<u32>>,        // Adjacency list of contiguous indices
+    pub(super) edge_lengths: Vec<Vec<f64>>,       // Shared perimeter lengths for adjacencies
+    pub(super) graph: Arc<Graph>,                 // Graph representation of layer used for partitioning
+    pub(super) geoms: Option<Geometries>,         // Per-level geometry store, indexed by entities
+    pub(super) hulls: Option<Vec<Polygon<f64>>>,  // Approximate hulls for each entity (todo: remove option)
 }
 
 impl MapLayer {
@@ -27,12 +27,12 @@ impl MapLayer {
             geo_ids: Vec::new(),
             index: HashMap::new(),
             parents: Vec::new(),
-            data: DataFrame::empty(),
+            data: DataFrame::default(),
             adjacencies: Vec::new(),
             edge_lengths: Vec::new(),
-            hulls: Some(Vec::new()),
-            graph: Arc::new(Graph::default()),
+            graph: Arc::default(),
             geoms: None,
+            hulls: None,
         }
     }
 
@@ -95,8 +95,7 @@ impl MapLayer {
             self.len(),
             &self.adjacencies,
             &self.edge_lengths,
-            weights_i64,
-            weights_f64,
+            WeightMatrix::new(self.len(), weights_i64, weights_f64),
             &self.hulls().unwrap(),
         ));
     }

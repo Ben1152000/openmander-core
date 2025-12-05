@@ -1,6 +1,6 @@
 use std::{fs::File, io::{Seek, Write}, path::{Path, PathBuf}, time::Duration};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, ensure};
 use reqwest::{blocking::Client, redirect::Policy, StatusCode};
 use tempfile::NamedTempFile;
 
@@ -17,9 +17,7 @@ impl PendingWrite {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        if !force && target.exists() {
-            bail!("Refusing to overwrite existing file: {} (use --force)", target.display());
-        }
+        ensure!(force || !target.exists(), "Refusing to overwrite existing file: {} (use --force)", target.display());
         let need_fsync_dir = target.parent().is_some();
         let tmp = NamedTempFile::new_in(target.parent().unwrap_or(Path::new(".")))
             .context("create temp file")?;
@@ -35,7 +33,7 @@ impl PendingWrite {
             .with_context(|| format!("rename to {}", self.target.display()))?;
         if need_fsync_dir {
             if let Some(dir) = self.target.parent() {
-                let _ = File::open(dir).and_then(|f| f.sync_all());
+                File::open(dir).and_then(|f| f.sync_all())?;
             }
         }
         Ok(())

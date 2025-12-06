@@ -5,12 +5,12 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 STATE=CT
 NUM_DISTRICTS=5
-MAX_ITER=$((1000000))  # Safety maximum (very high)
+MAX_ITER=$((500000))  # Safety maximum (very high)
 INIT_TEMP=1.0
-COOLING_RATE=0.9999 #6  # Slower cooling (closer to 1.0 = slower)
-EARLY_STOP_ITERS=$((1000))
+COOLING_RATE=0.99999 #6  # Slower cooling (closer to 1.0 = slower)
+EARLY_STOP_ITERS=$((10000))
 WINDOW_SIZE=1000
-LOG_EVERY=2000  # Print progress every N iterations
+LOG_EVERY=1000  # Print progress every N iterations
 PLOT_EVERY=10  # Update plot every N data points
 MAX_Y_LOG_TEMP="0"  # Maximum y-value for log10(temp) axis (e.g., -6), leave empty for auto
 DELTA_ONLY_NEG="" # "--delta-only-neg"  # Set to "--delta-only-neg" to only plot negative deltas as log10(-delta), leave empty for all deltas
@@ -28,13 +28,14 @@ mkdir -p "$ARTIFACTS_DIR"
 
 # Find the next run number
 RUN_NUMBER=1
-while ls "$ARTIFACTS_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_"* 1> /dev/null 2>&1; do
+while ls "$ARTIFACTS_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}"* 1> /dev/null 2>&1; do
     RUN_NUMBER=$((RUN_NUMBER + 1))
 done
 
-LOG_FILE="$ARTIFACTS_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_anneal.log"
-PLOT_FILE="$ARTIFACTS_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_progress.png"
-SENTINEL_FILE="$ARTIFACTS_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_anneal.running"
+OUT_DIR="$ARTIFACTS_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}"
+LOG_FILE="$OUT_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_anneal.log"
+PLOT_FILE="$OUT_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_progress.png"
+SENTINEL_FILE="$OUT_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_anneal.running"
 
 # Cleanup function
 cleanup() {

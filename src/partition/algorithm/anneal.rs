@@ -1,6 +1,27 @@
 use rand::Rng;
 
-use crate::partition::Partition;
+use crate::{Objective, partition::Partition};
+
+struct OptimizationParams {
+    pub max_iter: usize,
+    pub init_temp: f64,
+    pub cooling_rate: f64,
+    pub init_prob: f64,
+    pub final_prob: f64,
+    pub early_stop_iters: usize,
+    pub window_size: usize,
+    pub log_every: usize,
+}
+
+struct OptimizationState<Rng: rand::Rng> {
+    pub rng: Rng,
+    pub current_score: f64,
+    pub current_iter: usize,
+    pub best_score: f64,
+    pub best_assignments: Vec<u32>,
+    pub best_iter: usize,
+    pub temperature: f64,
+}
 
 /// Epsilon threshold for treating small deltas as improvements (handles floating point precision).
 const EPSILON: f64 = 1e-10;
@@ -159,49 +180,36 @@ impl Partition {
         assert!(self.num_parts() > 2, "need at least two parts for annealing");
         assert!(cooling_rate > 0.0 && cooling_rate < 1.0, "cooling_rate must be in (0, 1)");
 
-        let mut rng = rand::rng();
-        let mut current_objective = objective.compute(self);
-        let mut best_objective = current_objective;
-        let mut best_assignments = self.assignments();
-        let mut total_iter = 0;
-        let mut best_iter = 0;
+        let params = OptimizationParams {
+            max_iter,
+            init_temp,
+            cooling_rate,
+            init_prob: 0.9,
+            final_prob: 0.1,
+            early_stop_iters,
+            window_size,
+            log_every,
+        };
+
+        let mut state = OptimizationState {
+            rng: rand::rng(),
+            current_score: objective.compute(self),
+            current_iter: 0,
+            best_score: 0.0,
+            best_assignments: self.assignments(),
+            best_iter: 0,
+            temperature: params.init_temp,
+        };
 
         // Phase 1: Find initial temperature where average acceptance probability ≈ 0.9
-        let temp = self.find_initial_temp(
-            objective,
-            init_temp,
-            0.9,
-            window_size,
-            log_every,
-            &mut current_objective,
-            &mut best_objective,
-            &mut best_assignments,
-            &mut total_iter,
-            max_iter,
-            &mut rng,
-            &mut best_iter,
-        );
+        state.temperature = self.find_initial_temp(objective, &params, &mut state);
 
         // Phase 2: Cool with early stopping (stop after N iters without improvement)
-        self.cool_to_target_acceptance(
-            objective,
-            temp,
-            cooling_rate,
-            0.1,
-            window_size,
-            log_every,
-            &mut current_objective,
-            &mut best_objective,
-            &mut best_assignments,
-            &mut total_iter,
-            max_iter,
-            &mut rng,
-            early_stop_iters,
-        );
+        self.cool_to_target_acceptance(objective, &params, &mut state);
 
         // Restore the best solution found
-        if current_objective < best_objective {
-            self.set_assignments(best_assignments);
+        if state.current_score < state.best_score {
+            self.set_assignments(state.best_assignments);
         }
     }
 
@@ -209,48 +217,25 @@ impl Partition {
     /// Uses binary search to adaptively find the right temperature.
     fn find_initial_temp(
         &mut self,
-        objective: &crate::objective::Objective,
-        init_temp: f64,
-        target_prob: f64,
-        window_size: usize,
-        log_every: usize,
-        current_objective: &mut f64,
-        best_objective: &mut f64,
-        best_assignments: &mut Vec<u32>,
-        total_iter: &mut usize,
-        max_iter: usize,
-        rng: &mut impl Rng,
-        best_iter: &mut usize,
+        objective: &Objective,
+        params: &OptimizationParams,
+        state: &mut OptimizationState<impl Rng>,
     ) -> f64 {
-        let mut temp = init_temp;
-        let mut temp_low = init_temp * 0.000001;  // Lower bound for binary search (very low)
-        let mut temp_high = init_temp * 100.0; // Upper bound for binary search
-        
-        let mut search_iter = 0;
+        let mut temp = state.temperature;
+        let mut temp_low = state.temperature * 1e-6;  // Lower bound for binary search (very low)
+        let mut temp_high = state.temperature * 1e2; // Upper bound for binary search
         
         // Binary search for the right temperature - keep going until we find it or hit max_iter
         loop {
-            let avg_prob = self.measure_average_probability(
-                objective,
-                temp,
-                window_size,
-                log_every,
-                current_objective,
-                best_objective,
-                best_assignments,
-                total_iter,
-                max_iter,
-                rng,
-                best_iter,
-            );
+            let avg_prob = self.measure_average_probability(objective, params, state);
             
             // Check if we're close enough to target (within 1%)
-            if (avg_prob - target_prob).abs() < 0.01 {
+            if (avg_prob - params.init_prob).abs() < 0.01 {
                 return temp;
             }
             
             // Adjust temperature bounds
-            if avg_prob < target_prob {
+            if avg_prob < params.init_prob {
                 // Need higher temperature
                 temp_low = temp;
             } else {
@@ -262,7 +247,7 @@ impl Partition {
             let new_temp = (temp_low + temp_high) / 2.0;
             
             // If we're stuck at the same temperature, expand the search range downward
-            if (new_temp - temp).abs() < 1e-10 && avg_prob > target_prob {
+            if (new_temp - temp).abs() < 1e-10 && avg_prob > params.init_prob {
                 // Need to go lower, expand lower bound
                 temp_low = temp_low * 0.1;
                 temp = (temp_low + temp_high) / 2.0;
@@ -270,10 +255,8 @@ impl Partition {
                 temp = new_temp;
             }
             
-            search_iter += 1;
-            
             // Safety check
-            if *total_iter >= max_iter {
+            if state.current_iter >= params.max_iter {
                 return temp;
             }
         }
@@ -282,76 +265,59 @@ impl Partition {
     /// Phase 2: Cool geometrically with early stopping based on no improvement
     fn cool_to_target_acceptance(
         &mut self,
-        objective: &crate::objective::Objective,
-        mut temp: f64,
-        cooling_rate: f64,
-        target_prob: f64,
-        window_size: usize,
-        log_every: usize,
-        current_objective: &mut f64,
-        best_objective: &mut f64,
-        best_assignments: &mut Vec<u32>,
-        total_iter: &mut usize,
-        max_iter: usize,
-        rng: &mut impl Rng,
-        early_stop_iters: usize,
+        objective: &Objective,
+        params: &OptimizationParams,
+        state: &mut OptimizationState<impl Rng>,
     ) {
         let mut iters_since_improvement = 0;
-        let initial_best = *best_objective;
-        let mut best_iter = *total_iter;
-        
+
         // For printing: non-overlapping windows
         let mut window_prob_sum = 0.0;
         let mut window_count = 0;
         
         loop {
-            let prev_best = *best_objective;
+            let prev_best = state.best_score;
             
             // Perform one iteration
             let (_, delta) = self.anneal_iteration(
                 objective,
-                temp,
-                current_objective,
-                best_objective,
-                best_assignments,
-                total_iter,
-                rng,
+                state,
             );
             
             // Calculate acceptance probability for this move
-            let prob = acceptance_probability(delta, temp);
+            let prob = acceptance_probability(delta, state.temperature);
             
             // Accumulate for printing window (non-overlapping)
             window_prob_sum += prob;
             window_count += 1;
             
             // Check if we improved the best objective
-            if *best_objective > prev_best {
+            if state.best_score > prev_best {
                 iters_since_improvement = 0;
-                best_iter = *total_iter;
+                state.best_iter = state.current_iter;
             } else {
                 iters_since_improvement += 1;
             }
             
             // Print progress every log_every iterations (non-overlapping windows)
-            if *total_iter % log_every == 0 {
+            if state.current_iter % params.log_every == 0 {
                 let avg_prob = window_prob_sum / window_count as f64;
-                self.print_progress_with_avg_prob_and_curr(objective, *total_iter, *current_objective, *best_objective, temp, avg_prob, prob, delta, best_iter);
+                self.print_progress_with_avg_prob_and_curr(objective, avg_prob, prob, delta, state);
                 // Reset window for next period
                 window_prob_sum = 0.0;
                 window_count = 0;
             }
             
             // Early stopping check
-            if iters_since_improvement >= early_stop_iters {
+            if iters_since_improvement >= params.early_stop_iters {
                 return;
             }
             
             // Cool temperature
-            temp *= cooling_rate;
+            state.temperature *= params.cooling_rate;
             
             // Safety check
-            if *total_iter >= max_iter {
+            if state.current_iter >= params.max_iter {
                 return;
             }
         }
@@ -360,17 +326,9 @@ impl Partition {
     /// Measure average acceptance probability at a given temperature over a window of iterations
     fn measure_average_probability(
         &mut self,
-        objective: &crate::objective::Objective,
-        temp: f64,
-        window_size: usize,
-        log_every: usize,
-        current_objective: &mut f64,
-        best_objective: &mut f64,
-        best_assignments: &mut Vec<u32>,
-        total_iter: &mut usize,
-        max_iter: usize,
-        rng: &mut impl Rng,
-        best_iter: &mut usize,
+        objective: &Objective,
+        params: &OptimizationParams,
+        state: &mut OptimizationState<impl Rng>,
     ) -> f64 {
         let mut prob_sum = 0.0;
         let mut count = 0;
@@ -379,30 +337,22 @@ impl Partition {
         let mut window_prob_sum = 0.0;
         let mut window_count = 0;
         
-        for _ in 0..window_size {
-            if *total_iter >= max_iter {
+        for _ in 0..params.window_size {
+            if state.current_iter >= params.max_iter {
                 break;
             }
             
-            let prev_best = *best_objective;
+            let prev_best = state.best_score;
             
-            let (_, delta) = self.anneal_iteration(
-                objective,
-                temp,
-                current_objective,
-                best_objective,
-                best_assignments,
-                total_iter,
-                rng,
-            );
+            let (_, delta) = self.anneal_iteration(objective, state);
             
             // Track best iteration
-            if *best_objective > prev_best {
-                *best_iter = *total_iter;
+            if state.best_score > prev_best {
+                state.best_iter = state.current_iter;
             }
             
             // Calculate acceptance probability for this move
-            let prob = acceptance_probability(delta, temp);
+            let prob = acceptance_probability(delta, state.temperature);
             prob_sum += prob;
             count += 1;
             
@@ -411,9 +361,9 @@ impl Partition {
             window_count += 1;
             
             // Print progress every log_every iterations (non-overlapping windows)
-            if *total_iter % log_every == 0 {
+            if state.current_iter % params.log_every == 0 {
                 let avg_prob = window_prob_sum / window_count as f64;
-                self.print_progress_with_avg_prob_and_curr(objective, *total_iter, *current_objective, *best_objective, temp, avg_prob, prob, delta, *best_iter);
+                self.print_progress_with_avg_prob_and_curr(objective, avg_prob, prob, delta, state);
                 // Reset window for next period
                 window_prob_sum = 0.0;
                 window_count = 0;
@@ -431,23 +381,18 @@ impl Partition {
     /// Returns (accepted, delta) tuple
     fn anneal_iteration(
         &mut self,
-        objective: &crate::objective::Objective,
-        temp: f64,
-        current_objective: &mut f64,
-        best_objective: &mut f64,
-        best_assignments: &mut Vec<u32>,
-        total_iter: &mut usize,
-        rng: &mut impl Rng,
+        objective: &Objective,
+        state: &mut OptimizationState<impl Rng>,
     ) -> (bool, f64) {
         // Pick random part, weighted by frontier size
-        let src = self.random_part_weighted_by_frontier(rng).unwrap();
+        let src = self.random_part_weighted_by_frontier(&mut state.rng).unwrap();
 
         // Pick random node on part boundary
         let candidates = self.frontiers.get(src as usize);
-        let node = candidates[rng.random_range(0..candidates.len())];
+        let node = candidates[state.rng.random_range(0..candidates.len())];
 
         // Pick random destination part (that neighbors node)
-        let dest = self.random_neighboring_part(node, rng).unwrap();
+        let dest = self.random_neighboring_part(node, &mut state.rng).unwrap();
 
         // Collect articulation bundle (if necessary to maintain contiguity)
         let bundle =
@@ -467,18 +412,18 @@ impl Partition {
         let new_objective = objective.compute(self);
         
         // Delta: negative of improvement (for minimization in Metropolis criterion)
-        let delta = *current_objective - new_objective;
+        let delta = state.current_score - new_objective;
         
-        let accept = accept_metropolis(delta, temp, rng);
+        let accept = accept_metropolis(delta, state.temperature, &mut state.rng);
 
         if accept {
             // Keep the move
-            *current_objective = new_objective;
+            state.current_score = new_objective;
             
             // Update best if this is better
-            if new_objective > *best_objective {
-                *best_objective = new_objective;
-                *best_assignments = self.assignments();
+            if new_objective > state.best_score {
+                state.best_score = new_objective;
+                state.best_assignments = self.assignments();
             }
         } else {
             // Revert the move
@@ -490,19 +435,16 @@ impl Partition {
             }
         }
 
-        *total_iter += 1;
+        state.current_iter += 1;
         (accept, delta)
     }
 
     /// Print progress information (for phase 3 where we don't have rolling window)
     fn print_progress(
         &self,
-        objective: &crate::objective::Objective,
-        iter: usize,
-        current_objective: f64,
-        best_objective: f64,
-        temp: f64,
+        objective: &Objective,
         delta: f64,
+        state: &OptimizationState<impl Rng>,
     ) {
         let comp_str = objective.metrics()
             .iter()
@@ -514,14 +456,14 @@ impl Partition {
             .join(" ");
         
         // Calculate acceptance probability for this single move
-        let prob = acceptance_probability(delta, temp);
+        let prob = acceptance_probability(delta, state.temperature);
         
         println!("Iter {}: obj {:.4} | {} | best {:.4} | temp {:.12e} | prob {:.8}",
-            iter,
-            current_objective,
+            state.current_iter,
+            state.current_score,
             comp_str,
-            best_objective,
-            temp,
+            state.best_score,
+            state.temperature,
             prob,
         );
     }
@@ -529,12 +471,9 @@ impl Partition {
     /// Print progress information with average probability over rolling window
     fn print_progress_with_avg_prob(
         &self,
-        objective: &crate::objective::Objective,
-        iter: usize,
-        current_objective: f64,
-        best_objective: f64,
-        temp: f64,
+        objective: &Objective,
         avg_prob: f64,
+        state: &OptimizationState<impl Rng>,
     ) {
         let comp_str = objective.metrics()
             .iter()
@@ -546,11 +485,11 @@ impl Partition {
             .join(" ");
         
         println!("Iter {}: obj {:.4} | {} | best {:.4} | temp {:.12e} | prob {:.8}",
-            iter,
-            current_objective,
+            state.current_iter,
+            state.current_score,
             comp_str,
-            best_objective,
-            temp,
+            state.best_score,
+            state.temperature,
             avg_prob,
         );
     }
@@ -558,15 +497,11 @@ impl Partition {
     /// Print progress information with both average probability and current move probability
     fn print_progress_with_avg_prob_and_curr(
         &self,
-        objective: &crate::objective::Objective,
-        iter: usize,
-        current_objective: f64,
-        best_objective: f64,
-        temp: f64,
+        objective: &Objective,
         avg_prob: f64,
         curr_prob: f64,
         delta: f64,
-        best_iter: usize,
+        state: &OptimizationState<impl Rng>,
     ) {
         let comp_str = objective.metrics()
             .iter()
@@ -579,19 +514,15 @@ impl Partition {
         
         let delta_print = if delta < 0.0 { delta.min(EPSILON) } else { delta };
         println!("Iter {}: obj {:.12e} | {} | best {:.12e} @ {} | temp {:.12e} | prob {:.8} | curr_prob {:.8} | delta {:.8e}",
-            iter,
-            current_objective,
+            state.current_iter,
+            state.current_score,
             comp_str,
-            best_objective,
-            best_iter,
-            temp,
+            state.best_score,
+            state.best_iter,
+            state.temperature,
             avg_prob,
             curr_prob,
             delta_print,
         );
     }
-
-    /// Implement simulated annealing with energy function, hard constraints
-    #[allow(dead_code, unused_variables)]
-    pub(crate) fn anneal_optimize(&mut self) { todo!() }
 }

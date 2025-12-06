@@ -44,7 +44,7 @@ def redirect_fds_to_file(filepath):
 def get_next_run_number(state: str, num_districts: int, artifacts_dir: Path) -> int:
     """Find the next available run number for this state/num_districts combination."""
     pattern = f"{state}_{num_districts}_"
-    existing = [f for f in artifacts_dir.glob(f"{pattern}*") if f.is_file()]
+    existing = [f for f in artifacts_dir.glob(f"{pattern}*")]
     
     if not existing:
         return 1
@@ -128,7 +128,10 @@ def main(
     
     # Get next run number
     run_number = get_next_run_number(state, num_districts, artifacts_dir)
-    
+
+    out_dir = artifacts_dir / f"{state}_{num_districts}_{run_number}"
+    out_dir.mkdir(exist_ok=True, parents=True)
+
     # Print command line arguments
     print('\n' + ' '.join([sys.argv[0].split('/')[-1]] + sys.argv[1:]))
     print(f"\n{'='*80}")
@@ -194,8 +197,8 @@ def main(
     init_rand_metrics = score_plan(plan, "Initial Random")
     
     # Save random initial plan
-    rand_init_svg_path = artifacts_dir / f"{state}_{num_districts}_{run_number}_rand_init.svg"
-    rand_init_csv_path = artifacts_dir / f"{state}_{num_districts}_{run_number}_rand_init.csv"
+    rand_init_svg_path = out_dir / f"{state}_{num_districts}_{run_number}_rand_init.svg"
+    rand_init_csv_path = out_dir / f"{state}_{num_districts}_{run_number}_rand_init.csv"
     save_plan_image(plan, rand_init_svg_path)
     plan.to_csv(path=str(rand_init_csv_path))
     
@@ -205,8 +208,8 @@ def main(
     equalized_metrics = score_plan(plan, "After Equalization")
     
     # Save equalized plan
-    equalized_svg_path = artifacts_dir / f"{state}_{num_districts}_{run_number}_equalized.svg"
-    equalized_csv_path = artifacts_dir / f"{state}_{num_districts}_{run_number}_equalized.csv"
+    equalized_svg_path = out_dir / f"{state}_{num_districts}_{run_number}_equalized.svg"
+    equalized_csv_path = out_dir / f"{state}_{num_districts}_{run_number}_equalized.csv"
     save_plan_image(plan, equalized_svg_path)
     plan.to_csv(path=str(equalized_csv_path))
     
@@ -253,13 +256,13 @@ def main(
     final_metrics = score_plan(plan, "Final")
     
     # Save final plan
-    final_svg_path = artifacts_dir / f"{state}_{num_districts}_{run_number}_final.svg"
-    final_csv_path = artifacts_dir / f"{state}_{num_districts}_{run_number}_final.csv"
+    final_svg_path = out_dir / f"{state}_{num_districts}_{run_number}_final.svg"
+    final_csv_path = out_dir / f"{state}_{num_districts}_{run_number}_final.csv"
     save_plan_image(plan, final_svg_path)
     plan.to_csv(path=str(final_csv_path))
     
     # Save metrics to JSON
-    metrics_path = artifacts_dir / f"{state}_{num_districts}_{run_number}_metrics.json"
+    metrics_path = out_dir / f"{state}_{num_districts}_{run_number}_metrics.json"
     metrics_data = {
         "state": state,
         "num_districts": num_districts,

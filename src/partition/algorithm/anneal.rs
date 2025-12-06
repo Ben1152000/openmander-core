@@ -168,7 +168,7 @@ impl Partition {
     /// - `early_stop_iters`: Stop phase 3 after this many iterations without improvement
     /// - `window_size`: Rolling window size for measuring acceptance rates (default: 1000)
     pub(crate) fn anneal(&mut self,
-        objective: &crate::objective::Objective,
+        objective: &Objective,
         max_iter: usize,
         init_temp: f64,
         cooling_rate: f64,
@@ -202,7 +202,7 @@ impl Partition {
         };
 
         // Phase 1: Find initial temperature where average acceptance probability ≈ 0.9
-        state.temperature = self.find_initial_temp(objective, &params, &mut state);
+        self.find_initial_temp(objective, &params, &mut state);
 
         // Phase 2: Cool with early stopping (stop after N iters without improvement)
         self.cool_to_target_acceptance(objective, &params, &mut state);
@@ -220,45 +220,35 @@ impl Partition {
         objective: &Objective,
         params: &OptimizationParams,
         state: &mut OptimizationState<impl Rng>,
-    ) -> f64 {
-        let mut temp = state.temperature;
-        let mut temp_low = state.temperature * 1e-6;  // Lower bound for binary search (very low)
-        let mut temp_high = state.temperature * 1e2; // Upper bound for binary search
+    ) {
+        let mut min_temp = state.temperature * 1e-6;  // Lower bound for binary search (very low)
+        let mut max_temp = state.temperature * 1e2; // Upper bound for binary search
         
         // Binary search for the right temperature - keep going until we find it or hit max_iter
         loop {
             let avg_prob = self.measure_average_probability(objective, params, state);
-            
+
             // Check if we're close enough to target (within 1%)
-            if (avg_prob - params.init_prob).abs() < 0.01 {
-                return temp;
-            }
+            if (avg_prob - params.init_prob).abs() < 0.01 { return }
             
             // Adjust temperature bounds
-            if avg_prob < params.init_prob {
-                // Need higher temperature
-                temp_low = temp;
-            } else {
-                // Need lower temperature
-                temp_high = temp;
-            }
+            if avg_prob < params.init_prob { min_temp = state.temperature }
+            else { max_temp = state.temperature }
             
             // Binary search midpoint
-            let new_temp = (temp_low + temp_high) / 2.0;
+            let new_temp = (min_temp * max_temp).sqrt();
             
             // If we're stuck at the same temperature, expand the search range downward
-            if (new_temp - temp).abs() < 1e-10 && avg_prob > params.init_prob {
+            if (new_temp - state.temperature).abs() < 1e-10 && avg_prob > params.init_prob {
                 // Need to go lower, expand lower bound
-                temp_low = temp_low * 0.1;
-                temp = (temp_low + temp_high) / 2.0;
+                min_temp *= 1e-1;
+                state.temperature = (min_temp * max_temp).sqrt();
             } else {
-                temp = new_temp;
+                state.temperature = new_temp;
             }
             
             // Safety check
-            if state.current_iter >= params.max_iter {
-                return temp;
-            }
+            if state.current_iter >= params.max_iter { return }
         }
     }
 

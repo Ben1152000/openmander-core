@@ -46,16 +46,29 @@ impl Metric {
         Self { kind: MetricKind::Proportionality { dem_series, rep_series } }
     }
 
-    /// Evaluate this metric for a given partition.
-    #[allow(unused_variables)]
+    /// Get a short name for this metric (for display purposes).
+    pub(crate) fn short_name(&self) -> &str {
+        match &self.kind {
+            MetricKind::PopulationDeviation { .. } => "PopulationEquality",
+            MetricKind::Compactness => "CompactnessPolsbyPopper",
+            MetricKind::Competitiveness { .. } => "Competitiveness",
+            MetricKind::Proportionality { .. } => "Proportionality",
+        }
+    }
+
+    /// Evaluate this metric for a given partition, returning per-district scores.
     pub(crate) fn compute(&self, partition: &Partition) -> Vec<f64> {
         match &self.kind {
             MetricKind::PopulationDeviation { series } => {
                 let total = partition.region_total(series);
-                let average = total / (partition.num_parts() as f64 - 1.0);
+                let average = total / (partition.num_parts() - 1) as f64;
 
                 (1..partition.num_parts())
-                    .map(|part| (partition.part_total(series, part) - average) / average)
+                    .map(|part| {
+                        let deviation = partition.part_total(series, part) / average - 1.0;
+                        let limit = if deviation <= 0.0 { 1 } else { partition.num_parts() - 2 };
+                        (1.0 - deviation.powi(2) / limit.pow(2) as f64) / (1.0 + deviation.powi(2))
+                    })
                     .collect()
             }
             MetricKind::Compactness => {
@@ -69,8 +82,15 @@ impl Metric {
                     .collect()
             }
             MetricKind::Proportionality { dem_series, rep_series } =>
-                todo!(),
+                todo!("{dem_series}, {rep_series}"),
         }
+    }
+
+    /// Compute the overall score for this metric by aggregating per-district scores.
+    /// Currently uses average for all metrics, but can be customized per metric type in the future.
+    pub(crate) fn compute_score(&self, partition: &Partition) -> f64 {
+        let values = self.compute(partition);
+        if values.is_empty() { 0.0 } else { values.iter().sum::<f64>() / values.len() as f64 }
     }
 }
 

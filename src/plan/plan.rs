@@ -68,9 +68,14 @@ impl Plan {
         Ok(self.partition.part_totals(series))
     }
 
-    /// Compute a given metric for the current partition.
+    /// Compute a given metric for the current partition (per-district scores).
     pub fn compute_metric(&self, metric: &Metric) -> Vec<f64> {
         metric.compute(&self.partition)
+    }
+
+    /// Compute the aggregated score for a given metric for the current partition.
+    pub fn compute_metric_score(&self, metric: &Metric) -> f64 {
+        metric.compute_score(&self.partition)
     }
 
     /// Compute the objective value for the current partition.
@@ -104,16 +109,21 @@ impl Plan {
     /// 
     /// The algorithm maximizes the objective value (higher is better).
     /// 
+    /// Three-phase adaptive annealing:
+    /// 1. Find initial temperature where acceptance rate ≈ 0.9
+    /// 2. Cool geometrically at specified rate until acceptance rate ≈ 0.1
+    /// 3. Run at final temperature with early stopping (stops after N iters without improvement)
+    /// 
     /// Parameters:
     /// - `objective`: The objective to maximize
-    /// - `max_iter`: Total number of annealing iterations
-    /// - `initial_temp`: Starting temperature for annealing
-    /// - `final_temp`: Final temperature for annealing
-    /// - `finish_temp_iter`: Iteration at which to reach final_temp (must be <= max_iter)
-    ///                       After this iteration, temperature stays at final_temp
+    /// - `max_iter`: Safety maximum iterations (prevents infinite loops)
+    /// - `init_temp`: Initial temperature guess for phase 1
+    /// - `cooling_rate`: Geometric cooling rate (temp *= rate each iteration)
+    /// - `early_stop_iters`: Stop phase 3 after this many iterations without improvement
+    /// - `window_size`: Rolling window size for measuring acceptance rates
     #[inline]
-    pub fn anneal(&mut self, objective: &Objective, max_iter: usize, initial_temp: f64, final_temp: f64, finish_temp_iter: usize) -> Result<()> {
-        self.partition.anneal(objective, max_iter, initial_temp, final_temp, finish_temp_iter);
+    pub fn anneal(&mut self, objective: &Objective, max_iter: usize, init_temp: f64, cooling_rate: f64, early_stop_iters: usize, window_size: usize, log_every: usize) -> Result<()> {
+        self.partition.anneal(objective, max_iter, init_temp, cooling_rate, early_stop_iters, window_size, log_every);
 
         Ok(())
     }

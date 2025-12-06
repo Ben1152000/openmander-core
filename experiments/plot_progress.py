@@ -96,7 +96,7 @@ def parse_log_line(line):
     return None
 
 
-def update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, output_path, max_y_log_temp=None, delta_only_neg=False):
+def update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, output_path, max_y_log_temp=None, show_delta=True):
     """Update the progress plot."""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
     
@@ -122,66 +122,49 @@ def update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, 
                 color=color, label=metric_name)
     
     # Plot delta on a separate right-side y-axis (dashed red line)
-    if deltas and any(d is not None for d in deltas):
+    if show_delta and deltas and any(d is not None for d in deltas):
         ax1_delta = ax1.twinx()
         valid_deltas = [(i, it, d) for i, (it, d) in enumerate(zip(iterations, deltas)) if d is not None]
         
-        if delta_only_neg:
-            # Only plot negative deltas as dots, use log10(-delta)
-            neg_deltas = [(i, it, d) for i, it, d in valid_deltas if d < 0]
-            if neg_deltas:
-                _, neg_iters, neg_ds = zip(*neg_deltas)
-                log_neg_deltas = [math.log10(-d) for d in neg_ds]
-                ax1_delta.scatter(neg_iters, log_neg_deltas, s=20, alpha=0.6, color='red', label='log10(-Delta)')
-                ax1_delta.set_ylabel('log10(-Delta)', fontsize=12, color='red')
-                ax1_delta.tick_params(axis='y', labelcolor='red')
-                
-                # Add delta to legend
-                lines1, labels1 = ax1.get_legend_handles_labels()
-                lines2, labels2 = ax1_delta.get_legend_handles_labels()
-                ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='lower left')
-            else:
-                ax1.legend(fontsize=10, loc='lower left')
+        # Plot all deltas with log scale: log(-delta) for negative, log(delta) for positive
+        # Three colors based on epsilon threshold
+        EPSILON = 1e-10
+        if valid_deltas:
+            # Categorize deltas into three groups
+            large_neg = [(i, it, d) for i, it, d in valid_deltas if d < -EPSILON]
+            small_neg = [(i, it, d) for i, it, d in valid_deltas if -EPSILON <= d < 0]
+            pos_deltas = [(i, it, d) for i, it, d in valid_deltas if d > 0]
+            
+            # Plot large negative deltas in dark red
+            if large_neg:
+                _, iters, ds = zip(*large_neg)
+                log_deltas = [math.log10(-d) for d in ds]
+                ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='darkred', 
+                                 label=f'Δ < -ε (ε=1×10⁻¹⁰)')
+            
+            # Plot small negative deltas in magenta
+            if small_neg:
+                _, iters, ds = zip(*small_neg)
+                log_deltas = [math.log10(-d) for d in ds]
+                ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='magenta', 
+                                 label=f'-ε ≤ Δ < 0 (ε=1×10⁻¹⁰)')
+            
+            # Plot positive deltas in cyan
+            if pos_deltas:
+                _, iters, ds = zip(*pos_deltas)
+                log_deltas = [math.log10(d) for d in ds]
+                ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='cyan', 
+                                 label=f'Δ > 0')
+            
+            ax1_delta.set_ylabel(f'log10(|Δ|)  [ε = {EPSILON:.0e}]', fontsize=12)
+            ax1_delta.tick_params(axis='y')
+            
+            # Add delta to legend
+            lines1, labels1 = ax1.get_legend_handles_labels()
+            lines2, labels2 = ax1_delta.get_legend_handles_labels()
+            ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='lower left')
         else:
-            # Plot all deltas with log scale: log(-delta) for negative, log(delta) for positive
-            # Three colors based on epsilon threshold
-            EPSILON = 1e-10
-            if valid_deltas:
-                # Categorize deltas into three groups
-                large_neg = [(i, it, d) for i, it, d in valid_deltas if d < -EPSILON]
-                small_neg = [(i, it, d) for i, it, d in valid_deltas if -EPSILON <= d < 0]
-                pos_deltas = [(i, it, d) for i, it, d in valid_deltas if d > 0]
-                
-                # Plot large negative deltas in dark red
-                if large_neg:
-                    _, iters, ds = zip(*large_neg)
-                    log_deltas = [math.log10(-d) for d in ds]
-                    ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='darkred', 
-                                     label=f'Δ < -ε (ε=1×10⁻¹⁰)')
-                
-                # Plot small negative deltas in magenta
-                if small_neg:
-                    _, iters, ds = zip(*small_neg)
-                    log_deltas = [math.log10(-d) for d in ds]
-                    ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='magenta', 
-                                     label=f'-ε ≤ Δ < 0 (ε=1×10⁻¹⁰)')
-                
-                # Plot positive deltas in cyan
-                if pos_deltas:
-                    _, iters, ds = zip(*pos_deltas)
-                    log_deltas = [math.log10(d) for d in ds]
-                    ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='cyan', 
-                                     label=f'Δ > 0')
-                
-                ax1_delta.set_ylabel(f'log10(|Δ|)  [ε = {EPSILON:.0e}]', fontsize=12)
-                ax1_delta.tick_params(axis='y')
-                
-                # Add delta to legend
-                lines1, labels1 = ax1.get_legend_handles_labels()
-                lines2, labels2 = ax1_delta.get_legend_handles_labels()
-                ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='lower left')
-            else:
-                ax1.legend(fontsize=10, loc='lower left')
+            ax1.legend(fontsize=10, loc='lower left')
     else:
         # No delta, use regular legend
         ax1.legend(fontsize=10, loc='lower left')
@@ -261,7 +244,7 @@ def update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, 
     plt.close()
 
 
-def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None, delta_only_neg=False):
+def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None, show_delta=True):
     """Monitor log file and update plot in real-time."""
     
     iterations = []
@@ -292,6 +275,7 @@ def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None
     last_iteration = 0
     lines_read = 0
     data_points = 0
+    should_exit = False
     
     with open(log_path, 'r') as f:
         while True:
@@ -302,12 +286,14 @@ def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None
                 if not sentinel.exists():
                     # Process finished, do final update and exit
                     if iterations:
-                        update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, plot_path, max_y_log_temp, delta_only_neg)
+                        update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, plot_path, max_y_log_temp, show_delta)
                         pbar.close()
                         print(f"\nPlotted {len(all_metrics)} metrics: {', '.join(all_metrics.keys())}")
                     else:
                         pbar.close()
                         print(f"\nWARNING: No data points found in log file")
+                    
+                    should_exit = True
                     break
                 time.sleep(0.1)
                 continue
@@ -345,7 +331,12 @@ def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None
                 
                 # Update plot every N data points
                 if data_points % plot_every == 0:
-                    update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, plot_path, max_y_log_temp, delta_only_neg)
+                    update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, plot_path, max_y_log_temp, show_delta)
+    
+    # Create a "done" file to signal plotting is complete (after loop exits)
+    if should_exit:
+        done_file = log_path.parent / f"{log_path.stem}.plot_done"
+        done_file.touch()
 
 
 if __name__ == "__main__":
@@ -357,8 +348,8 @@ if __name__ == "__main__":
     parser.add_argument('max_iter', type=int, help='Maximum iterations')
     parser.add_argument('--plot-every', type=int, default=1, help='Update plot every N data points (default: 1)')
     parser.add_argument('--max-y-log-temp', type=float, default=None, help='Maximum y-value for log10(temp) axis, e.g., -6')
-    parser.add_argument('--delta-only-neg', action='store_true', help='Only plot negative deltas as log10(-delta)')
+    parser.add_argument('--no-delta', action='store_true', help='Hide delta dots from the plot')
     
     args = parser.parse_args()
     
-    monitor_log(args.log_path, args.plot_path, args.max_iter, args.plot_every, args.max_y_log_temp, args.delta_only_neg)
+    monitor_log(args.log_path, args.plot_path, args.max_iter, args.plot_every, args.max_y_log_temp, not args.no_delta)

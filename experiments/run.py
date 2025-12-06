@@ -216,6 +216,7 @@ def main(
     # Run annealing with optional log file redirection
     print(f"\nAdaptive Annealing: max_iter={max_iter:,}, init_temp={init_temp}, cooling_rate={cooling_rate}, early_stop_iters={early_stop_iters:,}")
     
+    sentinel_path = None
     if log_file:
         # Redirect to log file
         log_path = Path(log_file)
@@ -235,10 +236,6 @@ def main(
                 window_size=window_size,
                 log_every=log_every
             )
-        
-        # Remove sentinel file to signal completion
-        if sentinel_path.exists():
-            sentinel_path.unlink()
     else:
         # Print to stdout
         plan.anneal(
@@ -251,7 +248,26 @@ def main(
             log_every=log_every
         )
     
-    # Score and save final plan
+    # Remove sentinel file to signal annealing is complete
+    if sentinel_path and sentinel_path.exists():
+        import time
+        sentinel_path.unlink()
+        
+        # Wait for plotting script to finish (it creates a .plot_done file)
+        plot_done_file = sentinel_path.parent / f"{sentinel_path.stem.replace('.running', '')}.plot_done"
+        timeout = 30  # seconds
+        start_time = time.time()
+        while not plot_done_file.exists():
+            if time.time() - start_time > timeout:
+                print("Warning: Plotting script did not finish within timeout")
+                break
+            time.sleep(0.1)
+        
+        # Clean up the plot_done file
+        if plot_done_file.exists():
+            plot_done_file.unlink()
+    
+    # Score and save final plan (after plotting is done)
     print()
     final_metrics = score_plan(plan, "Final")
     

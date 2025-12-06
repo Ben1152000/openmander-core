@@ -225,7 +225,7 @@ impl Partition {
         let mut max_temp = state.temperature * 1e10; // Upper bound for binary search
 
         // Binary search for the right temperature - keep going until we find it or hit max_iter
-        while state.current_iter < params.max_iter {
+        for iter in (0..50) {
             let avg_prob = self.measure_average_probability(objective, params, state);
 
             // Check if we're close enough to target (within 1%)
@@ -284,7 +284,7 @@ impl Partition {
             if iters_since_change >= params.early_stop_iters { return }
 
             // Cool temperature
-            state.temperature *= params.cooling_rate;
+            state.temperature *= 1.0 - params.cooling_rate;
         }
     }
 

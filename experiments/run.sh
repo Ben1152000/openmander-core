@@ -3,17 +3,17 @@
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-STATE=CT
-NUM_DISTRICTS=5
-MAX_ITER=$((1000000))  # Safety maximum (very high)
+STATE=NJ
+NUM_DISTRICTS=12
+MAX_ITER=$((10**8))  # Safety maximum (very high)
 INIT_TEMP=1.0
-COOLING_RATE=0.99999 #6  # Slower cooling (closer to 1.0 = slower)
-EARLY_STOP_ITERS=$((1000000))
+COOLING_RATE=0.000001  # 10^-5 # smaller = slower
+EARLY_STOP_ITERS=$((1*10**6))
 WINDOW_SIZE=1000
 LOG_EVERY=1000  # Print progress every N iterations
 PLOT_EVERY=10  # Update plot every N data points
 MAX_Y_LOG_TEMP="0"  # Maximum y-value for log10(temp) axis (e.g., -6), leave empty for auto
-DELTA_ONLY_NEG="" # "--delta-only-neg"  # Set to "--delta-only-neg" to only plot negative deltas as log10(-delta), leave empty for all deltas
+SHOW_DELTA="--no-delta" # "--no-delta"  # Set to "--no-delta" to hide delta dots, leave empty to show them
 
 # Metric weights (set to 0 to disable a metric)
 POP_WEIGHT=0.6
@@ -85,8 +85,8 @@ PLOT_CMD="python -u $SCRIPT_DIR/plot_progress.py $LOG_FILE $PLOT_FILE $MAX_ITER 
 if [ ! -z "$MAX_Y_LOG_TEMP" ]; then
     PLOT_CMD="$PLOT_CMD --max-y-log-temp $MAX_Y_LOG_TEMP"
 fi
-if [ ! -z "$DELTA_ONLY_NEG" ]; then
-    PLOT_CMD="$PLOT_CMD $DELTA_ONLY_NEG"
+if [ ! -z "$SHOW_DELTA" ]; then
+    PLOT_CMD="$PLOT_CMD $SHOW_DELTA"
 fi
 eval $PLOT_CMD
 

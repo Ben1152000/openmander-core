@@ -5,10 +5,10 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 STATE=CT
 NUM_DISTRICTS=5
-MAX_ITER=$((1000000))  # Safety maximum (very high)
+MAX_ITER=10000000  # Safety maximum (very high)
 INIT_TEMP=1.0
-COOLING_RATE=0.99999 #6  # Slower cooling (closer to 1.0 = slower)
-EARLY_STOP_ITERS=$((1000000))
+COOLING_RATE=0.000001 #6  # Slower cooling (closer to 1.0 = slower)
+EARLY_STOP_ITERS=10000
 WINDOW_SIZE=1000
 LOG_EVERY=1000  # Print progress every N iterations
 PLOT_EVERY=10  # Update plot every N data points

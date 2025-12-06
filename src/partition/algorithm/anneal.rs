@@ -51,13 +51,13 @@ fn temp_geometric(initial_temp: f64, final_temp: f64, max_iter: usize, iter: usi
 /// Returns 1.0 if delta <= 0 (improvement), otherwise exp(-delta/temp).
 /// Uses epsilon to treat tiny positive deltas as improvements (handles floating point precision).
 fn acceptance_probability(delta: f64, temp: f64) -> f64 {
-    if delta < -EPSILON { 1.0 } else { ((-delta - EPSILON) / temp).exp() }
+    if delta > EPSILON { 1.0 } else { ((delta - EPSILON) / temp).exp() }
 }
 
 /// Metropolis acceptance criterion for simulated annealing in temperature space.
 /// Accept if `delta <= 0` or with probability `exp(-delta / T)`.
 fn accept_metropolis<R: Rng + ?Sized>(delta: f64, temp: f64, rng: &mut R) -> bool {
-    delta < -EPSILON || rng.random::<f64>() < acceptance_probability(delta, temp)
+    delta > EPSILON || rng.random::<f64>() < acceptance_probability(delta, temp)
 }
 
 impl Partition {
@@ -126,7 +126,7 @@ impl Partition {
 
             let delta = weight_delta * (1.0 - boundary_factor) + boundary_delta * boundary_factor;
             let temp = temp_geometric(initial_temp, final_temp, max_iter, i);
-            let accept = accept_metropolis(delta, temp, &mut rng);
+            let accept = accept_metropolis(-delta, temp, &mut rng);
 
             if i % 1000 == 0 {
                 println!("Moving from part {} ({:.0}) to part {} ({:.0}) with temp {:.8} prob {:.3} weight {:.2} boundary {:.2} delta {:.2} accept {}",
@@ -225,7 +225,7 @@ impl Partition {
         let mut max_temp = state.temperature * 1e10; // Upper bound for binary search
 
         // Binary search for the right temperature - keep going until we find it or hit max_iter
-        for iter in (0..50) {
+        for _ in 0..50 {
             let avg_prob = self.measure_average_probability(objective, params, state);
 
             // Check if we're close enough to target (within 1%)
@@ -255,7 +255,7 @@ impl Partition {
         
         while state.current_iter < params.max_iter {
             let prev_best = state.best_score;
-            
+
             // Perform one iteration
             let (accept, delta) = self.anneal_iteration(objective, state);
 
@@ -274,7 +274,7 @@ impl Partition {
             // Print progress every log_every iterations (non-overlapping windows)
             if state.current_iter % params.log_every == 0 {
                 let avg_prob = window_prob_sum / window_count as f64;
-                self.print_progress_with_avg_prob_and_curr(objective, avg_prob, prob, delta, state);
+                self.print_progress_with_avg_prob_and_curr(objective, avg_prob, prob, -delta, state);
                 // Reset window for next period
                 window_prob_sum = 0.0;
                 window_count = 0;
@@ -328,7 +328,7 @@ impl Partition {
             // Print progress every log_every iterations (non-overlapping windows)
             if state.current_iter % params.log_every == 0 {
                 let avg_prob = window_prob_sum / window_count as f64;
-                self.print_progress_with_avg_prob_and_curr(objective, avg_prob, prob, delta, state);
+                self.print_progress_with_avg_prob_and_curr(objective, avg_prob, prob, -delta, state);
                 // Reset window for next period
                 window_prob_sum = 0.0;
                 window_count = 0;
@@ -342,6 +342,9 @@ impl Partition {
         }
     }
 
+    /// Perform a batch of annealing iterations.
+    fn anneal_batch() {}
+
     /// Perform a single annealing iteration (propose move, accept/reject)
     /// Returns (accepted, delta) tuple
     fn anneal_iteration(
@@ -349,7 +352,7 @@ impl Partition {
         objective: &Objective,
         state: &mut OptimizationState<impl Rng>,
     ) -> (bool, f64) {
-        // Pick random part, weighted by frontier size
+        // Pick random source part, weighted by frontier size
         let src = self.random_part_weighted_by_frontier(&mut state.rng).unwrap();
 
         // Pick random node on part boundary
@@ -360,9 +363,9 @@ impl Partition {
         let dest = self.random_neighboring_part(node, &mut state.rng).unwrap();
 
         // Collect articulation bundle (if necessary to maintain contiguity)
-        let bundle =
-            if self.check_node_contiguity(node, dest) { vec![] }
-            else { self.cut_subgraph_within_part(node) };
+        let bundle = if !self.check_node_contiguity(node, dest) { 
+            self.cut_subgraph_within_part(node)
+        } else { vec![] };
 
         // Apply the move temporarily to compute new objective
         let prev_src = src;
@@ -374,20 +377,20 @@ impl Partition {
         }
 
         // Compute new objective value
-        let new_objective = objective.compute(self);
+        let new_score = objective.compute(self);
         
         // Delta: negative of improvement (for minimization in Metropolis criterion)
-        let delta = state.current_score - new_objective;
+        let delta = new_score - state.current_score;
         
         let accept = accept_metropolis(delta, state.temperature, &mut state.rng);
 
         if accept {
             // Keep the move
-            state.current_score = new_objective;
+            state.current_score = new_score;
             
             // Update best if this is better
-            if new_objective > state.best_score {
-                state.best_score = new_objective;
+            if new_score > state.best_score {
+                state.best_score = new_score;
                 state.best_assignments = self.assignments();
             }
         } else {

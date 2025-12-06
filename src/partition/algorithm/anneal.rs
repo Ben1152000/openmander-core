@@ -202,7 +202,7 @@ impl Partition {
         };
 
         // Phase 1: Find initial temperature where average acceptance probability ≈ 0.9
-        self.find_initial_temp(objective, &params, &mut state);
+        self.tune_initial_temperature(objective, &params, &mut state);
 
         // Phase 2: Cool with early stopping (stop after N iters without improvement)
         self.cool_to_target_acceptance(objective, &params, &mut state);
@@ -215,40 +215,28 @@ impl Partition {
 
     /// Phase 1: Find initial temperature where average acceptance probability reaches target (typically 0.9)
     /// Uses binary search to adaptively find the right temperature.
-    fn find_initial_temp(
+    fn tune_initial_temperature(
         &mut self,
         objective: &Objective,
         params: &OptimizationParams,
         state: &mut OptimizationState<impl Rng>,
     ) {
-        let mut min_temp = state.temperature * 1e-6;  // Lower bound for binary search (very low)
-        let mut max_temp = state.temperature * 1e2; // Upper bound for binary search
-        
+        let mut min_temp = state.temperature * 1e-10;  // Lower bound for binary search (very low)
+        let mut max_temp = state.temperature * 1e10; // Upper bound for binary search
+
         // Binary search for the right temperature - keep going until we find it or hit max_iter
-        loop {
+        while state.current_iter < params.max_iter {
             let avg_prob = self.measure_average_probability(objective, params, state);
 
             // Check if we're close enough to target (within 1%)
             if (avg_prob - params.init_prob).abs() < 0.01 { return }
-            
+
             // Adjust temperature bounds
             if avg_prob < params.init_prob { min_temp = state.temperature }
             else { max_temp = state.temperature }
-            
+
             // Binary search midpoint
-            let new_temp = (min_temp * max_temp).sqrt();
-            
-            // If we're stuck at the same temperature, expand the search range downward
-            if (new_temp - state.temperature).abs() < 1e-10 && avg_prob > params.init_prob {
-                // Need to go lower, expand lower bound
-                min_temp *= 1e-1;
-                state.temperature = (min_temp * max_temp).sqrt();
-            } else {
-                state.temperature = new_temp;
-            }
-            
-            // Safety check
-            if state.current_iter >= params.max_iter { return }
+            state.temperature = (min_temp * max_temp).sqrt();
         }
     }
 
@@ -269,10 +257,7 @@ impl Partition {
             let prev_best = state.best_score;
             
             // Perform one iteration
-            let (_, delta) = self.anneal_iteration(
-                objective,
-                state,
-            );
+            let (_, delta) = self.anneal_iteration(objective, state);
             
             // Calculate acceptance probability for this move
             let prob = acceptance_probability(delta, state.temperature);

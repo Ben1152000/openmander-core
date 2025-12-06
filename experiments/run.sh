@@ -5,10 +5,10 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 STATE=CT
 NUM_DISTRICTS=5
-MAX_ITER=$((1000000))  # Safety maximum (very high)
+MAX_ITER=$((10**8))  # Safety maximum (very high)
 INIT_TEMP=1.0
-COOLING_RATE=0.99999 #6  # Slower cooling (closer to 1.0 = slower)
-EARLY_STOP_ITERS=$((1000000))
+COOLING_RATE=0.999996 #6  # Slower cooling (closer to 1.0 = slower)
+EARLY_STOP_ITERS=$((4*10**6))
 WINDOW_SIZE=1000
 LOG_EVERY=1000  # Print progress every N iterations
 PLOT_EVERY=10  # Update plot every N data points
@@ -17,7 +17,7 @@ DELTA_ONLY_NEG="" # "--delta-only-neg"  # Set to "--delta-only-neg" to only plot
 
 # Metric weights (set to 0 to disable a metric)
 POP_WEIGHT=0.6
-COMPACTNESS_WEIGHT=0.2
+COMPACTNESS_WEIGHT=0.1
 COMPETITIVENESS_WEIGHT=0.2
 COMPETITIVENESS_THRESHOLD=0.05
 

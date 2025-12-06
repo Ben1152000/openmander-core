@@ -216,6 +216,7 @@ def main(
     # Run annealing with optional log file redirection
     print(f"\nAdaptive Annealing: max_iter={max_iter:,}, init_temp={init_temp}, cooling_rate={cooling_rate}, early_stop_iters={early_stop_iters:,}")
     
+    sentinel_path = None
     if log_file:
         # Redirect to log file
         log_path = Path(log_file)
@@ -235,10 +236,6 @@ def main(
                 window_size=window_size,
                 log_every=log_every
             )
-        
-        # Remove sentinel file to signal completion
-        if sentinel_path.exists():
-            sentinel_path.unlink()
     else:
         # Print to stdout
         plan.anneal(
@@ -297,6 +294,10 @@ def main(
         saved_files.append(Path(log_file).name)
     print(f"Saved: {', '.join(saved_files)}")
     print(f"{'='*80}\n")
+    
+    # Remove sentinel file to signal completion (after all files are saved)
+    if sentinel_path and sentinel_path.exists():
+        sentinel_path.unlink()
 
 
 if __name__ == "__main__":

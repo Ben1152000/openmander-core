@@ -247,17 +247,19 @@ impl Partition {
         params: &OptimizationParams,
         state: &mut OptimizationState<impl Rng>,
     ) {
-        let mut iters_since_improvement = 0;
+        let mut iters_since_change = 0;
 
         // For printing: non-overlapping windows
         let mut window_prob_sum = 0.0;
         let mut window_count = 0;
         
-        loop {
+        while state.current_iter < params.max_iter {
             let prev_best = state.best_score;
             
             // Perform one iteration
-            let (_, delta) = self.anneal_iteration(objective, state);
+            let (accept, delta) = self.anneal_iteration(objective, state);
+
+            if accept { iters_since_change = 0; } else { iters_since_change += 1; }
             
             // Calculate acceptance probability for this move
             let prob = acceptance_probability(delta, state.temperature);
@@ -267,13 +269,8 @@ impl Partition {
             window_count += 1;
             
             // Check if we improved the best objective
-            if state.best_score > prev_best {
-                iters_since_improvement = 0;
-                state.best_iter = state.current_iter;
-            } else {
-                iters_since_improvement += 1;
-            }
-            
+            if state.best_score > prev_best { state.best_iter = state.current_iter; }
+
             // Print progress every log_every iterations (non-overlapping windows)
             if state.current_iter % params.log_every == 0 {
                 let avg_prob = window_prob_sum / window_count as f64;
@@ -282,19 +279,12 @@ impl Partition {
                 window_prob_sum = 0.0;
                 window_count = 0;
             }
-            
+
             // Early stopping check
-            if iters_since_improvement >= params.early_stop_iters {
-                return;
-            }
-            
+            if iters_since_change >= params.early_stop_iters { return }
+
             // Cool temperature
             state.temperature *= params.cooling_rate;
-            
-            // Safety check
-            if state.current_iter >= params.max_iter {
-                return;
-            }
         }
     }
 
@@ -421,12 +411,8 @@ impl Partition {
         delta: f64,
         state: &OptimizationState<impl Rng>,
     ) {
-        let comp_str = objective.metrics()
-            .iter()
-            .map(|metric| {
-                let score = metric.compute_score(self);
-                format!("{}={:.4}", metric.short_name(), score)
-            })
+        let comp_str = objective.metrics().iter()
+            .map(|metric| { format!("{}={:.4}", metric.short_name(), metric.compute_score(self)) })
             .collect::<Vec<_>>()
             .join(" ");
         
@@ -450,12 +436,8 @@ impl Partition {
         avg_prob: f64,
         state: &OptimizationState<impl Rng>,
     ) {
-        let comp_str = objective.metrics()
-            .iter()
-            .map(|metric| {
-                let score = metric.compute_score(self);
-                format!("{}={:.4}", metric.short_name(), score)
-            })
+        let comp_str = objective.metrics().iter()
+            .map(|metric| { format!("{}={:.4}", metric.short_name(), metric.compute_score(self)) })
             .collect::<Vec<_>>()
             .join(" ");
         
@@ -478,12 +460,8 @@ impl Partition {
         delta: f64,
         state: &OptimizationState<impl Rng>,
     ) {
-        let comp_str = objective.metrics()
-            .iter()
-            .map(|metric| {
-                let score = metric.compute_score(self);
-                format!("{}={:.4}", metric.short_name(), score)
-            })
+        let comp_str = objective.metrics().iter()
+            .map(|metric| { format!("{}={:.4}", metric.short_name(), metric.compute_score(self)) })
             .collect::<Vec<_>>()
             .join(" ");
         

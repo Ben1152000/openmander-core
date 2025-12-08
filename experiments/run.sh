@@ -3,28 +3,24 @@
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-STATE=NJ
-NUM_DISTRICTS=12
-MAX_ITER=$((10**8))  # Safety maximum (very high)
-INIT_TEMP=1.0
-COOLING_RATE=0.000001  # 10^-5 # smaller = slower
-EARLY_STOP_ITERS=$((1*10**6))
-WINDOW_SIZE=1000
-LOG_EVERY=1000  # Print progress every N iterations
-PLOT_EVERY=10  # Update plot every N data points
-MAX_Y_LOG_TEMP="0"  # Maximum y-value for log10(temp) axis (e.g., -6), leave empty for auto
-SHOW_DELTA="--no-delta" # "--no-delta"  # Set to "--no-delta" to hide delta dots, leave empty to show them
+# Load config file (default to config.json, or use first argument)
+CONFIG_FILE="${1:-$SCRIPT_DIR/config.json}"
 
-# Metric weights (set to 0 to disable a metric)
-POP_WEIGHT=0.6
-COMPACTNESS_WEIGHT=0.2
-COMPETITIVENESS_WEIGHT=0.2
-COMPETITIVENESS_THRESHOLD=0.05
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+echo "Using config: $CONFIG_FILE"
 
 ARTIFACTS_DIR="$SCRIPT_DIR/artifacts"
 
 # Create artifacts directory if it doesn't exist
 mkdir -p "$ARTIFACTS_DIR"
+
+# Extract state and num_districts from config to determine run number
+STATE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['state'])")
+NUM_DISTRICTS=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['num_districts'])")
 
 # Find the next run number
 RUN_NUMBER=1
@@ -36,6 +32,11 @@ OUT_DIR="$ARTIFACTS_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}"
 LOG_FILE="$OUT_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_anneal.log"
 PLOT_FILE="$OUT_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_progress.png"
 SENTINEL_FILE="$OUT_DIR/${STATE}_${NUM_DISTRICTS}_${RUN_NUMBER}_anneal.running"
+
+# Extract plot settings from config
+PLOT_EVERY=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['plot_every'])")
+MAX_ITER=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['max_iter'])")
+MAX_Y_LOG_TEMP=$(python3 -c "import json; c=json.load(open('$CONFIG_FILE')); print(c.get('max_y_log_temp', ''))")
 
 # Cleanup function
 cleanup() {
@@ -58,18 +59,7 @@ trap cleanup INT TERM
 
 # Start the optimization in the background
 python "$SCRIPT_DIR/run.py" \
-  --state=$STATE \
-  --num_districts=$NUM_DISTRICTS \
-  --max_iter=$MAX_ITER \
-  --init_temp=$INIT_TEMP \
-  --cooling_rate=$COOLING_RATE \
-  --early_stop_iters=$EARLY_STOP_ITERS \
-  --window_size=$WINDOW_SIZE \
-  --log_every=$LOG_EVERY \
-  --pop_weight=$POP_WEIGHT \
-  --compactness_weight=$COMPACTNESS_WEIGHT \
-  --competitiveness_weight=$COMPETITIVENESS_WEIGHT \
-  --competitiveness_threshold=$COMPETITIVENESS_THRESHOLD \
+  --config="$CONFIG_FILE" \
   --log_file="$LOG_FILE" \
   --artifacts_path="$ARTIFACTS_DIR" &
 
@@ -84,9 +74,6 @@ done
 PLOT_CMD="python -u $SCRIPT_DIR/plot_progress.py $LOG_FILE $PLOT_FILE $MAX_ITER --plot-every $PLOT_EVERY"
 if [ ! -z "$MAX_Y_LOG_TEMP" ]; then
     PLOT_CMD="$PLOT_CMD --max-y-log-temp $MAX_Y_LOG_TEMP"
-fi
-if [ ! -z "$SHOW_DELTA" ]; then
-    PLOT_CMD="$PLOT_CMD $SHOW_DELTA"
 fi
 eval $PLOT_CMD
 

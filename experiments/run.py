@@ -75,41 +75,76 @@ def save_plan_image(plan: om.Plan, filepath: Path):
 
 
 def main(
-    state: str,
-    num_districts: int,
-    max_iter: int,
-    init_temp: float,
-    cooling_rate: float,
-    early_stop_iters: int,
-    pop_weight: float,
-    compactness_weight: float,
-    competitiveness_weight: float,
-    competitiveness_threshold: float,
-    window_size: int = 1000,
-    log_every: int = 1000,
+    config: str = None,
     base_path: str = None,
     log_file: str = None,
     artifacts_path: str = None,
 ):
     """
-    Run redistricting optimization with adaptive annealing.
+    Run multi-phase redistricting optimization with adaptive annealing.
     
     Args:
-        state: State abbreviation (e.g., CT, IL)
-        num_districts: Number of districts to create
-        max_iter: Safety maximum iterations (prevents infinite loops)
-        init_temp: Initial temperature guess for phase 1
-        cooling_rate: Geometric cooling rate (temp *= rate each iteration)
-        early_stop_iters: Stop phase 3 after this many iterations without improvement
-        pop_weight: Weight for population deviation metric
-        compactness_weight: Weight for compactness metric
-        competitiveness_weight: Weight for competitiveness metric
-        competitiveness_threshold: Threshold for competitiveness metric
-        window_size: Rolling window size for measuring acceptance rates (default: 1000)
+        config: Path to JSON config file (default: ./config.json)
         base_path: Base path for packs (default: ../../packs/)
         log_file: Path to log file for annealing output (default: None = stdout)
         artifacts_path: Path to artifacts directory (default: ./artifacts)
     """
+    # Load config
+    if config is None:
+        config = Path(__file__).parent / 'config.json'
+    else:
+        config = Path(config)
+    
+    if not config.exists():
+        raise FileNotFoundError(f"Config file not found: {config}")
+    
+    with open(config) as f:
+        cfg = json.load(f)
+    
+    # Extract top-level parameters
+    state = cfg['state']
+    num_districts = cfg['num_districts']
+    max_iter = cfg['max_iter']
+    batch_size = cfg['batch_size']
+    competitiveness_threshold = cfg['competitiveness_threshold']
+    
+    # Extract phase configurations
+    phases = cfg['phases']
+    if not phases:
+        raise ValueError("Config must specify at least one phase")
+    
+    # Validate phase names are unique
+    phase_names = [phase.get('name', f'phase_{i}') for i, phase in enumerate(phases)]
+    if len(phase_names) != len(set(phase_names)):
+        duplicates = [name for name in phase_names if phase_names.count(name) > 1]
+        raise ValueError(f"Duplicate phase names found: {set(duplicates)}")
+    
+    # Extract parameters
+    init_temp = cfg.get('init_temp', 1.0)
+    temp_search_batch_size = cfg.get('temp_search_batch_size', batch_size)
+    default_cooling_rate = cfg.get('cooling_rate', 0.01)  # Fallback if phase doesn't specify
+    
+    # Extract start_prob, end_prob, cooling_rate, and early_stop_iters for each phase
+    phase_start_probs = []
+    phase_end_probs = []
+    phase_cooling_rates = []
+    early_stop_iters = None
+    
+    for phase in phases:
+        start_prob = phase.get('start_prob')
+        end_prob = phase.get('end_prob')
+        cooling_rate = phase.get('cooling_rate', default_cooling_rate)
+        
+        if start_prob is None:
+            raise ValueError(f"Phase '{phase.get('name')}' must have a start_prob")
+        
+        phase_start_probs.append(start_prob)
+        phase_end_probs.append(end_prob)  # Can be None
+        phase_cooling_rates.append(cooling_rate)
+        
+        # If end_prob is None, check for early_stop_iters
+        if end_prob is None and 'early_stop_iters' in phase:
+            early_stop_iters = phase['early_stop_iters']
     # Setup paths
     if base_path is None:
         # From demo/run.py: demo -> python -> bindings -> openmander-core -> workspace_root
@@ -131,45 +166,62 @@ def main(
 
     out_dir = artifacts_dir / f"{state}_{num_districts}_{run_number}"
     out_dir.mkdir(exist_ok=True, parents=True)
+    
+    # Save config to output directory
+    config_copy_path = out_dir / f"{state}_{num_districts}_{run_number}_config.json"
+    with open(config_copy_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
 
     # Print command line arguments
     print('\n' + ' '.join([sys.argv[0].split('/')[-1]] + sys.argv[1:]))
     print(f"\n{'='*80}")
     print(f"Run #{run_number}: {state} with {num_districts} districts")
+    print(f"Config: {config.name}")
     print(f"{'='*80}\n")
     
     # Load map and create plan (silently)
     map_obj = om.Map(str(pack_path))
     plan = om.Plan(map_obj, num_districts=num_districts)
     
-    # Define metrics (only if weight > 0)
-    metrics = []
-    weights = []
+    # Create objectives for each phase
+    objectives = []
+    for phase_idx, phase in enumerate(phases, 1):
+        phase_weights = phase['weights']
+        metrics = []
+        weights = []
+        
+        # Include metric if weight is not None (weight of 0 means track but don't optimize)
+        if 'population' in phase_weights and phase_weights['population'] is not None:
+            metrics.append(om.Metric.population_deviation("T_20_CENS_Total"))
+            weights.append(phase_weights['population'])
+        
+        if 'compactness' in phase_weights and phase_weights['compactness'] is not None:
+            metrics.append(om.Metric.compactness_polsby_popper())
+            weights.append(phase_weights['compactness'])
+        
+        if 'competitiveness' in phase_weights and phase_weights['competitiveness'] is not None:
+            metrics.append(om.Metric.competitiveness(
+                dem_series="E_20_PRES_Dem",
+                rep_series="E_20_PRES_Rep",
+                threshold=competitiveness_threshold
+            ))
+            weights.append(phase_weights['competitiveness'])
+        
+        if not metrics:
+            raise ValueError(f"Phase {phase_idx}: At least one metric must be specified (use weight=0 to track without optimizing)")
+        
+        objectives.append(om.Objective(metrics=metrics, weights=weights))
+    
+    # Use first objective for initial scoring
+    objective = objectives[0]
+    first_phase_weights = phases[0]['weights']
     metric_names = []
-    
-    if pop_weight > 0:
-        metrics.append(om.Metric.population_deviation("T_20_CENS_Total"))
-        weights.append(pop_weight)
+    if 'population' in first_phase_weights and first_phase_weights['population'] is not None:
         metric_names.append("pop_dev")
-    
-    if compactness_weight > 0:
-        metrics.append(om.Metric.compactness_polsby_popper())
-        weights.append(compactness_weight)
+    if 'compactness' in first_phase_weights and first_phase_weights['compactness'] is not None:
         metric_names.append("compactness")
-    
-    if competitiveness_weight > 0:
-        metrics.append(om.Metric.competitiveness(
-            dem_series="E_20_PRES_Dem",
-            rep_series="E_20_PRES_Rep",
-            threshold=competitiveness_threshold
-        ))
-        weights.append(competitiveness_weight)
+    if 'competitiveness' in first_phase_weights and first_phase_weights['competitiveness'] is not None:
         metric_names.append("competitiveness")
-    
-    if not metrics:
-        raise ValueError("At least one metric weight must be > 0")
-    
-    objective = om.Objective(metrics=metrics, weights=weights)
     
     def score_plan(plan, label=""):
         """Compute and return metrics for the plan."""
@@ -214,7 +266,17 @@ def main(
     plan.to_csv(path=str(equalized_csv_path))
     
     # Run annealing with optional log file redirection
-    print(f"\nAdaptive Annealing: max_iter={max_iter:,}, init_temp={init_temp}, cooling_rate={cooling_rate}, early_stop_iters={early_stop_iters:,}")
+    print(f"\nMulti-Phase Annealing: {len(objectives)} phases")
+    print(f"  max_iter={max_iter:,}, init_temp={init_temp}")
+    print(f"  phase_start_probs={phase_start_probs}")
+    print(f"  phase_end_probs={phase_end_probs}")
+    print(f"  phase_cooling_rates={phase_cooling_rates}")
+    print(f"  DEBUG: Cooling rates by phase:")
+    for i, rate in enumerate(phase_cooling_rates):
+        print(f"    Phase {i+1}: {rate}")
+    if early_stop_iters:
+        print(f"  early_stop_iters={early_stop_iters:,}")
+    print(f"  temp_search_batch_size={temp_search_batch_size}, batch_size={batch_size}")
     
     sentinel_path = None
     if log_file:
@@ -228,24 +290,28 @@ def main(
         # Redirect file descriptors to log file (captures Rust println! output)
         with redirect_fds_to_file(log_path):
             plan.anneal(
-                objective=objective,
+                objectives=objectives,
                 max_iter=max_iter,
+                phase_start_probs=phase_start_probs,
+                phase_end_probs=phase_end_probs,
+                phase_cooling_rates=phase_cooling_rates,
                 init_temp=init_temp,
-                cooling_rate=cooling_rate,
                 early_stop_iters=early_stop_iters,
-                window_size=window_size,
-                log_every=log_every
+                temp_search_batch_size=temp_search_batch_size,
+                batch_size=batch_size
             )
     else:
         # Print to stdout
         plan.anneal(
-            objective=objective,
+            objectives=objectives,
             max_iter=max_iter,
+            phase_start_probs=phase_start_probs,
+            phase_end_probs=phase_end_probs,
+            phase_cooling_rates=phase_cooling_rates,
             init_temp=init_temp,
-            cooling_rate=cooling_rate,
             early_stop_iters=early_stop_iters,
-            window_size=window_size,
-            log_every=log_every
+            temp_search_batch_size=temp_search_batch_size,
+            batch_size=batch_size
         )
     
     # Remove sentinel file to signal annealing is complete
@@ -283,17 +349,7 @@ def main(
         "state": state,
         "num_districts": num_districts,
         "run_number": run_number,
-        "parameters": {
-            "max_iter": max_iter,
-            "init_temp": init_temp,
-            "cooling_rate": cooling_rate,
-            "early_stop_iters": early_stop_iters,
-            "window_size": window_size,
-            "pop_weight": pop_weight,
-            "compactness_weight": compactness_weight,
-            "competitiveness_weight": competitiveness_weight,
-            "competitiveness_threshold": competitiveness_threshold,
-        },
+        "config": cfg,
         "init_rand_metrics": init_rand_metrics,
         "equalized_metrics": equalized_metrics,
         "final_metrics": final_metrics,
@@ -304,6 +360,7 @@ def main(
     
     print(f"\n{'='*80}")
     saved_files = [
+        config_copy_path.name,
         rand_init_svg_path.name, rand_init_csv_path.name,
         equalized_svg_path.name, equalized_csv_path.name,
         final_svg_path.name, final_csv_path.name,

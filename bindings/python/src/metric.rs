@@ -12,14 +12,16 @@ pub struct Metric {
 #[pymethods]
 impl Metric {
     /// Population equality metric for a given weight series (e.g., total population).
-    ///
-    /// Parameters
-    /// ----------
-    /// series : str
-    ///     Name of the node-weight column.
     #[staticmethod]
-    pub fn population_deviation(series: &str) -> Self {
-        let inner = openmander_core::Metric::population_deviation(series.to_string());
+    pub fn population_deviation(pop_series: &str) -> Self {
+        let inner = openmander_core::Metric::population_deviation(pop_series.to_string());
+        Self { inner }
+    }
+
+    /// Population equality smooth metric for a given weight series (e.g., total population).
+    #[staticmethod]
+    pub fn population_deviation_smooth(pop_series: &str) -> Self {
+        let inner = openmander_core::Metric::population_deviation_smooth(pop_series.to_string());
         Self { inner }
     }
 
@@ -30,19 +32,17 @@ impl Metric {
         Self { inner }
     }
 
-    /// Competitiveness metric based on district-level vote shares.
-    ///
-    /// Parameters
-    /// ----------
-    /// dem_series : str
-    ///     Node-weight series for Democratic votes.
-    /// rep_series : str
-    ///     Node-weight series for Republican votes.
-    /// threshold : float
-    ///     Margin threshold (e.g., 0.10 for districts within 10 percentage points).
+    /// Schwartzberg compactness metric.
     #[staticmethod]
-    pub fn competitiveness(dem_series: &str, rep_series: &str, threshold: f64) -> Self {
-        let inner = openmander_core::Metric::competitiveness(
+    pub fn compactness_schwartzberg() -> Self {
+        let inner = openmander_core::Metric::compactness_schwartzberg();
+        Self { inner }
+    }
+
+    /// Competitiveness metric based on district-level vote shares (binary).
+    #[staticmethod]
+    pub fn competitiveness_binary(dem_series: &str, rep_series: &str, threshold: f64) -> Self {
+        let inner = openmander_core::Metric::competitiveness_binary(
             dem_series.to_string(),
             rep_series.to_string(),
             threshold,
@@ -50,14 +50,29 @@ impl Metric {
         Self { inner }
     }
 
+    /// Competitiveness metric based on district-level vote shares (piecewise quadratic).
+    #[staticmethod]
+    pub fn competitiveness_quadratic(dem_series: &str, rep_series: &str, threshold: f64) -> Self {
+        let inner = openmander_core::Metric::competitiveness_quadratic(
+            dem_series.to_string(),
+            rep_series.to_string(),
+            threshold,
+        );
+        Self { inner }
+    }
+
+    /// Competitiveness metric based on district-level vote shares (Gaussian).
+    #[staticmethod]
+    pub fn competitiveness_gaussian(dem_series: &str, rep_series: &str, sigma: f64) -> Self {
+        let inner = openmander_core::Metric::competitiveness_gaussian(
+            dem_series.to_string(),
+            rep_series.to_string(),
+            sigma,
+        );
+        Self { inner }
+    }
+
     /// Seats–votes proportionality / partisan fairness metric.
-    ///
-    /// Parameters
-    /// ----------
-    /// dem_series : str
-    ///     Node-weight series for Democratic votes.
-    /// rep_series : str
-    ///     Node-weight series for Republican votes.
     #[staticmethod]
     pub fn proportionality(dem_series: &str, rep_series: &str) -> Self {
         let inner = openmander_core::Metric::proportionality(

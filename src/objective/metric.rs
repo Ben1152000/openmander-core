@@ -2,19 +2,18 @@ use crate::partition::Partition;
 
 #[derive(Clone, Debug)]
 pub(crate) enum MetricKind {
-    /// Population equality for a given node-weight series
-    /// (e.g., total population).
-    PopulationDeviation { series: String },
+    // Demographic metrics:
+    PopulationDeviation { pop_series: String },
+    PopulationDeviationSmooth { pop_series: String },
 
-    /// Compactness based on Polsby–Popper, computed per district and
-    /// aggregated in some way (e.g., average, minimum, etc.).
-    Compactness,
+    // Geometric metrics:
+    CompactnessPolsbyPopper,
+    CompactnessSchwartzberg,
 
-    /// District-level competitiveness (e.g., share of districts within
-    /// some vote margin).
-    Competitiveness { dem_series: String, rep_series: String, threshold: f64 },
-
-    /// Seats–votes proportionality / partisan fairness metric.
+    // Electoral metrics:
+    CompetitivenessBinary { dem_series: String, rep_series: String, threshold: f64 },
+    CompetitivenessQuadratic { dem_series: String, rep_series: String, threshold: f64 },
+    CompetitivenessGaussian { dem_series: String, rep_series: String, sigma: f64 },
     Proportionality { dem_series: String, rep_series: String },
 }
 
@@ -27,18 +26,38 @@ pub struct Metric {
 
 impl Metric {
     /// Population equality metric for the given weight series.
-    pub fn population_deviation(series: String) -> Self {
-        Self { kind: MetricKind::PopulationDeviation { series } }
+    pub fn population_deviation(pop_series: String) -> Self {
+        Self { kind: MetricKind::PopulationDeviation { pop_series } }
+    }
+
+    /// Smooth population equality metric for the given weight series.
+    pub fn population_deviation_smooth(pop_series: String) -> Self {
+        Self { kind: MetricKind::PopulationDeviationSmooth { pop_series } }
     }
 
     /// Polsby–Popper compactness metric.
     pub fn compactness_polsby_popper() -> Self {
-        Self { kind: MetricKind::Compactness }
+        Self { kind: MetricKind::CompactnessPolsbyPopper }
     }
 
-    /// Competitiveness metric based on district-level vote shares.
-    pub fn competitiveness(dem_series: String, rep_series: String, threshold: f64) -> Self {
-        Self { kind: MetricKind::Competitiveness { dem_series, rep_series, threshold } }
+    /// Schwartzberg compactness metric.
+    pub fn compactness_schwartzberg() -> Self {
+        Self { kind: MetricKind::CompactnessSchwartzberg }
+    }
+
+    /// Competitiveness metric based on district-level vote shares (binary).
+    pub fn competitiveness_binary(dem_series: String, rep_series: String, threshold: f64) -> Self {
+        Self { kind: MetricKind::CompetitivenessBinary { dem_series, rep_series, threshold } }
+    }
+
+    /// Competitiveness metric based on district-level vote shares (piecewise quadratic).
+    pub fn competitiveness_quadratic(dem_series: String, rep_series: String, threshold: f64) -> Self {
+        Self { kind: MetricKind::CompetitivenessQuadratic { dem_series, rep_series, threshold } }
+    }
+
+    /// Competitiveness metric based on district-level vote shares (Gaussian).
+    pub fn competitiveness_gaussian(dem_series: String, rep_series: String, sigma: f64) -> Self {
+        Self { kind: MetricKind::CompetitivenessGaussian { dem_series, rep_series, sigma } }
     }
 
     /// Seats–votes proportionality / partisan fairness metric.
@@ -49,37 +68,41 @@ impl Metric {
     /// Get a short name for this metric (for display purposes).
     pub(crate) fn short_name(&self) -> &str {
         match &self.kind {
-            MetricKind::PopulationDeviation { .. } => "PopulationEquality",
-            MetricKind::Compactness => "CompactnessPolsbyPopper",
-            MetricKind::Competitiveness { .. } => "Competitiveness",
+            MetricKind::PopulationDeviation { .. } => "PopulationDeviation",
+            MetricKind::PopulationDeviationSmooth { .. } => "PopulationDeviationSmooth",
+            MetricKind::CompactnessPolsbyPopper => "CompactnessPolsbyPopper",
+            MetricKind::CompactnessSchwartzberg => "CompactnessSchwartzberg",
+            MetricKind::CompetitivenessBinary { .. } => "CompetitivenessBinary",
+            MetricKind::CompetitivenessQuadratic { .. } => "CompetitivenessQuadratic",
+            MetricKind::CompetitivenessGaussian { .. } => "CompetitivenessGaussian",
             MetricKind::Proportionality { .. } => "Proportionality",
         }
     }
 
     /// Evaluate this metric for a given partition, returning per-district scores.
     pub(crate) fn compute(&self, partition: &Partition) -> Vec<f64> {
+        let districts = 1..partition.num_parts();
         match &self.kind {
-            MetricKind::PopulationDeviation { series } => {
-                let total = partition.region_total(series);
-                let average = total / (partition.num_parts() - 1) as f64;
-
-                (1..partition.num_parts())
-                    .map(|part| {
-                        let deviation = partition.part_total(series, part) / average - 1.0;
-                        let limit = if deviation <= 0.0 { 1 } else { partition.num_parts() - 2 };
-                        (1.0 - deviation.powi(2) / limit.pow(2) as f64) / (1.0 + deviation.powi(2))
-                    })
-                    .collect()
+            MetricKind::PopulationDeviation { pop_series } => {
+                districts.map(|part| partition.population_deviation(part, pop_series)).collect()
             }
-            MetricKind::Compactness => {
-                (1..partition.num_parts())
-                    .map(|part| partition.polsby_pobber(part))
-                    .collect()
+            MetricKind::PopulationDeviationSmooth { pop_series } => {
+                districts.map(|part| partition.smooth_population_deviation(part, pop_series)).collect()
             }
-            MetricKind::Competitiveness { dem_series, rep_series, threshold } => {
-                (1..partition.num_parts())
-                    .map(|part| partition.competitiveness(part, dem_series, rep_series, *threshold))
-                    .collect()
+            MetricKind::CompactnessPolsbyPopper => {
+                districts.map(|part| partition.polsby_pobber(part)).collect()
+            }
+            MetricKind::CompactnessSchwartzberg => {
+                districts.map(|part| partition.schwartzberg(part)).collect()
+            }
+            MetricKind::CompetitivenessBinary { dem_series, rep_series, threshold } => {
+                districts.map(|part| partition.binary_competitiveness(part, dem_series, rep_series, *threshold)).collect()
+            }
+            MetricKind::CompetitivenessQuadratic { dem_series, rep_series, threshold } => {
+                districts.map(|part| partition.quadratic_competitiveness(part, dem_series, rep_series, *threshold)).collect()
+            }
+            MetricKind::CompetitivenessGaussian { dem_series, rep_series, sigma } => {
+                districts.map(|part| partition.gaussian_competitiveness(part, dem_series, rep_series, *sigma)).collect()
             }
             MetricKind::Proportionality { dem_series, rep_series } =>
                 todo!("{dem_series}, {rep_series}"),
@@ -98,18 +121,27 @@ use std::fmt;
 
 impl fmt::Display for MetricKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MetricKind::PopulationDeviation { series } =>
-                write!(f, "PopulationEquality(series=\"{}\")", series),
-
-            MetricKind::Compactness =>
+        match &self {
+            MetricKind::PopulationDeviation { pop_series } =>
+                write!(f, "PopulationDeviation(series='{}')", pop_series),
+            MetricKind::PopulationDeviationSmooth { pop_series } =>
+                write!(f, "PopulationDeviationSmooth(series='{}')", pop_series),
+            MetricKind::CompactnessPolsbyPopper =>
                 write!(f, "CompactnessPolsbyPopper"),
-
-            MetricKind::Competitiveness { dem_series, rep_series, threshold } =>
-                write!(f, "Competitiveness(dem=\"{}\", rep=\"{}\", threshold={})", dem_series, rep_series, threshold),
-
+            MetricKind::CompactnessSchwartzberg =>
+                write!(f, "CompactnessSchwartzberg"),
+            MetricKind::CompetitivenessBinary { dem_series, rep_series, threshold } =>
+                write!(f, "CompetitivenessBinary(dem_series='{}', rep_series='{}', threshold={})",
+                    dem_series, rep_series, threshold),
+            MetricKind::CompetitivenessQuadratic { dem_series, rep_series, threshold } =>
+                write!(f, "CompetitivenessQuadratic(dem_series='{}', rep_series='{}', threshold={})",
+                    dem_series, rep_series, threshold),
+            MetricKind::CompetitivenessGaussian { dem_series, rep_series, sigma } =>
+                write!(f, "CompetitivenessGaussian(dem_series='{}', rep_series='{}', sigma={})",
+                    dem_series, rep_series, sigma),
             MetricKind::Proportionality { dem_series, rep_series } =>
-                write!(f, "Proportionality(dem=\"{}\", rep=\"{}\")", dem_series, rep_series),
+                write!(f, "Proportionality(dem_series='{}', rep_series='{}')",
+                    dem_series, rep_series),
         }
     }
 }

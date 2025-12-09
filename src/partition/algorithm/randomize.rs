@@ -4,37 +4,37 @@ use crate::partition::Partition;
 
 impl Partition {
     /// Select a random node from the map.
-    pub(crate) fn random_node(&self, rng: &mut impl Rng) -> usize {
+    pub(crate) fn random_node<R: Rng + ?Sized>(&self, rng: &mut R) -> usize {
         rng.random_range(0..self.graph().node_count())
     }
 
     /// Select a random node from a given part.
     /// Tries a few random probes first, then falls back to full O(n) scan.
-    pub(crate) fn random_node_from_part(&self, part: u32, rng: &mut impl Rng) -> Option<usize> {
+    pub(crate) fn random_node_from_part<R: Rng + ?Sized>(&self, part: u32, rng: &mut R) -> Option<usize> {
         self.parts.get(part as usize).choose(rng).copied()
     }
 
     /// Select a random unassigned node from the map.
     /// Tries a few random probes first, then falls back to full O(n) scan.
-    pub(crate) fn random_unassigned_node(&self, rng: &mut impl Rng) -> Option<usize> {
+    pub(crate) fn random_unassigned_node<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<usize> {
         self.random_node_from_part(0, rng)
     }
 
     /// Select a random unassigned node from the map that is on a part boundary.
-    pub(crate) fn random_unassigned_boundary_node(&self, rng: &mut impl Rng) -> Option<usize> {
+    pub(crate) fn random_unassigned_boundary_node<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<usize> {
         let set = self.frontiers.get(0);
         if set.is_empty() { None } else { Some(set[rng.random_range(0..set.len())]) }
     }
 
     /// Select a random neighbor of a given node.
-    pub(crate) fn random_edge(&self, node: usize, rng: &mut impl Rng) -> Option<usize> {
+    pub(crate) fn random_edge<R: Rng + ?Sized>(&self, node: usize, rng: &mut R) -> Option<usize> {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
         if self.graph().degree(node) == 0 { return None }
         Some(self.graph().edge(node, rng.random_range(0..self.graph().degree(node)) as usize).unwrap())
     }
 
     /// Select a random neighbor of a given node that is in the same part.
-    pub(crate) fn random_same_part_edge(&self, node: usize, rng: &mut impl Rng) -> Option<usize> {
+    pub(crate) fn random_same_part_edge<R: Rng + ?Sized>(&self, node: usize, rng: &mut R) -> Option<usize> {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
         let part = self.assignment(node);
         let same_part_neighbors = self.graph().edges(node)
@@ -45,7 +45,7 @@ impl Partition {
     }
 
     /// Select a random neighboring part of a given node.
-    pub(crate) fn random_neighboring_part(&self, node: usize, rng: &mut impl Rng) -> Option<u32> {
+    pub(crate) fn random_neighboring_part<R: Rng + ?Sized>(&self, node: usize, rng: &mut R) -> Option<u32> {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
         if self.graph().degree(node) == 0 { return None }
         self.graph().edges(node)

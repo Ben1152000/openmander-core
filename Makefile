@@ -45,6 +45,7 @@ WHEEL_DIR    := target/wheels
 venv: $(PYTHON)
 $(PYTHON):
 	$(PY) -m venv $(VENV)
+	source $(VENV)/bin/activate && \
 	$(PIP) install -U pip
 
 # Install Python-side build/test deps into the venv

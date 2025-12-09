@@ -217,8 +217,9 @@ impl Plan {
     }
 
     /// Save plan to SVG at the given path (shows district outlines and fills)
-    pub fn to_svg(&self, path: &str) -> PyResult<()> {
-        self.inner.to_svg(&PathBuf::from(path))
+    #[pyo3(signature = (path, color_partisan=false))]
+    pub fn to_svg(&self, path: &str, color_partisan: bool) -> PyResult<()> {
+        self.inner.to_svg(&PathBuf::from(path), color_partisan)
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 }

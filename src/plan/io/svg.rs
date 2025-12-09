@@ -5,28 +5,14 @@ use geo::{Coord, CoordsIter, LineString, MultiPolygon};
 
 use crate::{common, map::GeoType, plan::Plan};
 
-/// Projection function: lon/lat -> SVG coords (x,y)
-type Projection = dyn Fn(&Coord<f64>) -> (f64, f64);
-
-/// Append a ring as an SVG subpath: "M x,y L x,y ... Z"
-fn ring_to_path(ring: &[Coord<f64>], project: &Projection, out: &mut String) {
-    if ring.is_empty() { return }
-    let coords = ring.coords_iter().map(|coord| project(&coord)).collect::<Vec<_>>();
-    out.push_str(&format!(" M{:.3},{:.3}", coords[0].0, coords[0].1));
-    for &(x, y) in &coords[1..] {
-        out.push_str(&format!(" L{x:.3},{y:.3}"));
-    }
-    out.push('Z');
-}
-
 impl Plan {
     /// Small wrapper with defaults.
-    pub fn to_svg(&self, path: &Path) -> Result<()> {
-        self.to_svg_with_size(path, 1200, 10)
+    pub fn to_svg(&self, path: &Path, color_partisan: bool) -> Result<()> {
+        self.to_svg_with_size(path, color_partisan, 1200, 10)
     }
 
     /// Draw dissolved districts using only frontier blocks + state boundary.
-    pub fn to_svg_with_size(&self, path: &Path, width: i32, margin: i32) -> Result<()> {
+    pub fn to_svg_with_size(&self, path: &Path, color_partisan: bool, width: i32, margin: i32) -> Result<()> {
         let bounds = self.map().get_layer(GeoType::Block).bounds()
             .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?;
 
@@ -60,18 +46,23 @@ impl Plan {
 
         // --- Write SVG ---
         let mut writer = common::SvgWriter::new(path)?;
-        writer.write_header(width, height)?;
+        writer.write_header(width, height, margin, scale, &bounds)?;
         writer.write_styles()?;
 
         // Draw each district as a single dissolved path (holes supported via even-odd fill).
-        for d in 1..=self.num_districts() as usize {
-            if let Some(path_d) = self.build_district_path_string(d as u32, &state_outline, &project)? {
-                let hue = ((d as f64) * 137.50776405) % 360.0; // golden-angle palette
+        for part in 1..=self.num_districts() as usize {
+            if let Some(path) = self.build_district_path_string(part as u32, &state_outline, &project)? {
+                // Determine fill color based on boolean variable.
+                let fill: String = if color_partisan {
+                    common::partisan_color(self.partition.partisan_lean(part as u32, "E_20_PRES_Dem", "E_20_PRES_Rep")).to_string()
+                } else {
+                    let state_id = self.map().get_layer(GeoType::State).geo_ids()[0].id().parse::<usize>().expect("[Plan.to_svg] Couldn't determine state id.");
+                    common::golden_angle_color((state_id + 1) * 100 + part).to_string()
+                };
+
                 writeln!(
                     writer,
-                    r#"<path class="dist" fill-rule="evenodd" style="fill:hsl({h:.1},70%,55%);stroke:#111827;stroke-width:0.6;fill-opacity:0.85" d="{path}"/>"#,
-                    h = hue,
-                    path = path_d
+                    r#"<path class="dist" fill-rule="evenodd" style="fill:{fill};stroke:#111827;stroke-width:0.6;fill-opacity:0.85" d="{path}"/>"#,
                 )?;
             }
         }
@@ -83,7 +74,7 @@ impl Plan {
 
     /// Build dissolved boundary for district `d` using frontier blocks, immediate same-district neighbors,
     /// and segments on the state outer boundary.
-    fn build_district_path_string(&self, d: u32, state_outline: &SegmentSet, project: &Projection) -> Result<Option<String>> {
+    fn build_district_path_string(&self, d: u32, state_outline: &SegmentSet, project: &common::Projection) -> Result<Option<String>> {
         let shapes = self.map().get_layer(GeoType::Block).shapes()
             .ok_or_else(|| anyhow!("[to_svg] No block geoms available"))?;
 
@@ -188,13 +179,11 @@ impl Plan {
         let rings = polygonize_rings(&boundary, &ptmap)?;
         let mut path = String::new();
         for ring in rings {
-            ring_to_path(&ring, project, &mut path);
+            common::ring_to_path(&ring, project, &mut path);
         }
         Ok(Some(path))
     }
 }
-
-/* ---------- Geometry helpers (quantized segment accounting + polygonization) ---------- */
 
 /// Quantization scale (1e-7 deg ≈ 1 cm at equator). Adjust if your data is projected.
 const Q_SCALE: f64 = 1e7;

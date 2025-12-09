@@ -36,7 +36,7 @@ fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Resu
 
 /// Download geometry data from US Census TIGER 2020 PL directory
 /// Example URL: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
-fn download_tiger_geometries(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verbose: u8) -> Result<()> {
     let fips = common::state_abbr_to_fips(&state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
     let name = common::state_abbr_to_name(&state)
@@ -49,6 +49,9 @@ fn download_tiger_geometries(out_dir: &PathBuf, state: &str, verbose: u8) -> Res
     let files = ["state20", "county20", "tract20", "bg20", "vtd20", "tabblock20"];
 
     for name in files {
+        // Skip if the vtd data isn't available (CA, ME, OR, WY)
+        if !has_vtd && name == "vtd20" { continue }
+
         let file_url = format!("{base}tl_2020_{fips}_{name}.zip");
         let zip_path = out_dir.join(format!("tl_2020_{fips}_{name}.zip"));
         let out_path = out_dir.join(format!("tl_2020_{fips}_{name}"));
@@ -85,7 +88,7 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
 
 /// Download all map files for the given state into the `download/` directory under `pack_dir`.
 /// Returns the path to the `download/` directory.
-pub(super) fn download_data(state: &str, pack_dir: &PathBuf, verbose: u8) -> Result<PathBuf> {
+pub(super) fn download_data(state: &str, pack_dir: &PathBuf, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
     common::require_dir_exists(&pack_dir)?;
 
     let download_dir = pack_dir.join("download");
@@ -93,7 +96,7 @@ pub(super) fn download_data(state: &str, pack_dir: &PathBuf, verbose: u8) -> Res
 
     if verbose > 0 { eprintln!("[download] state={state} -> dir {}", download_dir.display()); }
 
-    download_tiger_geometries(&download_dir, state, verbose)?;
+    download_tiger_geometries(&download_dir, state, has_vtd, verbose)?;
     download_daves_demographics(&download_dir, state, verbose)?;
     download_daves_elections(&download_dir, state, verbose)?;
     download_census_crosswalks(&download_dir, state, verbose)?;

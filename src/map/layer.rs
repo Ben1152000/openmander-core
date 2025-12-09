@@ -7,6 +7,7 @@ use polars::{frame::DataFrame, prelude::DataType};
 use crate::{geom::Geometries, graph::{Graph, WeightMatrix}, map::{GeoId, GeoType, ParentRefs}};
 
 /// A single planar partition Layer of the map, containing entities and their relationships.
+#[derive(Clone)]
 pub struct MapLayer {
     ty: GeoType,
     pub(super) geo_ids: Vec<GeoId>,
@@ -108,6 +109,17 @@ impl MapLayer {
 
     /// Get the geographic type of this layer.
     #[inline] pub fn ty(&self) -> GeoType { self.ty }
+
+    /// Set the geographic type of this layer (only used for building without vtds).
+    #[inline] pub(super) fn set_ty(&mut self, ty: GeoType) {
+        self.ty = ty;
+        self.geo_ids = self.geo_ids.iter()
+            .map(|geo_id| GeoId::new(ty, geo_id.id()))
+            .collect();
+        self.index = self.geo_ids.iter().enumerate()
+            .map(|(i, geo_id)| (geo_id.clone(), i as u32))
+            .collect();
+    }
 
     /// Get a reference to the list of GeoIds in this layer.
     #[inline] pub fn geo_ids(&self) -> &Vec<GeoId> { &self.geo_ids }

@@ -362,7 +362,7 @@ impl Map {
     }
 
     /// Build a map pack from the download files in `input_dir`
-    pub(crate) fn build_pack(input_dir: &Path, state_code: &str, fips: &str, verbose: u8) -> Result<Self> {
+    pub(crate) fn build_pack(input_dir: &Path, state_code: &str, fips: &str, has_vtd: bool, verbose: u8) -> Result<Self> {
         common::require_dir_exists(input_dir)?;
 
         let mut map = Map::default();
@@ -383,9 +383,16 @@ impl Map {
         map.set_layer(MapLayer::from_tiger_shapefile(GeoType::Group,
             &input_dir.join(format!("tl_2020_{fips}_bg20/tl_2020_{fips}_bg20.shp")))?);
 
+        // If the vtd data isn't available (CA, ME, OR, WY), use tracts instead.
         if verbose > 0 { eprintln!("[build_pack] loading vtd shapes"); }
-        map.set_layer(MapLayer::from_tiger_shapefile(GeoType::VTD,
-            &input_dir.join(format!("tl_2020_{fips}_vtd20/tl_2020_{fips}_vtd20.shp")))?);
+        if has_vtd {
+            map.set_layer(MapLayer::from_tiger_shapefile(GeoType::VTD,
+                &input_dir.join(format!("tl_2020_{fips}_vtd20/tl_2020_{fips}_vtd20.shp")))?);
+        } else {
+            let mut layer = map.get_layer(GeoType::Tract).clone();
+            layer.set_ty(GeoType::VTD);
+            map.set_layer(layer);
+        }
 
         if verbose > 0 { eprintln!("[build_pack] loading block shapes"); }
         map.set_layer(MapLayer::from_tiger_shapefile(GeoType::Block,
@@ -409,15 +416,20 @@ impl Map {
             )
         }
 
-        if verbose > 0 { eprintln!("[build_pack] loading block -> vtd crosswalks"); }
-        map.get_layer_mut(GeoType::Block).assign_parents_from_map(
-            GeoType::VTD,
-            get_map_from_crosswalk_df(
-                &common::read_from_pipe_delimited_txt(&input_dir.join(format!("BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt")))?, 
-                (GeoType::Block, GeoType::VTD), 
-                ("BLOCKID", "DISTRICT")
-            )?
-        )?;
+        // If the vtd data isn't available (CA, ME, OR, WY), use tracts instead.
+        if has_vtd {
+            if verbose > 0 { eprintln!("[build_pack] loading block -> vtd crosswalks"); }
+            map.get_layer_mut(GeoType::Block).assign_parents_from_map(
+                GeoType::VTD,
+                get_map_from_crosswalk_df(
+                    &common::read_from_pipe_delimited_txt(&input_dir.join(format!("BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt")))?, 
+                    (GeoType::Block, GeoType::VTD), 
+                    ("BLOCKID", "DISTRICT")
+                )?
+            )?;
+        } else {
+            map.get_layer_mut(GeoType::Block).assign_parents(GeoType::VTD);
+        }
 
         /// Convert GEOID column from i64 to String type
         #[inline]

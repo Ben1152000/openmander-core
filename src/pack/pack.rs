@@ -6,20 +6,20 @@ use crate::{common, map::Map, pack::{clean::cleanup_download_dir, download::down
 
 /// Download data files for a state, build the map pack, and write it to a new directory in `path`.
 /// Returns the path to the new pack directory.
-pub fn build_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<PathBuf> {
+pub fn build_pack(state_code: &str, path: &PathBuf, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
     let state_code = state_code.to_ascii_uppercase();
     common::require_dir_exists(&path)?;
 
     let pack_dir = path.join(format!("{state_code}_2020_pack"));
     common::ensure_dir_exists(&pack_dir)?;
 
-    let download_dir = download_data(&state_code, &pack_dir, verbose)?;
+    let download_dir = download_data(&state_code, &pack_dir, has_vtd, verbose)?;
     if verbose > 0 { eprintln!("Downloaded files for {} into {}", state_code, pack_dir.display()); }
 
     let fips = common::state_abbr_to_fips(&state_code)
         .with_context(|| format!("Unknown state/territory postal code: {state_code}"))?;
 
-    let map = Map::build_pack(&download_dir, &state_code, fips, verbose)?;
+    let map = Map::build_pack(&download_dir, &state_code, fips, has_vtd, verbose)?;
     if verbose > 0 { eprintln!("Built pack for {state_code}"); }
 
     map.write_to_pack( &pack_dir)?;
@@ -42,7 +42,7 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
     let pack_url = format!("https://media.githubusercontent.com/media/Ben1152000/openmander-data/master/packs/{state_code}/{pack_name}.zip");
     if !common::remote_file_exists(&pack_url)? {
         if verbose > 0 { eprintln!("No prebuilt pack found for {state_code}, building locally..."); }
-        return build_pack(&state_code, path, verbose)
+        return build_pack(&state_code, path, true, verbose)
     }
 
     let zip_path = path.join(format!("{pack_name}.zip"));

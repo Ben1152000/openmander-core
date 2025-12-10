@@ -140,42 +140,31 @@ impl Plan {
     ///
     /// Parameters
     /// ----------
-    /// objectives : list[Objective]
-    ///     List of objectives to optimize (one per phase).
+    /// objective : Objective
+    ///     The objective to maximize.
     /// max_iter : int
     ///     Safety maximum iterations (prevents infinite loops).
-    /// phase_start_probs : list[float]
-    ///     Target acceptance probability to reach at start of each phase.
-    /// phase_end_probs : list[float | None]
-    ///     Target acceptance probability to cool to (None = use early stopping).
-    /// phase_cooling_rates : list[float]
-    ///     Geometric cooling rate for each phase (temp *= (1 - rate) each batch).
     /// init_temp : float, optional
-    ///     Initial temperature guess for first phase (default: 1.0).
+    ///     Initial temperature guess for phase 1 (default: 1.0).
+    /// cooling_rate : float, optional
+    ///     Geometric cooling rate (temp *= rate each iteration, default: 0.99999).
     /// early_stop_iters : int, optional
-    ///     Stop phase after this many iterations without improvement (when end_prob is None, default: 100000).
-    /// temp_search_batch_size : int, optional
-    ///     Batch size for temperature tuning steps (default: 1000).
-    /// batch_size : int, optional
-    ///     Batch size for cooling phases, also determines print frequency (default: 1000).
-    #[pyo3(signature = (objectives, max_iter, phase_start_probs, phase_end_probs, phase_cooling_rates, init_temp=1.0, early_stop_iters=100000, temp_search_batch_size=1000, batch_size=1000))]
+    ///     Stop phase 3 after this many iterations without improvement (default: 100000).
+    /// window_size : int, optional
+    ///     Rolling window size for measuring acceptance rates (default: 1000).
+    #[pyo3(signature = (objective, max_iter, init_temp=1.0, cooling_rate=0.99999, early_stop_iters=100000, window_size=1000, log_every=1000))]
     pub fn anneal<'py>(&mut self,
         py: Python<'py>,
-        objectives: Vec<Bound<'py, crate::Objective>>,
+        objective: &crate::Objective,
         max_iter: usize,
-        phase_start_probs: Vec<f64>,
-        phase_end_probs: Vec<Option<f64>>,
-        phase_cooling_rates: Vec<f64>,
         init_temp: f64,
+        cooling_rate: f64,
         early_stop_iters: usize,
-        temp_search_batch_size: usize,
-        batch_size: usize,
+        window_size: usize,
+        log_every: usize,
     ) -> PyResult<()> {
-        let objective_clones: Vec<_> = objectives.iter()
-            .map(|obj| obj.borrow().inner.clone())
-            .collect();
         py.allow_threads(||
-            self.inner.anneal(&objective_clones, max_iter, init_temp, &phase_start_probs, &phase_end_probs, &phase_cooling_rates, early_stop_iters, temp_search_batch_size, batch_size)
+            self.inner.anneal(&objective.inner, max_iter, init_temp, cooling_rate, early_stop_iters, window_size, log_every)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         )
     }

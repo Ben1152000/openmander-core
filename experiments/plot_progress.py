@@ -31,18 +31,20 @@ except ImportError:
 
 def parse_log_line(line):
     """Parse a log line to extract iteration and objective values."""
-    # Example: Iter 0: phase Phase 0 | obj 0.5234 | PopulationEquality=0.1234 CompactnessPolsbyPopper=0.2000 Competitiveness=0.2000 | best 0.5234 @ 0 | temp 1.234567890123e-08 | prob 0.12345678 | curr_prob 0.12345678
-    match = re.search(r'Iter (\d+): phase ([\w\s]+?) \| obj ([\d.\-eE]+) \| (.*?) \| best ([\d.\-eE]+) @ (\d+) \| temp ([\d.\-eE]+) \| prob ([\d.\-]+) \| curr_prob ([\d.\-]+)', line)
+    # Example: Iter 0: obj 0.5234 | PopulationEquality=0.1234 CompactnessPolsbyPopper=0.2000 Competitiveness=0.2000 | best 0.5234 | temp 1.234567890123e-08 | prob 0.12345678 | curr_prob 0.12345678 | delta 0.12345678
+    # Temp can be in scientific notation (e.g., 1.23e-08) or regular decimal
+    # Try to match with delta and best_iter first (newest format)
+    match = re.search(r'Iter (\d+): obj ([\d.\-eE]+) \| (.*?) \| best ([\d.\-eE]+) @ (\d+) \| temp ([\d.\-eE]+) \| prob ([\d.\-]+) \| curr_prob ([\d.\-]+) \| delta ([\d.\-eE]+)', line)
     if match:
         iteration = int(match.group(1))
-        phase = match.group(2)
-        current_obj = float(match.group(3))
-        metrics_str = match.group(4).strip()
-        best_obj = float(match.group(5))
-        best_iter = int(match.group(6))
-        temp = float(match.group(7))
-        prob = float(match.group(8))
-        curr_prob = float(match.group(9))
+        current_obj = float(match.group(2))
+        metrics_str = match.group(3).strip()
+        best_obj = float(match.group(4))
+        best_iter = int(match.group(5))
+        temp = float(match.group(6))
+        prob = float(match.group(7))
+        curr_prob = float(match.group(8))
+        delta = float(match.group(9))
         
         # Parse individual metrics (handle negative numbers too)
         metrics = {}
@@ -51,50 +53,54 @@ def parse_log_line(line):
             metric_value = float(metric_match.group(2))
             metrics[metric_name] = metric_value
         
-        return iteration, phase, current_obj, best_obj, metrics, temp, prob, curr_prob, best_iter
+        return iteration, current_obj, best_obj, metrics, temp, prob, curr_prob, delta, best_iter
     
+    # Fall back to format with curr_prob but no delta or best_iter
+    match = re.search(r'Iter (\d+): obj ([\d.\-eE]+) \| (.*?) \| best ([\d.\-eE]+) \| temp ([\d.\-eE]+) \| prob ([\d.\-]+) \| curr_prob ([\d.\-]+)', line)
+    if match:
+        iteration = int(match.group(1))
+        current_obj = float(match.group(2))
+        metrics_str = match.group(3).strip()
+        best_obj = float(match.group(4))
+        temp = float(match.group(5))
+        prob = float(match.group(6))
+        curr_prob = float(match.group(7))
+        
+        # Parse individual metrics (handle negative numbers too)
+        metrics = {}
+        for metric_match in re.finditer(r'(\w+)=([\d.\-]+)', metrics_str):
+            metric_name = metric_match.group(1)
+            metric_value = float(metric_match.group(2))
+            metrics[metric_name] = metric_value
+        
+        return iteration, current_obj, best_obj, metrics, temp, prob, curr_prob, None, None
+    
+    # Fall back to old format without curr_prob
+    match = re.search(r'Iter (\d+): obj ([\d.\-eE]+) \| (.*?) \| best ([\d.\-eE]+) \| temp ([\d.\-eE]+) \| prob ([\d.\-]+)', line)
+    if match:
+        iteration = int(match.group(1))
+        current_obj = float(match.group(2))
+        metrics_str = match.group(3).strip()
+        best_obj = float(match.group(4))
+        temp = float(match.group(5))
+        prob = float(match.group(6))
+        
+        # Parse individual metrics (handle negative numbers too)
+        metrics = {}
+        for metric_match in re.finditer(r'(\w+)=([\d.\-]+)', metrics_str):
+            metric_name = metric_match.group(1)
+            metric_value = float(metric_match.group(2))
+            metrics[metric_name] = metric_value
+        
+        return iteration, current_obj, best_obj, metrics, temp, prob, None, None, None
     return None
 
 
-def update_plot(iterations, phases, current_objs, best_objs, all_metrics, temps, probs, curr_probs, best_iters, output_path, max_y_log_temp=None):
+def update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, output_path, max_y_log_temp=None, delta_only_neg=False):
     """Update the progress plot."""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
     
-    # Add background shading for phases
-    # Find phase transitions
-    phase_regions = []
-    if phases:
-        current_phase = phases[0]
-        start_iter = iterations[0]
-        
-        for i in range(1, len(phases)):
-            if phases[i] != current_phase:
-                # Phase transition
-                phase_regions.append((start_iter, iterations[i-1], current_phase))
-                current_phase = phases[i]
-                start_iter = iterations[i]
-        
-        # Add final region
-        phase_regions.append((start_iter, iterations[-1], current_phase))
-    
     # ===== SUBPLOT 1: Objective and Metrics =====
-    # Add phase background shading
-    phase_colors = {
-        'Temp Search': 'lightcoral',  # Red (temperature search)
-        'Phase 1': 'lightblue',       # Blue
-        'Phase 2': 'lightgreen',      # Green
-        'Phase 3': 'lightyellow',     # Yellow
-        'Phase 4': 'plum',            # Purple
-        'Phase 5': 'peachpuff',       # Orange
-        'Phase 6': 'lightcyan',       # Cyan
-        'Phase 7': 'lavender',        # Lavender
-        'Phase 8': 'mistyrose',       # Pink
-        'Phase 9': 'lightgoldenrodyellow',  # Gold
-    }
-    for start, end, phase in phase_regions:
-        color = phase_colors.get(phase, 'lightgray')
-        ax1.axvspan(start, end, alpha=0.3, color=color, zorder=0, label=phase)
-    
     # Collect all values to determine y-axis range
     all_values = list(current_objs)
     for metric_values in all_metrics.values():
@@ -115,10 +121,70 @@ def update_plot(iterations, phases, current_objs, best_objs, all_metrics, temps,
         ax1.plot(iterations, metric_values, '--', linewidth=1.8, alpha=0.8, 
                 color=color, label=metric_name)
     
-    # Get unique phase labels (avoid duplicates in legend)
-    handles, labels = ax1.get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    ax1.legend(by_label.values(), by_label.keys(), fontsize=9, loc='lower left', ncol=2)
+    # Plot delta on a separate right-side y-axis (dashed red line)
+    if deltas and any(d is not None for d in deltas):
+        ax1_delta = ax1.twinx()
+        valid_deltas = [(i, it, d) for i, (it, d) in enumerate(zip(iterations, deltas)) if d is not None]
+        
+        if delta_only_neg:
+            # Only plot negative deltas as dots, use log10(-delta)
+            neg_deltas = [(i, it, d) for i, it, d in valid_deltas if d < 0]
+            if neg_deltas:
+                _, neg_iters, neg_ds = zip(*neg_deltas)
+                log_neg_deltas = [math.log10(-d) for d in neg_ds]
+                ax1_delta.scatter(neg_iters, log_neg_deltas, s=20, alpha=0.6, color='red', label='log10(-Delta)')
+                ax1_delta.set_ylabel('log10(-Delta)', fontsize=12, color='red')
+                ax1_delta.tick_params(axis='y', labelcolor='red')
+                
+                # Add delta to legend
+                lines1, labels1 = ax1.get_legend_handles_labels()
+                lines2, labels2 = ax1_delta.get_legend_handles_labels()
+                ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='lower left')
+            else:
+                ax1.legend(fontsize=10, loc='lower left')
+        else:
+            # Plot all deltas with log scale: log(-delta) for negative, log(delta) for positive
+            # Three colors based on epsilon threshold
+            EPSILON = 1e-10
+            if valid_deltas:
+                # Categorize deltas into three groups
+                large_neg = [(i, it, d) for i, it, d in valid_deltas if d < -EPSILON]
+                small_neg = [(i, it, d) for i, it, d in valid_deltas if -EPSILON <= d < 0]
+                pos_deltas = [(i, it, d) for i, it, d in valid_deltas if d > 0]
+                
+                # Plot large negative deltas in dark red
+                if large_neg:
+                    _, iters, ds = zip(*large_neg)
+                    log_deltas = [math.log10(-d) for d in ds]
+                    ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='darkred', 
+                                     label=f'Δ < -ε (ε=1×10⁻¹⁰)')
+                
+                # Plot small negative deltas in magenta
+                if small_neg:
+                    _, iters, ds = zip(*small_neg)
+                    log_deltas = [math.log10(-d) for d in ds]
+                    ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='magenta', 
+                                     label=f'-ε ≤ Δ < 0 (ε=1×10⁻¹⁰)')
+                
+                # Plot positive deltas in cyan
+                if pos_deltas:
+                    _, iters, ds = zip(*pos_deltas)
+                    log_deltas = [math.log10(d) for d in ds]
+                    ax1_delta.scatter(iters, log_deltas, s=20, alpha=0.6, color='cyan', 
+                                     label=f'Δ > 0')
+                
+                ax1_delta.set_ylabel(f'log10(|Δ|)  [ε = {EPSILON:.0e}]', fontsize=12)
+                ax1_delta.tick_params(axis='y')
+                
+                # Add delta to legend
+                lines1, labels1 = ax1.get_legend_handles_labels()
+                lines2, labels2 = ax1_delta.get_legend_handles_labels()
+                ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='lower left')
+            else:
+                ax1.legend(fontsize=10, loc='lower left')
+    else:
+        # No delta, use regular legend
+        ax1.legend(fontsize=10, loc='lower left')
     
     # Use the last checkpoint's best_obj and best_iter values
     if best_iters and best_iters[-1] is not None:
@@ -143,11 +209,6 @@ def update_plot(iterations, phases, current_objs, best_objs, all_metrics, temps,
     ax1.grid(True, alpha=0.3)
     
     # ===== SUBPLOT 2: Acceptance Probability and Temperature =====
-    # Add phase background shading (no labels here to avoid duplicate legend entries)
-    for start, end, phase in phase_regions:
-        color = phase_colors.get(phase, 'lightgray')
-        ax2.axvspan(start, end, alpha=0.3, color=color, zorder=0)
-    
     # Create twin axis for temperature
     ax2_temp = ax2.twinx()
     
@@ -200,16 +261,16 @@ def update_plot(iterations, phases, current_objs, best_objs, all_metrics, temps,
     plt.close()
 
 
-def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None):
+def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None, delta_only_neg=False):
     """Monitor log file and update plot in real-time."""
     
     iterations = []
-    phases = []  # Phase names (TEMP_SEARCH or TEMP_COOL)
     current_objs = []
     best_objs = []
     temps = []  # Temperatures
     probs = []  # Acceptance probabilities (average)
     curr_probs = []  # Current move probabilities
+    deltas = []  # Delta values (old - new)
     best_iters = []  # Iteration where best was found
     all_metrics = {}  # Dict of metric_name -> list of values
     
@@ -231,7 +292,6 @@ def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None
     last_iteration = 0
     lines_read = 0
     data_points = 0
-    should_exit = False
     
     with open(log_path, 'r') as f:
         while True:
@@ -242,14 +302,12 @@ def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None
                 if not sentinel.exists():
                     # Process finished, do final update and exit
                     if iterations:
-                        update_plot(iterations, phases, current_objs, best_objs, all_metrics, temps, probs, curr_probs, best_iters, plot_path, max_y_log_temp)
+                        update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, plot_path, max_y_log_temp, delta_only_neg)
                         pbar.close()
                         print(f"\nPlotted {len(all_metrics)} metrics: {', '.join(all_metrics.keys())}")
                     else:
                         pbar.close()
                         print(f"\nWARNING: No data points found in log file")
-                    
-                    should_exit = True
                     break
                 time.sleep(0.1)
                 continue
@@ -257,14 +315,14 @@ def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None
             lines_read += 1
             parsed = parse_log_line(line)
             if parsed:
-                iteration, phase, current_obj, best_obj, metrics, temp, prob, curr_prob, best_iter = parsed
+                iteration, current_obj, best_obj, metrics, temp, prob, curr_prob, delta, best_iter = parsed
                 iterations.append(iteration)
-                phases.append(phase)
                 current_objs.append(current_obj)
                 best_objs.append(best_obj)
                 temps.append(temp)
                 probs.append(prob)
                 curr_probs.append(curr_prob)
+                deltas.append(delta)
                 best_iters.append(best_iter)
                 data_points += 1
                 
@@ -287,12 +345,7 @@ def monitor_log(log_path, plot_path, max_iter, plot_every=1, max_y_log_temp=None
                 
                 # Update plot every N data points
                 if data_points % plot_every == 0:
-                    update_plot(iterations, phases, current_objs, best_objs, all_metrics, temps, probs, curr_probs, best_iters, plot_path, max_y_log_temp)
-    
-    # Create a "done" file to signal plotting is complete (after loop exits)
-    if should_exit:
-        done_file = log_path.parent / f"{log_path.stem}.plot_done"
-        done_file.touch()
+                    update_plot(iterations, current_objs, best_objs, all_metrics, temps, probs, curr_probs, deltas, best_iters, plot_path, max_y_log_temp, delta_only_neg)
 
 
 if __name__ == "__main__":
@@ -304,7 +357,8 @@ if __name__ == "__main__":
     parser.add_argument('max_iter', type=int, help='Maximum iterations')
     parser.add_argument('--plot-every', type=int, default=1, help='Update plot every N data points (default: 1)')
     parser.add_argument('--max-y-log-temp', type=float, default=None, help='Maximum y-value for log10(temp) axis, e.g., -6')
+    parser.add_argument('--delta-only-neg', action='store_true', help='Only plot negative deltas as log10(-delta)')
     
     args = parser.parse_args()
     
-    monitor_log(args.log_path, args.plot_path, args.max_iter, args.plot_every, args.max_y_log_temp)
+    monitor_log(args.log_path, args.plot_path, args.max_iter, args.plot_every, args.max_y_log_temp, args.delta_only_neg)

@@ -6,9 +6,11 @@ struct OptimizationParams {
     pub max_iter: usize,
     pub init_temp: f64,
     pub cooling_rate: f64,
+    pub init_prob: f64,
+    pub final_prob: f64,
     pub early_stop_iters: usize,
-    pub temp_search_batch_size: usize,
-    pub batch_size: usize,
+    pub window_size: usize,
+    pub log_every: usize,
 }
 
 struct OptimizationState<Rng: rand::Rng> {
@@ -148,103 +150,62 @@ impl Partition {
         }
     }
 
-    /// Run multi-phase simulated annealing to optimize multiple objectives sequentially.
+    /// Run simulated annealing to optimize a generic objective function with adaptive temperature.
+    /// This is the generalized version of `anneal_balance` that works with any `Objective`.
     /// 
     /// The algorithm maximizes the objective value (higher is better).
     /// At the end, the partition is restored to the best state found during the search.
     /// 
-    /// Multi-phase adaptive annealing:
-    /// Each phase consists of two steps:
-    /// 1. Temperature tuning: Adjust temperature to reach start_prob acceptance rate
-    /// 2. Cooling: Cool until end_prob is reached (or use early stopping if end_prob is None)
+    /// Two-phase adaptive annealing:
+    /// 1. Find initial temperature where average acceptance probability ≈ 0.9
+    /// 2. Cool geometrically at specified rate with early stopping (stops after N iters without improvement)
     /// 
     /// Parameters:
-    /// - `objectives`: List of objectives to optimize (one per phase)
+    /// - `objective`: The objective to maximize
     /// - `max_iter`: Safety maximum iterations (prevents infinite loops)
-    /// - `init_temp`: Initial temperature guess for first phase
-    /// - `phase_start_probs`: Target acceptance probability to reach at start of each phase
-    /// - `phase_end_probs`: Target acceptance probability to cool to (None = use early stopping)
-    /// - `phase_cooling_rates`: Geometric cooling rate for each phase (temp *= (1 - rate) each batch)
-    /// - `early_stop_iters`: Stop phase after this many iterations without improvement (when end_prob is None)
-    /// - `temp_search_batch_size`: Batch size for temperature tuning steps
-    /// - `batch_size`: Batch size for cooling phases
+    /// - `init_temp`: Initial temperature guess for phase 1 (default: 1.0)
+    /// - `cooling_rate`: Geometric cooling rate (temp *= rate each iteration, e.g., 0.99999)
+    /// - `early_stop_iters`: Stop phase 3 after this many iterations without improvement
+    /// - `window_size`: Rolling window size for measuring acceptance rates (default: 1000)
     pub(crate) fn anneal(&mut self,
-        objectives: &[Objective],
+        objective: &Objective,
         max_iter: usize,
         init_temp: f64,
-        phase_start_probs: &[f64],
-        phase_end_probs: &[Option<f64>],
-        phase_cooling_rates: &[f64],
+        cooling_rate: f64,
         early_stop_iters: usize,
-        temp_search_batch_size: usize,
-        batch_size: usize,
+        window_size: usize,
+        log_every: usize,
     ) {
         assert!(self.parts.get(0).len() == 0, "part 0 (unassigned) must be empty");
         assert!(self.num_parts() > 2, "need at least two parts for annealing");
-        assert!(!objectives.is_empty(), "must provide at least one objective");
-        assert!(phase_start_probs.len() == objectives.len(), "must provide start_prob for each phase");
-        assert!(phase_end_probs.len() == objectives.len(), "must provide end_prob for each phase");
-        assert!(phase_cooling_rates.len() == objectives.len(), "must provide cooling_rate for each phase");
-        for (i, &rate) in phase_cooling_rates.iter().enumerate() {
-            assert!(rate > 0.0 && rate < 1.0, "cooling_rate for phase {} must be in (0, 1)", i);
-        }
-        assert!(batch_size > 0, "batch_size must be > 0");
-        assert!(temp_search_batch_size > 0, "temp_search_batch_size must be > 0");
+        assert!(cooling_rate > 0.0 && cooling_rate < 1.0, "cooling_rate must be in (0, 1)");
 
-        let mut params = OptimizationParams {
+        let params = OptimizationParams {
             max_iter,
             init_temp,
-            cooling_rate: 0.0,  // Will be set per-phase
+            cooling_rate,
+            init_prob: 0.9,
+            final_prob: 0.1,
             early_stop_iters,
-            temp_search_batch_size,
-            batch_size,
+            window_size,
+            log_every,
         };
 
-        let first_objective = &objectives[0];
-        let initial_score = first_objective.compute(self);
         let mut state = OptimizationState {
             rng: rand::rng(),
-            current_score: initial_score,
+            current_score: objective.compute(self),
             current_iter: 0,
-            best_score: initial_score,  // Initialize to actual score, not 0
+            best_score: 0.0,
             best_assignments: self.assignments(),
             best_iter: 0,
             temperature: params.init_temp,
         };
 
-        // Run each phase
-        for phase_idx in 0..objectives.len() {
-            let objective = &objectives[phase_idx];
-            let phase_num = phase_idx + 1;  // Display as 1-indexed
-            
-            // Set cooling rate for this phase
-            params.cooling_rate = phase_cooling_rates[phase_idx];
-            println!("DEBUG: Phase {} using cooling_rate = {}", phase_num, params.cooling_rate);
-            
-            // Recompute score for new objective (if not first phase)
-            if phase_idx > 0 {
-                state.current_score = objective.compute(self);
-                state.best_score = state.current_score;
-                state.best_assignments = self.assignments();
-                state.best_iter = state.current_iter;
-            }
-            
-            // Step 1: Tune temperature to reach start_prob
-            let start_prob = phase_start_probs[phase_idx];
-            self.tune_initial_temperature(objective, &params, &mut state, start_prob);
-            
-            // Step 2: Cool to end_prob (or use early stopping)
-            match phase_end_probs[phase_idx] {
-                Some(end_prob) => {
-                    // Cool until probability threshold
-                    self.cool_to_probability_threshold(objective, &params, &mut state, phase_num, end_prob);
-                }
-                None => {
-                    // Use early stopping
-                    self.cool_with_early_stopping(objective, &params, &mut state, phase_num);
-                }
-            }
-        }
+        // Phase 1: Find initial temperature where average acceptance probability ≈ 0.9
+        self.tune_initial_temperature(objective, &params, &mut state);
+
+        // Phase 2: Cool with early stopping (stop after N iters without improvement)
+        self.cool_to_target_acceptance(objective, &params, &mut state);
 
         // Restore the best solution found
         if state.current_score < state.best_score {
@@ -252,99 +213,72 @@ impl Partition {
         }
     }
 
-    /// Find initial temperature where average acceptance probability reaches target.
+    /// Phase 1: Find initial temperature where average acceptance probability reaches target (typically 0.9)
     /// Uses binary search to adaptively find the right temperature.
-    /// The map state evolves during the search and is NOT restored.
     fn tune_initial_temperature(
         &mut self,
         objective: &Objective,
         params: &OptimizationParams,
         state: &mut OptimizationState<impl Rng>,
-        target_prob: f64,
     ) {
         let mut min_temp = state.temperature * 1e-10;  // Lower bound for binary search (very low)
         let mut max_temp = state.temperature * 1e10; // Upper bound for binary search
 
         // Binary search for the right temperature - keep going until we find it or hit max_iter
-        for _ in 0..100 {
-            if state.current_iter >= params.max_iter { break }
-            
-            // Run a batch to measure average acceptance probability at current temperature
-            let (_, avg_prob, final_prob) = self.anneal_batch(objective, state, params.temp_search_batch_size);
-            
-            // Print progress during temp search
-            self.print_progress_with_avg_prob_and_curr(objective, avg_prob, final_prob, state, "Temp Search");
+        for _ in 0..50 {
+            let avg_prob = self.measure_average_probability(objective, params, state);
 
-            // Check if we're close enough to target (within 5%)
-            if (avg_prob - target_prob).abs() < 0.05 { break }
+            // Check if we're close enough to target (within 1%)
+            if (avg_prob - params.init_prob).abs() < 0.01 { return }
 
             // Adjust temperature bounds
-            if avg_prob < target_prob { min_temp = (state.temperature * min_temp).sqrt() }
-            else { max_temp = (state.temperature * max_temp).sqrt() }
+            if avg_prob < params.init_prob { min_temp = state.temperature }
+            else { max_temp = state.temperature }
 
             // Binary search midpoint
             state.temperature = (min_temp * max_temp).sqrt();
         }
     }
 
-    /// Intermediate cooling phase: Cool until average acceptance probability drops below threshold
-    fn cool_to_probability_threshold(
+    /// Phase 2: Cool geometrically with early stopping based on no improvement
+    fn cool_to_target_acceptance(
         &mut self,
         objective: &Objective,
         params: &OptimizationParams,
         state: &mut OptimizationState<impl Rng>,
-        phase_num: usize,
-        target_prob: f64,
-    ) {
-        while state.current_iter < params.max_iter {
-            let prev_best = state.best_score;
-
-            // Perform batch of iterations
-            let (_, avg_prob, final_prob) = self.anneal_batch(objective, state, params.batch_size);
-            
-            // Check if we improved the best objective
-            if state.best_score > prev_best { state.best_iter = state.current_iter; }
-
-            // Print progress after each batch
-            let phase_label = format!("Phase {}", phase_num);
-            self.print_progress_with_avg_prob_and_curr(objective, avg_prob, final_prob, state, &phase_label);
-
-            // Check if average probability has dropped below threshold
-            if avg_prob < target_prob { return }
-
-            // Cool temperature
-            let old_temp = state.temperature;
-            state.temperature *= 1.0 - params.cooling_rate;
-            if state.current_iter % 10000 == 0 {
-                println!("DEBUG: Iter {} cooling: {} -> {} (rate={})", state.current_iter, old_temp, state.temperature, params.cooling_rate);
-            }
-        }
-    }
-
-    /// Final cooling phase: Cool with early stopping based on no improvement
-    fn cool_with_early_stopping(
-        &mut self,
-        objective: &Objective,
-        params: &OptimizationParams,
-        state: &mut OptimizationState<impl Rng>,
-        phase_num: usize,
     ) {
         let mut iters_since_change = 0;
+
+        // For printing: non-overlapping windows
+        let mut window_prob_sum = 0.0;
+        let mut window_count = 0;
         
         while state.current_iter < params.max_iter {
             let prev_best = state.best_score;
 
-            // Perform batch of iterations
-            let (any_accepted, avg_prob, final_prob) = self.anneal_batch(objective, state, params.batch_size);
+            // Perform one iteration
+            let (accept, delta) = self.anneal_iteration(objective, state);
 
-            if any_accepted { iters_since_change = 0; } else { iters_since_change += params.batch_size; }
+            if accept { iters_since_change = 0; } else { iters_since_change += 1; }
+            
+            // Calculate acceptance probability for this move
+            let prob = acceptance_probability(delta, state.temperature);
+            
+            // Accumulate for printing window (non-overlapping)
+            window_prob_sum += prob;
+            window_count += 1;
             
             // Check if we improved the best objective
             if state.best_score > prev_best { state.best_iter = state.current_iter; }
 
-            // Print progress after each batch
-            let phase_label = format!("Phase {}", phase_num);
-            self.print_progress_with_avg_prob_and_curr(objective, avg_prob, final_prob, state, &phase_label);
+            // Print progress every log_every iterations (non-overlapping windows)
+            if state.current_iter % params.log_every == 0 {
+                let avg_prob = window_prob_sum / window_count as f64;
+                self.print_progress_with_avg_prob_and_curr(objective, avg_prob, prob, -delta, state);
+                // Reset window for next period
+                window_prob_sum = 0.0;
+                window_count = 0;
+            }
 
             // Early stopping check
             if iters_since_change >= params.early_stop_iters { return }
@@ -354,37 +288,62 @@ impl Partition {
         }
     }
 
-
-
-    /// Perform a batch of annealing iterations.
-    /// Simply calls anneal_iteration n times without modifying temperature or handling stopping logic.
-    /// Returns (any_accepted, avg_prob, final_prob) where:
-    /// - any_accepted: true if any move was accepted in the batch
-    /// - avg_prob: average acceptance probability across all moves in the batch
-    /// - final_prob: acceptance probability of the last move in the batch
-    fn anneal_batch(
+    /// Measure average acceptance probability at a given temperature over a window of iterations
+    fn measure_average_probability(
         &mut self,
         objective: &Objective,
+        params: &OptimizationParams,
         state: &mut OptimizationState<impl Rng>,
-        n: usize,
-    ) -> (bool, f64, f64) {
-        let mut any_accepted = false;
+    ) -> f64 {
         let mut prob_sum = 0.0;
-        let mut final_prob = 0.0;
+        let mut count = 0;
         
-        for _ in 0..n {
-            let (accepted, delta) = self.anneal_iteration(objective, state);
-            if accepted {
-                any_accepted = true;
+        // For printing: accumulate over non-overlapping windows
+        let mut window_prob_sum = 0.0;
+        let mut window_count = 0;
+        
+        for _ in 0..params.window_size {
+            if state.current_iter >= params.max_iter {
+                break;
             }
+            
+            let prev_best = state.best_score;
+            
+            let (_, delta) = self.anneal_iteration(objective, state);
+            
+            // Track best iteration
+            if state.best_score > prev_best {
+                state.best_iter = state.current_iter;
+            }
+            
+            // Calculate acceptance probability for this move
             let prob = acceptance_probability(delta, state.temperature);
             prob_sum += prob;
-            final_prob = prob;
+            count += 1;
+            
+            // Accumulate for printing window
+            window_prob_sum += prob;
+            window_count += 1;
+            
+            // Print progress every log_every iterations (non-overlapping windows)
+            if state.current_iter % params.log_every == 0 {
+                let avg_prob = window_prob_sum / window_count as f64;
+                self.print_progress_with_avg_prob_and_curr(objective, avg_prob, prob, -delta, state);
+                // Reset window for next period
+                window_prob_sum = 0.0;
+                window_count = 0;
+            }
         }
         
-        let avg_prob = prob_sum / n as f64;
-        (any_accepted, avg_prob, final_prob)
+        if count > 0 {
+            prob_sum / count as f64
+        } else {
+            0.0
+        }
     }
+
+    /// Perform a batch of annealing iterations.
+    fn anneal_batch() {}
 
     /// Perform a single annealing iteration (propose move, accept/reject)
     /// Returns (accepted, delta) tuple
@@ -501,17 +460,17 @@ impl Partition {
         objective: &Objective,
         avg_prob: f64,
         curr_prob: f64,
+        delta: f64,
         state: &OptimizationState<impl Rng>,
-        phase: &str,
     ) {
         let comp_str = objective.metrics().iter()
             .map(|metric| { format!("{}={:.4}", metric.short_name(), metric.compute_score(self)) })
             .collect::<Vec<_>>()
             .join(" ");
         
-        println!("Iter {}: phase {} | obj {:.12e} | {} | best {:.12e} @ {} | temp {:.12e} | prob {:.8} | curr_prob {:.8}",
+        let delta_print = if delta < 0.0 { delta.min(EPSILON) } else { delta };
+        println!("Iter {}: obj {:.12e} | {} | best {:.12e} @ {} | temp {:.12e} | prob {:.8} | curr_prob {:.8} | delta {:.8e}",
             state.current_iter,
-            phase,
             state.current_score,
             comp_str,
             state.best_score,
@@ -519,6 +478,7 @@ impl Partition {
             state.temperature,
             avg_prob,
             curr_prob,
+            delta_print,
         );
     }
 }

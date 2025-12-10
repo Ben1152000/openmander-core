@@ -68,14 +68,28 @@ def build_and_save_state(state: str, num_districts: int, iteration: int) -> str:
 
 
 # --- Main logic with Ctrl-C cancellation -------------------------------------
+def generate_svgs(iteration: int, max_workers: int | None = None) -> None:
+    """
+    Run redistricting in parallel for all STATES, but cap the number of worker
+    processes via max_workers to avoid exhausting CPU/RAM (especially in WSL).
 
-def generate_svgs(iteration: int) -> None:
-    print(f"Starting redistricting for {len(STATES)} states… (Ctrl-C to cancel)")
+    Args:
+        iteration: some iteration index you already use
+        max_workers: maximum number of worker processes to use. If None,
+                     defaults to roughly half the available CPU cores.
+    """
+    if max_workers is None:
+        # Heuristic: use half the cores, at least 1
+        cpu_count = os.cpu_count() or 2
+        max_workers = max(1, cpu_count // 2)
+
+    print(f"Starting redistricting for {len(STATES)} states… "
+          f"({max_workers} workers, Ctrl-C to cancel)")
 
     finished = 0
 
-    # Use "with" so processes are cleaned even in exception
-    with ProcessPoolExecutor() as executor:
+    # Limit the process pool size with max_workers
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(build_and_save_state, state, nd, iteration): state
             for state, nd in STATES.items()
@@ -119,9 +133,9 @@ def merge_svgs() -> None:
 
 def main() -> None:
     os.makedirs(SVG_PATH, exist_ok=True)
-    generate_svgs(iteration=1)
-    generate_svgs(iteration=2)
-    generate_svgs(iteration=3)
+    generate_svgs(iteration=1, max_workers=4)
+    generate_svgs(iteration=2, max_workers=4)
+    generate_svgs(iteration=3, max_workers=4)
     # merge_svgs()
 
 

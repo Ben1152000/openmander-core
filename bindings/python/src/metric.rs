@@ -18,6 +18,13 @@ impl Metric {
         Self { inner }
     }
 
+    /// Population equality absolute metric for a given weight series (e.g., total population).
+    #[staticmethod]
+    pub fn population_deviation_absolute(pop_series: &str) -> Self {
+        let inner = openmander_core::Metric::population_deviation_absolute(pop_series.to_string());
+        Self { inner }
+    }
+
     /// Population equality smooth metric for a given weight series (e.g., total population).
     #[staticmethod]
     pub fn population_deviation_smooth(pop_series: &str) -> Self {

@@ -4,6 +4,7 @@ use crate::partition::Partition;
 pub(crate) enum MetricKind {
     // Demographic metrics:
     PopulationDeviation { pop_series: String },
+    PopulationDeviationAbsolute { pop_series: String },
     PopulationDeviationSmooth { pop_series: String },
 
     // Geometric metrics:
@@ -28,6 +29,11 @@ impl Metric {
     /// Population equality metric for the given weight series.
     pub fn population_deviation(pop_series: String) -> Self {
         Self { kind: MetricKind::PopulationDeviation { pop_series } }
+    }
+
+    /// Absolute population equality metric for the given weight series.
+    pub fn population_deviation_absolute(pop_series: String) -> Self {
+        Self { kind: MetricKind::PopulationDeviationAbsolute { pop_series } }
     }
 
     /// Smooth population equality metric for the given weight series.
@@ -69,6 +75,7 @@ impl Metric {
     pub(crate) fn short_name(&self) -> &str {
         match &self.kind {
             MetricKind::PopulationDeviation { .. } => "PopulationDeviation",
+            MetricKind::PopulationDeviationAbsolute { .. } => "PopulationDeviationAbsolute",
             MetricKind::PopulationDeviationSmooth { .. } => "PopulationDeviationSmooth",
             MetricKind::CompactnessPolsbyPopper => "CompactnessPolsbyPopper",
             MetricKind::CompactnessSchwartzberg => "CompactnessSchwartzberg",
@@ -85,6 +92,9 @@ impl Metric {
         match &self.kind {
             MetricKind::PopulationDeviation { pop_series } => {
                 districts.map(|part| partition.population_deviation(part, pop_series)).collect()
+            }
+            MetricKind::PopulationDeviationAbsolute { pop_series } => {
+                districts.map(|part| partition.absolute_population_deviation(part, pop_series)).collect()
             }
             MetricKind::PopulationDeviationSmooth { pop_series } => {
                 districts.map(|part| partition.smooth_population_deviation(part, pop_series)).collect()
@@ -124,6 +134,8 @@ impl fmt::Display for MetricKind {
         match &self {
             MetricKind::PopulationDeviation { pop_series } =>
                 write!(f, "PopulationDeviation(series='{}')", pop_series),
+            MetricKind::PopulationDeviationAbsolute { pop_series } =>
+                write!(f, "PopulationDeviationAbsolute(series='{}')", pop_series),
             MetricKind::PopulationDeviationSmooth { pop_series } =>
                 write!(f, "PopulationDeviationSmooth(series='{}')", pop_series),
             MetricKind::CompactnessPolsbyPopper =>

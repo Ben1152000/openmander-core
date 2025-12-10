@@ -7,6 +7,12 @@ impl Partition {
         self.part_total(pop_series, part) / average - 1.0
     }
 
+    /// Compute the absolute population deviation for a given partition.
+    pub(crate) fn absolute_population_deviation(&self, part: u32, pop_series: &str) -> f64 {
+        let average = self.region_total(pop_series) / (self.num_parts() - 1) as f64;
+        (self.part_total(pop_series, part) / average - 1.0).abs()
+    }
+
     /// Compute a smooth population deviation metric for a given partition.
     pub(crate) fn smooth_population_deviation(&self, part: u32, pop_series: &str) -> f64 {
         let deviation = self.population_deviation(part, pop_series);

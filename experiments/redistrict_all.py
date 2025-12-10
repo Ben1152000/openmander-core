@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import signal
+import math
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -18,22 +19,17 @@ BASE_PATH = OPENMANDER_ROOT / "openmander-core" / "experiments" / "packs"
 SVG_PATH  = OPENMANDER_ROOT / "openmander-core" / "experiments" / "images"
 
 STATES = {
-    "CA": 52, "TX": 38, "FL": 28, "NY": 26, "IL": 17, "PA": 17, "OH": 15, "GA": 14,
+    "CA": 52, "TX": 38, "FL": 28,  "PA": 17, "OH": 15, "GA": 14,
     "NC": 14, "MI": 13, "NJ": 12, "VA": 11, "WA": 10, "AZ": 9, "IN": 9, "MA": 9,
     "TN": 9, "CO": 8, "MD": 8, "MN": 8, "MO": 8, "WI": 8, "AL": 7, "SC": 7,
     "KY": 6, "LA": 6, "OR": 6, "CT": 5, "OK": 5, "AR": 4, "IA": 4, "KS": 4,
     "MS": 4, "NV": 4, "UT": 4, "NE": 3, "NM": 3, "ID": 2, "ME": 2, "MT": 2,
-    "NH": 2, "RI": 2, "WV": 2, "DE": 1, "ND": 1, "SD": 1, "VT": 1, "WY": 1,
+    "WV": 2, "DE": 1, "ND": 1, "SD": 1, "VT": 1, "WY": 1,
 }
-
-# Use New England states as lightweight test:
-# STATES = { "NY": 26, "MA": 9, "CT": 5, "ME": 2, "NH": 2, "RI": 2, "VT": 1 }
-
-STATES = { "NY" : 26 }
 
 # --- Worker function ---------------------------------------------------------
 
-def build_and_save_state(state: str, num_districts: int) -> str:
+def build_and_save_state(state: str, num_districts: int, iteration: int) -> str:
     print(f"[START] {state} ({num_districts} districts)")
 
     pack_path = os.path.join(BASE_PATH, f"{state}_2020_pack")
@@ -50,19 +46,21 @@ def build_and_save_state(state: str, num_districts: int) -> str:
         objective = om.Objective(metrics=[
             om.Metric.population_deviation_smooth("T_20_CENS_Total"),
             om.Metric.compactness_polsby_popper(),
-        ], weights=[0.9, 0.1])
+        ], weights=[0.8, 0.2])
 
         plan.anneal(
-            objective=objective,
-            max_iter=2_000_000 * num_districts,
+            objectives=[objective],
+            max_iter=10_000_000 * num_districts,
+            phase_start_probs=[0.9],
+            phase_end_probs=[0.05],
+            phase_cooling_rates=[0.0005 / math.sqrt(num_districts)],
             init_temp=1.0,
-            cooling_rate=0.000001 / num_districts,
             early_stop_iters=10000,
-            window_size=1000,
-            log_every=1_000_000,
+            temp_search_batch_size=1000,
+            batch_size=1000
         )
 
-    svg_file = os.path.join(SVG_PATH, f"{state}.svg")
+    svg_file = os.path.join(SVG_PATH, f"{state}_{iteration}.svg")
     plan.to_svg(svg_file)
 
     print(f"[DONE ] {state}")
@@ -71,7 +69,7 @@ def build_and_save_state(state: str, num_districts: int) -> str:
 
 # --- Main logic with Ctrl-C cancellation -------------------------------------
 
-def generate_svgs() -> None:
+def generate_svgs(iteration: int) -> None:
     print(f"Starting redistricting for {len(STATES)} states… (Ctrl-C to cancel)")
 
     finished = 0
@@ -79,7 +77,7 @@ def generate_svgs() -> None:
     # Use "with" so processes are cleaned even in exception
     with ProcessPoolExecutor() as executor:
         futures = {
-            executor.submit(build_and_save_state, state, nd): state
+            executor.submit(build_and_save_state, state, nd, iteration): state
             for state, nd in STATES.items()
         }
 
@@ -121,8 +119,10 @@ def merge_svgs() -> None:
 
 def main() -> None:
     os.makedirs(SVG_PATH, exist_ok=True)
-    generate_svgs()
-    merge_svgs()
+    generate_svgs(iteration=1)
+    generate_svgs(iteration=2)
+    generate_svgs(iteration=3)
+    # merge_svgs()
 
 
 if __name__ == "__main__":

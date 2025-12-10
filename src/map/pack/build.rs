@@ -326,6 +326,33 @@ impl Map {
             (GeoId::new_block("060375991002000"), GeoId::new_block("060379903000007")),
             (GeoId::new_block("060375991002000"), GeoId::new_block("060379903000010")),
             (GeoId::new_block("060375991002000"), GeoId::new_block("060375991001000")),
+            // Fulton County, Kentucky
+            (GeoId::new_block("210759602004105"), GeoId::new_block("210759602004000")),
+            // New York County, New York
+            (GeoId::new_block("360610001001000"), GeoId::new_block("360610005000003")),
+            (GeoId::new_block("360610001001001"), GeoId::new_block("360610005000003")),
+            // Honolulu County, Hawaii
+            (GeoId::new_block("150039812001000"), GeoId::new_block("150039900010005")),
+            (GeoId::new_block("150039812001003"), GeoId::new_block("150039900010005")),
+            (GeoId::new_block("150039812001005"), GeoId::new_block("150039900010005")),
+            (GeoId::new_block("150039812001008"), GeoId::new_block("150039900010005")),
+            (GeoId::new_block("150039812001015"), GeoId::new_block("150039900010005")),
+            (GeoId::new_block("150039812001016"), GeoId::new_block("150039900010005")),
+            (GeoId::new_block("150039812001018"), GeoId::new_block("150039900010005")),
+            (GeoId::new_block("150039812001021"), GeoId::new_block("150039900010005")),
+            (GeoId::new_block("150039812001025"), GeoId::new_block("150039900010005")),
+            // Kauai County, Hawaii
+            (GeoId::new_block("150079902000001"), GeoId::new_block("150079901000014")),
+            (GeoId::new_block("150079903000002"), GeoId::new_block("150079901000014")),
+            // Maui County, Hawaii
+            (GeoId::new_block("150099900000006"), GeoId::new_block("150099902000009")),
+            (GeoId::new_block("150099912000003"), GeoId::new_block("150099902000009")),
+            // Kauai County & Honolulu County, Hawaii
+            (GeoId::new_block("150079901000008"), GeoId::new_block("150039900010005")),
+            // Maui County & Honolulu County, Hawaii
+            (GeoId::new_block("150099900000002"), GeoId::new_block("150039900010039")),
+            // Hawaii County & Maui County, Hawaii
+            (GeoId::new_block("150019912000001"), GeoId::new_block("150099902000018")),
         ];
 
         patches.into_iter().for_each(|(left, right)| {

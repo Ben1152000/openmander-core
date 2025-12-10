@@ -1,0 +1,47 @@
+{
+  "state": "NJ",
+  "num_districts": 12,
+  "max_iter": 40000000,
+  "init_temp": 1.0,
+  "batch_size": 1000,
+  "temp_search_batch_size": 1000,
+  "plot_every": 20,
+  "max_y_log_temp": "0",
+  "competitiveness_threshold": 0.015,
+  "phases": [
+    {
+      "name": "phase_1",
+      "start_prob": 0.8,
+      "end_prob": 0.05,
+      "cooling_rate": 0.00175,
+      "weights": {
+        "population": 0.5,
+        "compactness": 0.001,
+        "competitiveness": 0.5
+      }
+    },
+    {
+      "name": "phase_2",
+      "start_prob": 0.6,
+      "end_prob": 0.05,
+      "cooling_rate": 0.00175,
+      "weights": {
+        "population": 0.5,
+        "compactness": 0.25,
+        "competitiveness": 0.5
+      }
+    },
+    {
+      "name": "phase_3",
+      "start_prob": 0.5,
+      "end_prob": null,
+      "early_stop_iters": 1000000,
+      "cooling_rate": 0.0015,
+      "weights": {
+        "population": 0.97,
+        "compactness": 0.02,
+        "competitiveness": 0.03
+      }
+    }
+  ]
+}

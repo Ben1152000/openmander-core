@@ -111,7 +111,6 @@ impl Partition {
                     let other = self.assignment(edge);
                     if other != part { 
                         edge_weights[part as usize][other as usize] += weight;
-                        edge_weights[other as usize][part as usize] += weight;
                     }
                 }
             }

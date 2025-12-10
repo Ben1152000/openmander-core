@@ -14,7 +14,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 OPENMANDER_ROOT = SCRIPT_DIR.parent.parent
 
 # Build paths relative to the root
-BASE_PATH = OPENMANDER_ROOT / "packs"
+BASE_PATH = OPENMANDER_ROOT / "openmander-core" / "experiments" / "packs"
 SVG_PATH  = OPENMANDER_ROOT / "openmander-core" / "experiments" / "images"
 
 STATES = {
@@ -27,13 +27,18 @@ STATES = {
 }
 
 # Use New England states as lightweight test:
-STATES = { "MA": 9, "CT": 5, "ME": 2, "NH": 2, "RI": 2, "VT": 1 }
+# STATES = { "NY": 26, "MA": 9, "CT": 5, "ME": 2, "NH": 2, "RI": 2, "VT": 1 }
+
+STATES = { "NY" : 26 }
 
 # --- Worker function ---------------------------------------------------------
 
 def build_and_save_state(state: str, num_districts: int) -> str:
     print(f"[START] {state} ({num_districts} districts)")
+
     pack_path = os.path.join(BASE_PATH, f"{state}_2020_pack")
+    if not os.path.exists(pack_path):
+        pack_path = om.download_pack(state, str(BASE_PATH), verbose=1)
 
     mp = om.Map(pack_path)
     plan = om.Plan(mp, num_districts)
@@ -47,15 +52,15 @@ def build_and_save_state(state: str, num_districts: int) -> str:
             om.Metric.compactness_polsby_popper(),
         ], weights=[0.9, 0.1])
 
-        # plan.anneal(
-        #     objective=objective,
-        #     max_iter=2_000_000 * num_districts,
-        #     init_temp=1.0,
-        #     cooling_rate=0.000001 / num_districts,
-        #     early_stop_iters=10000,
-        #     window_size=1000,
-        #     log_every=1_000_000,
-        # )
+        plan.anneal(
+            objective=objective,
+            max_iter=2_000_000 * num_districts,
+            init_temp=1.0,
+            cooling_rate=0.000001 / num_districts,
+            early_stop_iters=10000,
+            window_size=1000,
+            log_every=1_000_000,
+        )
 
     svg_file = os.path.join(SVG_PATH, f"{state}.svg")
     plan.to_svg(svg_file)
@@ -66,11 +71,8 @@ def build_and_save_state(state: str, num_districts: int) -> str:
 
 # --- Main logic with Ctrl-C cancellation -------------------------------------
 
-def main() -> None:
-    os.makedirs(SVG_PATH, exist_ok=True)
-    total = len(STATES)
-
-    print(f"Starting redistricting for {total} states… (Ctrl-C to cancel)")
+def generate_svgs() -> None:
+    print(f"Starting redistricting for {len(STATES)} states… (Ctrl-C to cancel)")
 
     finished = 0
 
@@ -87,7 +89,7 @@ def main() -> None:
                 try:
                     fut.result()
                     finished += 1
-                    print(f"[PROGRESS] {finished}/{total} completed (last: {state})")
+                    print(f"[PROGRESS] {finished}/{len(STATES)} completed (last: {state})")
                 except Exception as e:
                     print(f"[ERROR] {state}: {e}")
 
@@ -104,13 +106,23 @@ def main() -> None:
             print("[EXIT] All worker processes were killed.")
             return  # Leave without merging
 
-    # If we reach here, everything completed successfully
-    print("Merging SVGs…")
-    svg_files = [os.path.join(SVG_PATH, f"{state}.svg") for state in STATES]
-    merged = merge_svgs_geo(svg_files, width=2400, margin=10)
-    out_path = os.path.join(SVG_PATH, "merged_conus.svg")
-    write_svg(merged, out_path)
-    print(f"[MERGED] {out_path}")
+
+def merge_svgs() -> None:
+    if len(STATES) > 1:
+        print("Merging SVGs…")
+
+        svg_files = [os.path.join(SVG_PATH, f"{state}.svg") for state in STATES]
+        merged = merge_svgs_geo(svg_files, width=2400, margin=10)
+        out_path = os.path.join(SVG_PATH, "merged_conus.svg")
+        write_svg(merged, out_path)
+        
+        print(f"[MERGED] {out_path}")
+
+
+def main() -> None:
+    os.makedirs(SVG_PATH, exist_ok=True)
+    generate_svgs()
+    merge_svgs()
 
 
 if __name__ == "__main__":

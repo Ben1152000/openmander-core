@@ -12,6 +12,7 @@
 # - TARGET passes --target to maturin (e.g., universal2-apple-darwin, x86_64-apple-darwin)
 #
 # This Makefile was generated using AI (use at your own risk)
+SHELL := /bin/bash
 
 # -------- configurable --------
 PY           ?= python3

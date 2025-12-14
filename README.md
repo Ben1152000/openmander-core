@@ -1,119 +1,106 @@
 # OpenMander
 
-A fast, memory-efficient redistricting toolchain in Rust.
+OpenMander is a fast, memory-efficient, research-oriented toolkit for computational redistricting, implemented in Rust with Python bindings. It supports large-scale, multi-objective redistricting experiments at census-block resolution, with a focus on incremental evaluation, contiguity-aware moves, and heuristic search.
 
-## Quickstart (CLI, Python, Rust)
+### Paper
 
-### Command-line interface
+> **OpenMander: A Multi-Objective Optimization Framework for Computational Redistricting**  
+> *Under submission.*  
+> Preprint: TBD
 
-Build & run:
-
-```bash
-# Build release binaries for the workspace
-cargo build --release
-
-# Fetch + prepare data (example: Iowa 2020)
-./target/release/openmander-cli download IA
-
-# Generate a plan (four districts with equal population)
-./target/release/openmander-cli redistrict IA_2020_pack -o IA_out.csv -d 4
-```
-
-Or directly via Cargo:
-
-```bash
-cargo run -p openmander-cli -- download IA
-cargo run -p openmander-cli -- redistrict IA_2020_pack -o IA_out.csv -d 4
-```
-
-Sample output:
-
-![Sample output](./sample.svg)
+## Quickstart (Python, Rust)
 
 ### Python
 
-Install using pip:
+Install from PyPi:
 
 ```bash
 python -m pip install openmander
 ```
 
-Or build and install the wheel locally (requires [maturin]):
+Or build locally from source (requires [maturin]):
 
 ```bash
-# from repo root
 python -m pip install -U maturin
 cd bindings/python
 maturin develop -r
 ```
 
-Use it:
+Example usage:
 
 ```python
 import openmander as om
 
-# Download state pack for Illinois
+# Download and prepare a state-level data pack (Illinois, 2020 census)
 pack_path = om.download("IL")
-IL_map = om.Map(pack_path)
-plan = om.Plan(IL_map, num_districts=17)
 
-# Generate a random configuration of 17 districts.
+# Load the map and initialize a 17-district plan
+mp = om.Map(pack_path)
+plan = om.Plan(mp, num_districts=17)
+
+# Generate a random initial plan
 plan.randomize()
 
-# Balance the total population of each district.
-plan.equalize("T_20_CENS_Total", tolerance=0.002, max_iter=1000)
+# Balance population across districts
+plan.equalize(
+    "T_20_CENS_Total",
+    tolerance=0.002,
+    max_iter=1000,
+)
 
-# Output the block assignments to a csv file.
-plan.to_csv("block-assign.csv")
+# Export block-level assignments
+plan.to_csv("block_assignments.csv")
 ```
 
-> Tip: if you prefer, `maturin build` then `pip install dist/openmander-*.whl`.
+The Python interface exposes high-level abstractions (`Map`, `Plan`, and optimization helpers) suitable for exploratory analysis, batch experiments, and integration with scientific Python tooling.
 
 ### Rust
 
-Add the crate and build a tiny program:
+Add OpenMander as a dependency:
 
 ```toml
-# Cargo.toml (your app)
+# Cargo.toml
 [dependencies]
 openmander = { git = "https://github.com/Ben1152000/openmander-core" }
 anyhow = "1"
 ```
 
+Minimal example:
+
 ```rust
-// src/main.rs
 use std::sync::Arc;
 use anyhow::Result;
 use openmander::{Map, Plan};
 
 fn main() -> Result<()> {
-    // Use a pack directory produced by the CLI "download" step (see CLI quickstart).
+    // Load a previously prepared data pack
     let map = Arc::new(Map::read_from_pack("IA_2020_pack")?);
 
-    // Create a 4-district plan, randomize, and save CSV
+    // Create a 4-district plan
     let mut plan = Plan::new(map, 4);
+
+    // Randomize and export assignments
     plan.randomize()?;
     plan.to_csv("plan.csv")?;
+
     Ok(())
 }
 ```
 
-Run it:
-
-```bash
-cargo run
-```
-
 ## Components
 
-* **Map**
-  A container of layers (state → county → tract → group → VTD → block).
-  Each `MapLayer` holds:
+### Map
 
-  * `geo_ids`, `index` (dense indices)
-  * attributes (tabular data)
-  * `adjacencies` + shared-perimeter weights (CSR)
-  * optional geometries (FlatGeobuf)
+A Map represents a multi-layer geographic dataset with explicit graph structure.
+Each map consists of ordered layers (e.g., state → county → tract → block), where each layer contains:
+
+* Dense node indices and stable geographic identifiers
+* Tabular attributes (e.g., census variables)
+* Adjacency graphs with optional shared-perimeter weights (CSR format)
+* Optional geometries (stored as FlatGeobuf)
+
+Maps are immutable after construction and shared across plans.
+
 * **Plan** (a.k.a. `GraphPartition`)
   A partition of the node graph into parts (districts):
 
@@ -123,18 +110,32 @@ cargo run
   * contiguity checks and articulation-aware moves
   * simulated annealing helpers (balance, optimize)
 
-## Pack layout (example)
+### Plan
+
+A Plan (internally a graph partition) assigns each node in a map layer to a district, and contains:
+
+* Incremental boundary tracking and per-district frontier sets
+* Per-district aggregate weights (WeightMatrix)
+* Fast contiguity checks and articulation-aware moves
+* Built-in local search helpers (randomization, balancing, optimization)
+
+Plans are designed to support heuristic search algorithms such as simulated annealing, tabu search, and beam search.
+
+### Data Packs
+
+OpenMander operates on preprocessed data packs, which bundle all required data for a state and census decade.
+
+Example layout:
 
 ```
 <STATE>_2020_pack/
   data/             # per-level attribute tables (parquet)
   adj/              # CSR graphs per level (*.csr.bin)
   geom/             # per-level FlatGeobuf (*.fgb)
+  hull/             # per-level convex hulls (*.fgb)
   manifest.json     # schema & provenance
 ```
 
 ## License
 
-TBD
-
-[maturin]: https://github.com/PyO3/maturin
+License: TBD

@@ -19,12 +19,12 @@ BASE_PATH = OPENMANDER_ROOT / "openmander-core" / "experiments" / "packs"
 SVG_PATH  = OPENMANDER_ROOT / "openmander-core" / "experiments" / "images"
 
 STATES = {
-    "CA": 52, "TX": 38, "FL": 28,  "PA": 17, "OH": 15, "GA": 14,
+    "CA": 52, "TX": 38, "FL": 28, "NY": 26, "IL": 17, "PA": 17, "OH": 15, "GA": 14,
     "NC": 14, "MI": 13, "NJ": 12, "VA": 11, "WA": 10, "AZ": 9, "IN": 9, "MA": 9,
     "TN": 9, "CO": 8, "MD": 8, "MN": 8, "MO": 8, "WI": 8, "AL": 7, "SC": 7,
     "KY": 6, "LA": 6, "OR": 6, "CT": 5, "OK": 5, "AR": 4, "IA": 4, "KS": 4,
     "MS": 4, "NV": 4, "UT": 4, "NE": 3, "NM": 3, "ID": 2, "ME": 2, "MT": 2,
-    "WV": 2, "DE": 1, "ND": 1, "SD": 1, "VT": 1, "WY": 1,
+    "NH": 2, "RI": 2, "WV": 2, "DE": 1, "ND": 1, "SD": 1, "VT": 1, "WY": 1,
 }
 
 # --- Worker function ---------------------------------------------------------
@@ -133,10 +133,10 @@ def merge_svgs() -> None:
 
 def main() -> None:
     os.makedirs(SVG_PATH, exist_ok=True)
-    generate_svgs(iteration=1, max_workers=4)
-    generate_svgs(iteration=2, max_workers=4)
-    generate_svgs(iteration=3, max_workers=4)
-    # merge_svgs()
+    # generate_svgs(iteration=1, max_workers=4)
+    # generate_svgs(iteration=2, max_workers=4)
+    # generate_svgs(iteration=3, max_workers=4)
+    merge_svgs()
 
 
 if __name__ == "__main__":

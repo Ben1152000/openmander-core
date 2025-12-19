@@ -111,7 +111,7 @@ impl MapLayer {
     #[inline] pub fn ty(&self) -> GeoType { self.ty }
 
     /// Set the geographic type of this layer (only used for building without vtds).
-    #[inline] pub(super) fn set_ty(&mut self, ty: GeoType) {
+    pub(super) fn set_ty(&mut self, ty: GeoType) {
         self.ty = ty;
         self.geo_ids = self.geo_ids.iter()
             .map(|geo_id| GeoId::new(ty, geo_id.id()))

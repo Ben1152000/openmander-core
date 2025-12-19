@@ -1,7 +1,8 @@
 use std::{io::Write, path::Path};
 
 use anyhow::{Context, Ok, Result, anyhow};
-use geo::{Coord};
+use geo::Coord;
+// use geo_traits::PointTrait;
 use polars::prelude::{ChunkAgg, DataType};
 
 use crate::{common, map::MapLayer};
@@ -61,6 +62,22 @@ impl MapLayer {
             .map(|(i, j)| (&centroids[i], &centroids[j]))
             .collect::<Vec<_>>();
         common::draw_edges(&mut writer, &edges, &project)?;
+
+        // // --- Draw a circle at each centroid (nodes), on top of edges ---
+        // // Radius is in screen pixels; tweak as desired.
+        // let node_radius = 50_f64;
+        // for point in &centroids {
+        //     let (x, y) = project(&point.coord().unwrap());
+        //     writeln!(
+        //         &mut writer,
+        //         r##"<circle cx="{:.3}" cy="{:.3}" r="{:.3}"
+        //             fill="#f4f4f4"
+        //             stroke="#000000"
+        //             stroke-width="2"
+        //         />"##,
+        //         x, y, node_radius
+        //     )?;
+        // }
 
         writer.write_footer()?;
         writer.flush()?;

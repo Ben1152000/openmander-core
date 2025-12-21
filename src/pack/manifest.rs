@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 use crate::map::GeoType;
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct FileHash {
+pub(crate) struct FileHash {
     pub sha256: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct Manifest {
+pub(crate) struct Manifest {
     pack_id: String,
     version: String,
     crs: String,
@@ -20,7 +20,7 @@ pub(super) struct Manifest {
 }
 
 impl Manifest {
-    pub(super) fn new(
+    pub(crate) fn new(
         path: &Path,
         counts: BTreeMap<&'static str, usize>,
         files: BTreeMap<String, FileHash>,

@@ -3,7 +3,7 @@ use std::{collections::{HashMap, HashSet}, io::Write, path::Path};
 use anyhow::{anyhow, Result};
 use geo::{Coord, CoordsIter, LineString, MultiPolygon};
 
-use crate::{common, map::GeoType, plan::Plan};
+use crate::{common, plan::Plan};
 
 impl Plan {
     /// Small wrapper with defaults.
@@ -12,8 +12,8 @@ impl Plan {
     }
 
     /// Draw dissolved districts using only frontier blocks + state boundary.
-    pub fn to_svg_with_size(&self, path: &Path, color_partisan: bool, width: i32, margin: i32) -> Result<()> {
-        let bounds = self.map().get_layer(GeoType::Block).bounds()
+    fn to_svg_with_size(&self, path: &Path, color_partisan: bool, width: i32, margin: i32) -> Result<()> {
+        let bounds = self.map().base()?.bounds()
             .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?;
 
         let margin = margin as f64;
@@ -31,7 +31,7 @@ impl Plan {
         // --- Precompute state outer boundary as a segment set ---
         // Build a set of undirected segments for the *outer* state boundary (all exteriors).
         let state_outline = {
-            let outline = self.map().get_layer(GeoType::State).union()
+            let outline = self.map().region()?.union()
                 .ok_or_else(|| anyhow!("[to_svg] No state geoms available"))?;
             
             let mut ptmap: HashMap<QuantizedPoint, Coord<f64>> = HashMap::new();
@@ -56,7 +56,7 @@ impl Plan {
                 let fill: String = if color_partisan {
                     common::partisan_color(self.partition.partisan_lean(part as u32, "E_20_PRES_Dem", "E_20_PRES_Rep")).to_string()
                 } else {
-                    let state_id = self.map().get_layer(GeoType::State).geo_ids()[0].id().parse::<usize>().expect("[Plan.to_svg] Couldn't determine state id.");
+                    let state_id = self.map().region()?.geo_ids()[0].id().parse::<usize>().expect("[Plan.to_svg] Couldn't determine state id.");
                     common::golden_angle_color((state_id + 1) * 100 + part).to_string()
                 };
 
@@ -75,10 +75,10 @@ impl Plan {
     /// Build dissolved boundary for district `d` using frontier blocks, immediate same-district neighbors,
     /// and segments on the state outer boundary.
     fn build_district_path_string(&self, d: u32, state_outline: &SegmentSet, project: &common::Projection) -> Result<Option<String>> {
-        let shapes = self.map().get_layer(GeoType::Block).shapes()
+        let shapes = self.map().base()?.shapes()
             .ok_or_else(|| anyhow!("[to_svg] No block geoms available"))?;
 
-        let adjacencies = self.map().get_layer(GeoType::Block).adjacencies();
+        let adjacencies = self.map().base()?.adjacencies();
 
         // 1) indices to process: frontier(d) + same-district neighbors + state-edge blocks
         let frontier = self.partition.frontier(d as u32);

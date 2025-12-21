@@ -15,7 +15,7 @@ impl MapLayer {
 
     /// Display the layer as an SVG file, including polygons and adjacency lines between centroids.
     /// If `series` is Some(col), polygons are colored by that numeric column.
-    pub fn to_svg_with_size(&self, path: &Path, width: i32, margin: i32, series: Option<&str>) -> Result<()> {
+    fn to_svg_with_size(&self, path: &Path, width: i32, margin: i32, series: Option<&str>) -> Result<()> {
         let geoms = self.geoms.as_ref()
             .ok_or_else(|| anyhow!("[to_svg] No geometries available to draw."))?;
 
@@ -88,7 +88,7 @@ impl MapLayer {
     /// Compute a choropleth color for each row based on a numeric column.
     /// Returns one hex color string per geometry.
     fn compute_fill_colors(&self, series: &str) -> Result<Vec<String>> {
-        let column = self.data.column(series)
+        let column = self.unit_data.column(series)
             .with_context(|| format!("[to_svg] missing column {:?}", series))?;
 
         // Cast to f64 if necessary

@@ -14,7 +14,7 @@ impl Plan {
             .finish()
             .with_context(|| format!("[Plan.from_csv] Failed to read CSV file: {}", csv_path.display()))?;
 
-        let block_layer = self.map().get_layer(GeoType::Block);
+        let block_layer = self.map().base()?;
 
         // Ensure CSV has at the correct number of rows and columns.
         ensure!(df.width() >= 2, "[Plan.from_csv] CSV file must have two columns: geo_id,district");

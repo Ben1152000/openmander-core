@@ -42,9 +42,9 @@ impl MapLayer {
         let geom_path = path.join(format!("geom/{layer_name}.geoparquet"));
         let hull_path = path.join(format!("hull/{layer_name}.geoparquet"));
 
-        (self.data, self.parents) = self.unpack_data(common::read_from_parquet(&data_path)?)?;
+        (self.unit_data, self.parents) = self.unpack_data(common::read_from_parquet(&data_path)?)?;
 
-        self.geo_ids = self.data.column("geo_id")?.str()?
+        self.geo_ids = self.unit_data.column("geo_id")?.str()?
             .into_no_null_iter()
             .map(|val| GeoId::new(self.ty(), val))
             .collect();
@@ -85,8 +85,11 @@ impl Map {
         common::require_dir_exists(path)?;
 
         let mut map = Self::default();
-        for layer in map.get_layers_mut() {
+
+        for ty in GeoType::ALL {
+            let mut layer = MapLayer::new(ty);
             layer.read_from_pack(path)?;
+            map.insert(layer);
         }
 
         Ok(map)

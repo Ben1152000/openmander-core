@@ -1,32 +1,32 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    graph::{Graph, WeightMatrix},
+    graph::{WeightedGraph, WeightMatrix},
     partition::{MultiSet, PartitionSet},
 };
 
 /// A partition of a graph into contiguous parts (districts).
 #[derive(Clone, Debug)]
 pub(crate) struct Partition {
-    pub(super) parts: PartitionSet,  // Sets of nodes in each part (including unassigned 0)
-    pub(super) frontiers: MultiSet,  // Nodes on the boundary of each part
-    pub(super) part_graph: Graph,    // Graph structure for parts (including aggregated weights)
-    unit_graph: Arc<Graph>,          // Reference to graph of basic units (census block)
-    region_graph: Arc<Graph>,        // Reference to full region graph (state)
+    pub(super) parts: PartitionSet,          // Sets of nodes in each part (including unassigned 0)
+    pub(super) frontiers: MultiSet,          // Nodes on the boundary of each part
+    pub(super) part_graph: WeightedGraph,    // Graph structure for parts (including aggregated weights)
+    unit_graph: Arc<WeightedGraph>,          // Reference to graph of basic units (census block)
+    region_graph: Arc<WeightedGraph>,        // Reference to full region graph (state)
 }
 
 impl Partition {
     /// Construct an empty partition from a weighted graph reference and number of parts.
-    pub(crate) fn new(num_parts: usize, unit_graph: impl Into<Arc<Graph>>, region_graph: impl Into<Arc<Graph>>) -> Self {
+    pub(crate) fn new(num_parts: usize, unit_graph: impl Into<Arc<WeightedGraph>>, region_graph: impl Into<Arc<WeightedGraph>>) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
-        let unit_graph: Arc<Graph> = unit_graph.into();
-        let region_graph: Arc<Graph> = region_graph.into();
+        let unit_graph: Arc<WeightedGraph> = unit_graph.into();
+        let region_graph: Arc<WeightedGraph> = region_graph.into();
 
         let mut part_weights = unit_graph.node_weights().copy_of_size(num_parts);
         part_weights.set_row_to_sum_of(0, unit_graph.node_weights());
 
         // Instantiate graph with a zero-length edge between each part (to be updated later).
-        let part_graph = Graph::new(
+        let part_graph = WeightedGraph::new(
             num_parts,
             &vec![(0..num_parts as u32).collect::<Vec<_>>(); num_parts],
             &vec![vec![0.0; num_parts]; num_parts],
@@ -53,7 +53,7 @@ impl Partition {
     pub(crate) fn series(&self) -> HashSet<String> { self.unit_graph.node_weights().series() }
 
     /// Get a reference to the underlying graph.
-    pub(super) fn graph(&self) -> &Graph { &self.unit_graph }
+    pub(super) fn graph(&self) -> &WeightedGraph { &self.unit_graph }
 
     /// Get the part assignment of a given node.
     pub(crate) fn assignment(&self, node: usize) -> u32 { self.parts.find(node) as u32 }
@@ -126,7 +126,7 @@ impl Partition {
         }
 
         // Rebuild part graph.
-        self.part_graph = Graph::new(
+        self.part_graph = WeightedGraph::new(
             self.num_parts() as usize,
             &vec![(0..self.num_parts()).collect::<Vec<_>>(); self.num_parts() as usize],
             &edge_weights,

@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, sync::Arc};
 
 use anyhow::{ensure, Ok, Result};
 
-use crate::{Metric, Objective, map::{GeoId, GeoType, Map}, partition::Partition};
+use crate::{Metric, Objective, map::{GeoId, Map}, partition::Partition};
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Clone, Debug)]
@@ -14,15 +14,15 @@ pub struct Plan {
 
 impl Plan {
     /// Create a new empty plan with a set number of districts.
-    pub fn new(map: impl Into<Arc<Map>>, num_districts: u32) -> Self {
+    pub fn new(map: impl Into<Arc<Map>>, num_districts: u32) -> Result<Self> {
         let map: Arc<Map> = map.into();
         let partition = Partition::new(
             num_districts as usize + 1,
-            map.get_layer(GeoType::Block).graph_handle(),
-            map.get_layer(GeoType::State).graph_handle(),
+            map.base()?.get_graph_ref(),
+            map.region()?.get_graph_ref(),
         );
 
-        Self { map, num_districts, partition }
+        Ok(Self { map, num_districts, partition })
     }
 
     /// Get a immutable reference to the map.
@@ -39,7 +39,7 @@ impl Plan {
     pub fn set_assignments(&mut self, assignments: HashMap<GeoId, u32>) -> Result<()> {
         // map the list of geo_ids to their value in assignments, using 0 if not found
         self.partition.set_assignments(
-            self.map.get_layer(GeoType::Block).geo_ids().iter()
+            self.map.base()?.geo_ids().iter()
                 .map(|geo_id| assignments.get(geo_id).copied().unwrap_or(0))
                 .collect()
         );
@@ -50,7 +50,7 @@ impl Plan {
     /// Get the block assignments for the plan.
     #[inline]
     pub fn get_assignments(&self) -> Result<HashMap<GeoId, u32>> {
-        let assignments = self.map.get_layer(GeoType::Block).index().clone().into_iter()
+        let assignments = self.map.base()?.index().clone().into_iter()
             .map(|(geo_id, i)| (geo_id, self.partition.assignment(i as usize)))
             .collect();
 

@@ -44,7 +44,8 @@ impl Map {
             ))
         })?;
 
-        self.inner.as_ref().get_layer(ty)
+        self.inner.as_ref().layer(ty)
+            .ok_or_else(|| PyValueError::new_err(format!("Layer {:?} is not present in this map/pack.", layer)))?
             .to_svg(&std::path::PathBuf::from(path), series)
             .map_err(|e| PyValueError::new_err(e.to_string()))
     }

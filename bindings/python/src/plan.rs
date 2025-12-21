@@ -21,7 +21,8 @@ impl Plan {
     #[new]
     pub fn new(py: Python<'_>, map: Py<Map>, num_districts: u32) -> PyResult<Self> {
         let arc = map.borrow(py).inner_arc();
-        Ok(Self { inner: openmander_core::Plan::new(arc, num_districts) })
+        Ok(Self { inner: openmander_core::Plan::new(arc, num_districts)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))? })
     }
 
     /// Get the number of districts in this plan (excluding unassigned 0).

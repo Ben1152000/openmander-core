@@ -1,10 +1,10 @@
 use geo::Polygon;
 
-use crate::graph::WeightMatrix;
+use crate::{graph::WeightMatrix};
 
 /// A weighted, undirected graph in compressed sparse row format.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Graph {
+pub(crate) struct WeightedGraph {
     size: usize,
     offsets: Vec<u32>,
     edges: Vec<u32>,
@@ -13,7 +13,7 @@ pub(crate) struct Graph {
     hulls: Vec<Polygon<f64>>,
 }
 
-impl Graph {
+impl WeightedGraph {
     /// Construct a graph from adjacency lists and node weights.
     pub(crate) fn new(
         num_nodes: usize,
@@ -94,8 +94,8 @@ impl Graph {
 mod tests {
     use super::*;
 
-    fn make_test_graph() -> Graph {
-        Graph::new(
+    fn make_test_graph() -> WeightedGraph {
+        WeightedGraph::new(
             4,
             &[
                 vec![1, 2],       // 0
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn empty_graph_is_valid() {
-        let graph = Graph::new(
+        let graph = WeightedGraph::new(
             0,
             &[],
             &[],
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn isolated_nodes_have_zero_degree_and_no_edges() {
-        let graph = Graph::new(
+        let graph = WeightedGraph::new(
             3,
             &[vec![], vec![], vec![]],
             &[vec![], vec![], vec![]],
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "edges.len() must equal num_nodes")]
     fn new_panics_when_edges_len_mismatch() {
-        Graph::new(
+        WeightedGraph::new(
             0,
             &[vec![]],
             &[],
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "edge_weights.len() must equal num_nodes")]
     fn new_panics_when_edge_weights_len_mismatch() {
-        Graph::new(
+        WeightedGraph::new(
             0,
             &[],
             &[vec![]],
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "edges[0].len() must equal edge_weights[0].len()")]
     fn new_panics_when_per_node_len_mismatch() {
-        let _ = Graph::new(
+        let _ = WeightedGraph::new(
             2,
             &[vec![1], vec![]],
             &[vec![], vec![]],

@@ -4,7 +4,7 @@ use anyhow::{Context, Ok, Result};
 use geo::MultiPolygon;
 use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
 
-use crate::{common, map::{pack::{FileHash, Manifest}, GeoType, Map, MapLayer, ParentRefs}};
+use crate::{common, map::{GeoType, Map, MapLayer, ParentRefs}, pack::{FileHash, Manifest}};
 
 impl MapLayer {
     /// Prepare entity data (with parent refs) for writing to a parquet file.
@@ -25,7 +25,7 @@ impl MapLayer {
             "parent_vtd" => get_parents(&self.parents, GeoType::VTD),
         ]?;
 
-        Ok(self.data
+        Ok(self.unit_data
             .inner_join(&parents_df, ["geo_id"], ["geo_id"])
             .context("inner_join on 'geo_id' failed when preparing parquet")?)
     }
@@ -83,7 +83,7 @@ impl Map {
         let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
 
-        for layer in self.get_layers() {
+        for layer in self.layers_iter() {
             layer.write_to_pack(path, &mut counts, &mut file_hashes)?;
         }
 

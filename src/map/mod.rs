@@ -3,7 +3,6 @@ mod geo_ty;
 mod io;
 mod layer;
 mod map;
-mod pack;
 mod parent;
 
 pub use geo_id::GeoId;

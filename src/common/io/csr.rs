@@ -1,87 +1,43 @@
-use std::{fs::File, io::{BufReader, BufWriter, Read, Write}, path::Path};
+use std::{fs::File, io::{BufReader, BufWriter, Cursor, Read, Write}, path::Path};
 
 use anyhow::{Context, Result, ensure};
 
-/// Write adjacency list to a simple CSR binary file.
-/// Layout: "CSR1" | n(u64) | nnz(u64) | indptr[u64; n+1] | indices[u32; nnz]
-pub(crate) fn _write_to_adjacency_csr(path: &Path, adj_list: &Vec<Vec<u32>>) -> Result<()> {
-    let n = adj_list.len();
-
-    // Build indptr (prefix sums) and count nnz
-    let mut indptr: Vec<u64> = Vec::with_capacity(n + 1);
-    indptr.push(0);
-    let mut nnz: u64 = 0;
-    for row in adj_list {
-        nnz += row.len() as u64;
-        indptr.push(nnz);
-    }
-
-    let mut writer = BufWriter::new(File::create(path)?);
-
-    // Header
-    writer.write_all(b"CSR1")?;
-    writer.write_all(&(n as u64).to_le_bytes())?;
-    writer.write_all(&nnz.to_le_bytes())?;
-
-    // indptr
-    for &o in &indptr {
-        writer.write_all(&o.to_le_bytes())?;
-    }
-
-    // indices (flattened)
-    for row in adj_list {
-        for &j in row {
-            writer.write_all(&j.to_le_bytes())?;
-        }
-    }
-
+/// Write weighted adjacency list to a CSR binary file.
+pub(crate) fn write_to_weighted_csr_file(path: &Path, adjacencies: &[Vec<u32>], weights: &[Vec<f64>]) -> Result<()> {
+    let file = File::create(path)
+        .with_context(|| format!("Failed to create csr file: {}", path.display()))?;
+    let mut writer = BufWriter::new(file);
+    write_to_weighted_csr(&mut writer, adjacencies, weights)?;
     writer.flush()?;
     Ok(())
 }
 
-/// Read adjacency from a CSR binary file written by `write_adjacency_csr`.
-pub(crate) fn _read_from_adjacency_csr(path: &Path) -> Result<Vec<Vec<u32>>> {
+/// Read weighted adjacency from a CSR binary file written by `write_to_weighted_csr`.
+pub(crate) fn read_from_weighted_csr_file(path: &Path) -> Result<(Vec<Vec<u32>>, Vec<Vec<f64>>)> {
     let file = File::open(path)
         .with_context(|| format!("Failed to read csr file: {}", path.display()))?;
     let mut reader = BufReader::new(file);
-
-    // Header
-    let mut magic = [0u8; 4];
-    reader.read_exact(&mut magic)?;
-    ensure!(&magic == b"CSR1", "Invalid CSR magic: expected 'CSR1'");
-
-    let mut buf8 = [0u8; 8];
-    reader.read_exact(&mut buf8)?;
-    let n = u64::from_le_bytes(buf8) as usize;
-
-    reader.read_exact(&mut buf8)?;
-    let nnz_hdr = u64::from_le_bytes(buf8) as usize;
-
-    // indptr
-    let mut indptr = vec![0u64; n + 1];
-    for i in 0..=n {
-        reader.read_exact(&mut buf8)?;
-        indptr[i] = u64::from_le_bytes(buf8);
-    }
-
-    let nnz = indptr[n] as usize;
-    ensure!(nnz == nnz_hdr, "CSR nnz mismatch: header {} vs indptr {}", nnz_hdr, nnz);
-
-    // indices
-    let mut indices = vec![0u32; nnz];
-    for i in 0..nnz {
-        let mut b4 = [0u8; 4];
-        reader.read_exact(&mut b4)?;
-        indices[i] = u32::from_le_bytes(b4);
-    }
-
-    Ok((0..n).map(|i| indices[indptr[i] as usize..indptr[i + 1] as usize].to_vec()).collect())
+    read_from_weighted_csr(&mut reader)
 }
 
-/// Write weighted adjacency list to a CSR binary file.
-pub(crate) fn write_to_weighted_csr(path: &Path, adjacencies: &[Vec<u32>], weights: &[Vec<f64>]) -> Result<()> {
-    // let n = adjacencies.len();
-    ensure!(weights.len() == adjacencies.len(), "weights len ({}) != adj_list len ({})", weights.len(), adjacencies.len());
+pub(crate) fn write_to_weighted_csr_bytes(adjacencies: &Vec<Vec<u32>>, weights: &Vec<Vec<f64>>) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    write_to_weighted_csr(&mut out, adjacencies, weights)?;
+    Ok(out)
+}
+
+pub(crate) fn read_from_weighted_csr_bytes(bytes: &[u8]) -> Result<(Vec<Vec<u32>>, Vec<Vec<f64>>)> {
+    let mut reader = Cursor::new(bytes);
+    read_from_weighted_csr(&mut reader)
+}
+
+fn write_to_weighted_csr<W: Write>(writer: &mut W, adjacencies: &[Vec<u32>], weights: &[Vec<f64>]) -> Result<()> {
+    ensure!(
+        weights.len() == adjacencies.len(),
+        "weights len ({}) != adj_list len ({})",
+        weights.len(),
+        adjacencies.len()
+    );
 
     // Validate row shapes and build prefix sums
     let mut indptr: Vec<u64> = Vec::with_capacity(adjacencies.len() + 1);
@@ -92,8 +48,6 @@ pub(crate) fn write_to_weighted_csr(path: &Path, adjacencies: &[Vec<u32>], weigh
         nnz += nbrs.len() as u64;
         indptr.push(nnz);
     }
-
-    let mut writer = BufWriter::new(File::create(path)?);
 
     // Header
     writer.write_all(b"CSRW")?;
@@ -119,16 +73,10 @@ pub(crate) fn write_to_weighted_csr(path: &Path, adjacencies: &[Vec<u32>], weigh
         }
     }
 
-    writer.flush()?;
     Ok(())
 }
 
-/// Read weighted adjacency from a CSR binary file written by `write_weighted_csr`.
-pub(crate) fn read_from_weighted_csr(path: &Path) -> Result<(Vec<Vec<u32>>, Vec<Vec<f64>>)> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to read csr file: {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-
+fn read_from_weighted_csr<R: Read>(reader: &mut R) -> Result<(Vec<Vec<u32>>, Vec<Vec<f64>>)> {
     // Header
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;

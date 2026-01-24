@@ -282,6 +282,7 @@ impl MapLayer {
 
 impl Map {
     /// Aggregate a DataFrame from a child layer to a parent layer.
+    #[cfg(feature = "download")]
     fn aggregate_data(&self, df: &DataFrame, id_col: &str, ty: GeoType, parent_ty: GeoType) -> Result<DataFrame> {
         let layer = self.layer(ty)
             .ok_or_else(|| anyhow!("[Map.aggregate_data] Missing layer {:?}", ty))?;
@@ -314,6 +315,7 @@ impl Map {
     }
 
     /// Merge block-level data into a given dataframe, aggregating on id_col.
+    #[cfg(feature = "download")]
     fn merge_block_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
         for &ty in GeoType::ALL.iter().filter(|&&ty| ty != GeoType::Block) {
             let aggregated = self.aggregate_data(&df, id_col, GeoType::Block, ty)?;
@@ -364,6 +366,7 @@ impl Map {
     }
 
     /// Build a map pack from the download files in `input_dir`
+    #[cfg(feature = "download")]
     pub(crate) fn build_pack(input_dir: &Path, state_code: &str, fips: &str, has_vtd: bool, verbose: u8) -> Result<Self> {
         common::require_dir_exists(input_dir)?;
 

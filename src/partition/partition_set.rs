@@ -1,8 +1,9 @@
 /// PartitionSet maintains a total assignment of elements to sets, with O(1) move/contains
 #[derive(Debug, Clone)]
 pub(super) struct PartitionSet {
-    sets: Vec<Vec<usize>>,      // sets[s] = elements currently in set s
-    index: Vec<(usize, usize)>, // index[e] = (set, pos) if e is in sets[set][pos]
+    sets: Vec<Vec<usize>>,  // sets[s] = elements currently in set s
+    index: Vec<usize>,      // index[e] = s when e is in sets[s]
+    position: Vec<usize>    // position[e] = i when sets[s][i] is e
 }
 
 impl PartitionSet {
@@ -16,11 +17,10 @@ impl PartitionSet {
             .collect::<Vec<_>>();
         sets[0] = (0..num_elems).collect();
 
-        let index = (0..num_elems)
-            .map(|elem| (0, elem))
-            .collect();
+        let index = vec![0; num_elems];
+        let position = (0..num_elems).collect();
 
-        Self { sets, index }
+        Self { sets, index, position }
     }
 
     /// Number of sets.
@@ -33,7 +33,7 @@ impl PartitionSet {
     #[inline]
     pub fn find(&self, elem: usize) -> usize {
         debug_assert!(elem < self.index.len(), "element out of range");
-        self.index[elem].0
+        self.index[elem]
     }
 
     /// Returns a reference to the elements currently in `set`.
@@ -44,10 +44,7 @@ impl PartitionSet {
     }
 
     /// Get a complete vector of assignments for each element.
-    #[inline]
-    pub fn assignments(&self) -> Vec<usize> {
-        self.index.iter().map(|&(set, _)| set).collect()
-    }
+    #[inline] pub fn assignments(&self) -> &[usize] { &self.index }
 
     /// Iterator over each set as a slice.
     #[inline]
@@ -65,7 +62,8 @@ impl PartitionSet {
     pub(super) fn clear(&mut self) {
         self.sets.iter_mut().for_each(|v| v.clear());
         self.sets[0] = (0..self.num_elems()).collect();
-        self.index = (0..self.num_elems()).map(|elem| (0, elem)).collect();
+        self.index = vec![0; self.num_elems()];
+        self.position = (0..self.num_elems()).collect();
     }
 
     /// Rebuild partition from a complete slice of assignments.
@@ -75,7 +73,8 @@ impl PartitionSet {
         self.sets.iter_mut().for_each(|v| v.clear());
         for (elem, &set) in assignments.iter().enumerate() {
             assert!(set < self.num_sets(), "set out of range");
-            self.index[elem] = (set, self.sets[set].len());
+            self.index[elem] = set;
+            self.position[elem] = self.sets[set].len();
             self.sets[set].push(elem);
         }
     }
@@ -85,18 +84,19 @@ impl PartitionSet {
         debug_assert!(elem < self.index.len(), "element out of range");
         debug_assert!(set < self.sets.len(), "set out of range");
 
-        let (prev, pos) = self.index[elem];
+        let (prev, pos) = (self.index[elem], self.position[elem]);
         if prev == set { return }
 
         // Remove from previous set by swapping with last element.
         let last_elem = self.sets[prev].pop().unwrap();
         if last_elem != elem {
             self.sets[prev][pos] = last_elem;
-            self.index[last_elem].1 = pos;
+            self.position[last_elem] = pos;
         }
 
         // Add to new set.
-        self.index[elem] = (set, self.sets[set].len());
+        self.index[elem] = set;
+        self.position[elem] = self.sets[set].len();
         self.sets[set].push(elem);
     }
 }

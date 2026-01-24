@@ -1,4 +1,4 @@
-use std::{fs::{File, create_dir_all}, io::{Read}, path::Path};
+use std::{fs::{File, create_dir_all}, io::Read, path::Path};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use sha2::{Digest, Sha256};
@@ -51,6 +51,7 @@ pub(crate) fn extract_zip(zip_path: &Path, dest_dir: &Path, delete_after: bool) 
 }
 
 /// Computes the SHA-256 hash of a file located at `root/rel_path`.
+#[allow(unused)]
 pub(crate) fn sha256_file(rel_path: &str, root: &Path) -> Result<(String, String)> {
     let full = root.join(rel_path);
     let mut file = File::open(&full)
@@ -59,11 +60,16 @@ pub(crate) fn sha256_file(rel_path: &str, root: &Path) -> Result<(String, String
     let mut buf = [0u8; 1 << 16];
     loop {
         let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
+        if n == 0 { break }
         hasher.update(&buf[..n]);
     }
     let hex = hex::encode(hasher.finalize());
+
     Ok((rel_path.to_string(), hex))
+}
+
+pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
 }

@@ -43,6 +43,15 @@ impl Geometries {
         self.rtree.locate_in_envelope_intersecting(envelope)
     }
 
+    /// Query the R-tree for indices of features intersecting the given envelope.
+    /// Returns a vector of indices into the shapes array.
+    #[inline]
+    pub(crate) fn query_indices(&self, envelope: &AABB<[f64; 2]>) -> Vec<usize> {
+        self.rtree.locate_in_envelope_intersecting(envelope)
+            .map(|bbox| bbox.idx())
+            .collect()
+    }
+
     /// Compute the bounding rectangle of all MultiPolygons.
     #[inline]
     pub(crate) fn bounds(&self) -> Option<Rect<f64>> {

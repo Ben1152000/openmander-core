@@ -2,10 +2,14 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::{common, map::Map, pack::{clean::cleanup_download_dir, download::download_data}};
+use crate::{common, map::Map};
+
+#[cfg(feature = "download")]
+use crate::pack::utils::{cleanup_download_dir, download_data};
 
 /// Download data files for a state, build the map pack, and write it to a new directory in `path`.
 /// Returns the path to the new pack directory.
+#[cfg(feature = "download")]
 pub fn build_pack(state_code: &str, path: &PathBuf, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
     let state_code = state_code.to_ascii_uppercase();
     common::require_dir_exists(&path)?;
@@ -21,7 +25,6 @@ pub fn build_pack(state_code: &str, path: &PathBuf, has_vtd: bool, verbose: u8) 
 
     let map = Map::build_pack(&download_dir, &state_code, fips, has_vtd, verbose)?;
     if verbose > 0 { eprintln!("Built pack for {state_code}"); }
-
     map.write_to_pack( &pack_dir)?;
     if verbose > 0 { eprintln!("Wrote pack to {}", pack_dir.display()); }
 
@@ -34,6 +37,7 @@ pub fn build_pack(state_code: &str, path: &PathBuf, has_vtd: bool, verbose: u8) 
 /// Falls back to building the pack locally if no prebuilt pack is available.
 /// `include_geoms` controls whether geometries are included in the download.
 /// Returns the path to the downloaded pack directory.
+#[cfg(feature = "download")]
 pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<PathBuf> {
     let state_code = state_code.to_ascii_uppercase();
     common::require_dir_exists(&path)?;

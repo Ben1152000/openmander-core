@@ -13,6 +13,63 @@ impl MapLayer {
         self.to_svg_with_size(path, 1200, 10, series)
     }
 
+    /// Generate SVG as a string (for browser/WASM use).
+    pub fn to_svg_string(&self, series: Option<&str>) -> Result<String> {
+        self.to_svg_string_with_size(1200, 10, series)
+    }
+
+    fn to_svg_string_with_size(&self, width: i32, margin: i32, series: Option<&str>) -> Result<String> {
+        let geoms = self.geoms.as_ref()
+            .ok_or_else(|| anyhow!("[to_svg_string] No geometries available to draw."))?;
+
+        let bounds = geoms.bounds()
+            .ok_or_else(|| anyhow!("[to_svg_string] Could not determine bounds; nothing to draw."))?;
+
+        let centroids = self.centroids();
+
+        let margin = margin as f64;
+        let width = width as f64;
+        let scale = (width - 2.0 * margin) / bounds.width();
+        let height = bounds.height() * scale + 2.0 * margin;
+
+        // --- Map lon/lat -> SVG coords (preserve aspect, Y down) ---
+        let project = move |coord: &Coord<f64>| -> (f64, f64) {
+            let x = margin + (coord.x - bounds.min().x) * scale;
+            let y = margin + (bounds.max().y - coord.y) * scale; // invert vertically
+            (x, y)
+        };
+
+        // --- Write SVG to string ---
+        let mut writer = common::SvgStringWriter::new();
+        writer.write_header(width, height, margin, scale, &bounds)?;
+        writer.write_styles()?;
+
+        // Compute colors if necessary.
+        if let Some(series) = series {
+            common::draw_polygons_with_fill(
+                &mut writer,
+                geoms.shapes(),
+                &self.compute_fill_colors(series)?,
+                &project,
+            )?;
+        } else {
+            common::draw_polygons(&mut writer, geoms.shapes(), &project)?;
+        }
+
+        // Draw adjacency lines between centroids
+        let edges = self.adjacencies.iter().enumerate()
+            .flat_map(|(i, neighbors)| {
+                neighbors.iter()
+                    .filter_map(move |&j| ((j as usize) > i).then_some((i, j as usize))) // avoid duplicate edges
+            })
+            .map(|(i, j)| (&centroids[i], &centroids[j]))
+            .collect::<Vec<_>>();
+        common::draw_edges(&mut writer, &edges, &project)?;
+
+        writer.write_footer()?;
+        writer.into_string()
+    }
+
     /// Display the layer as an SVG file, including polygons and adjacency lines between centroids.
     /// If `series` is Some(col), polygons are colored by that numeric column.
     fn to_svg_with_size(&self, path: &Path, width: i32, margin: i32, series: Option<&str>) -> Result<()> {

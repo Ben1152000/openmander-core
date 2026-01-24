@@ -57,6 +57,21 @@ impl Plan {
         Ok(assignments)
     }
 
+    /// Get assignments as a vector of district IDs (index-based, for efficient WASM bindings).
+    /// Returns a vector where index corresponds to node index in the base layer.
+    #[inline]
+    pub fn get_assignments_vec(&self) -> Result<Vec<u32>> {
+        Ok(self.partition.assignments())
+    }
+
+    /// Set assignments from a vector of district IDs (index-based, for efficient WASM bindings).
+    /// The vector length must match the number of nodes in the base layer.
+    #[inline]
+    pub fn set_assignments_vec(&mut self, assignments: Vec<u32>) -> Result<()> {
+        self.partition.set_assignments(assignments);
+        Ok(())
+    }
+
     /// Sum of a given series for each district (including unassigned 0).
     #[inline]
     pub fn district_totals(&self, series: &str) -> Result<Vec<f64>> {
@@ -69,22 +84,28 @@ impl Plan {
     }
 
     /// Compute a given metric for the current partition (per-district scores).
+    #[inline]
     pub fn compute_metric(&self, metric: &Metric) -> Vec<f64> {
         metric.compute(&self.partition)
     }
 
     /// Compute the aggregated score for a given metric for the current partition.
+    #[inline]
     pub fn compute_metric_score(&self, metric: &Metric) -> f64 {
         metric.compute_score(&self.partition)
     }
 
     /// Compute the objective value for the current partition.
+    #[inline]
     pub fn compute_objective(&self, objective: &Objective) -> f64 {
         objective.compute(&self.partition)
     }
 
     /// Randomly assign all blocks to contiguous districts.
-    #[inline] pub fn randomize(&mut self) -> Result<()> { Ok(self.partition.randomize()) }
+    #[inline]
+    pub fn randomize(&mut self) -> Result<()> {
+        Ok(self.partition.randomize())
+    }
 
     /// Equalize total weights across all districts using greedy swaps.
     #[inline]

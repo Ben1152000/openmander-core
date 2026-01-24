@@ -18,4 +18,8 @@ pub use plan::{Plan};
 pub use objective::{Metric, Objective};
 
 #[doc(inline)]
-pub use pack::{build_pack, download_pack, validate_pack};
+#[cfg(feature = "download")]
+pub use pack::{build_pack, download_pack};
+
+#[doc(inline)]
+pub use pack::{PackSource, PackSink, DiskPack, MemPack, PackFormat, validate_pack};

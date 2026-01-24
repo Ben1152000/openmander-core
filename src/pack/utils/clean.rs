@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 /// Delete the `download/` directory (and all its contents) under `out_dir`.
-pub(super) fn cleanup_download_dir(pack_dir: &Path, verbose: u8) -> Result<()> {
+pub(crate) fn cleanup_download_dir(pack_dir: &Path, verbose: u8) -> Result<()> {
     let download_dir = pack_dir.join("download");
 
     if !download_dir.exists() {

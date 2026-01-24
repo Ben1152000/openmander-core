@@ -23,6 +23,56 @@ impl Map {
         Ok(Self { inner: Arc::new(map) })
     }
 
+    /// Read a map from a pack directory, optionally specifying format.
+    ///
+    /// Parameters
+    /// ----------
+    /// pack_dir : str
+    ///     Path to the pack directory.
+    /// format : str, optional
+    ///     Pack format: "parquet" or "json". If None, auto-detects from files.
+    #[pyo3(signature = (pack_dir, format=None))]
+    #[classmethod]
+    pub fn from_pack(_cls: &pyo3::types::PyType, pack_dir: &str, format: Option<&str>) -> PyResult<Self> {
+        use std::str::FromStr;
+        let path = std::path::PathBuf::from(pack_dir);
+        let map = if let Some(fmt_str) = format {
+            let fmt = openmander_core::PackFormat::from_str(fmt_str)
+                .map_err(|e| PyValueError::new_err(format!("Invalid format: {}. Expected 'parquet' or 'json'", e)))?;
+            let src = openmander_core::DiskPack::new(&path);
+            openmander_core::Map::read_from_pack_source(&src, fmt)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?
+        } else {
+            openmander_core::Map::read_from_pack(&path)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?
+        };
+        Ok(Self { inner: Arc::new(map) })
+    }
+
+    /// Write the map to a pack directory.
+    ///
+    /// Parameters
+    /// ----------
+    /// pack_dir : str
+    ///     Path to the output pack directory.
+    /// format : str, optional
+    ///     Pack format: "parquet" or "json". Defaults to parquet if available, otherwise json.
+    #[pyo3(signature = (pack_dir, format=None))]
+    pub fn to_pack(&self, pack_dir: &str, format: Option<&str>) -> PyResult<()> {
+        use std::str::FromStr;
+        let path = std::path::PathBuf::from(pack_dir);
+        if let Some(fmt_str) = format {
+            let fmt = openmander_core::PackFormat::from_str(fmt_str)
+                .map_err(|e| PyValueError::new_err(format!("Invalid format: {}. Expected 'parquet' or 'json'", e)))?;
+            self.inner.write_to_pack_with_format(&path, fmt)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        } else {
+            self.inner.write_to_pack(&path)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Write an SVG for a given layer.
     ///
     /// Parameters

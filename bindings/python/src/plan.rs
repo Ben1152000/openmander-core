@@ -218,13 +218,13 @@ impl Plan {
 
     /// Load assignments from a CSV path (same validation as Rust `load_csv`)
     pub fn load_csv(&mut self, path: &str) -> PyResult<()> {
-        self.inner.load_csv(&PathBuf::from(path))
+        self.inner.read_from_csv(&PathBuf::from(path))
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     /// Save plan to CSV at the given path (non-zero assignments only)
     pub fn to_csv(&self, path: &str) -> PyResult<()> {
-        self.inner.to_csv(&PathBuf::from(path))
+        self.inner.write_to_csv(&PathBuf::from(path))
             .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 

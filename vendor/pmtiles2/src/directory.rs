@@ -1,0 +1,405 @@
+use duplicate::duplicate_item;
+use integer_encoding::{VarIntReader, VarIntWriter};
+use std::io::{Read, Result, Write};
+use std::ops::{Index, IndexMut, Range};
+use std::slice::{Iter, SliceIndex};
+
+#[cfg(feature = "async")]
+use futures::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(feature = "async")]
+use integer_encoding::{VarIntAsyncReader, VarIntAsyncWriter};
+
+use crate::util::{compress, decompress};
+#[cfg(feature = "async")]
+use crate::util::{compress_async, decompress_async};
+use crate::Compression;
+
+/// A structure representing a directory entry.
+///
+/// A entry includes information on where to find either a leaf directory or one/multiple tiles.
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Entry {
+    /// The first tile id this entry is valid for
+    pub tile_id: u64,
+
+    /// Offset (in bytes) of first byte of tile of leaf-directory data
+    ///
+    /// For tiles this offset is relative to the start of the tile data sections.
+    /// For leaf directories this offset is relative to the start of the leaf directory sections.
+    pub offset: u64,
+
+    /// Amount of bytes
+    pub length: u32,
+
+    /// The run length indicates the amount of tiles this entry is valid for.
+    /// A run length of `0` indicates that this is in fact a entry containing information
+    /// of a leaf directory.
+    pub run_length: u32,
+}
+
+impl Entry {
+    /// Returns the range of tile ids this entry is valid for.
+    pub const fn tile_id_range(&self) -> Range<u64> {
+        self.tile_id..self.tile_id + self.run_length as u64
+    }
+
+    /// Returns `true` if this entry is for a leaf directory and
+    /// `false` if this entry is for tile data.
+    pub const fn is_leaf_dir_entry(&self) -> bool {
+        self.run_length == 0
+    }
+}
+
+/// A structure representing a directory.
+///
+/// A directory holds an arbitrary amount of [`Entry`]. You can use [`len`](Self::len), [`is_empty`](Self::is_empty) and
+/// [`iter`](Self::iter) to obtain information about that list of entries.
+///
+/// Use [`from_reader`](Self::from_reader) and [`to_writer`](Self::to_writer) or their respective asynchronous versions ([`from_async_reader`](Self::from_async_reader) and [`to_async_writer`](Self::to_async_writer)) to read and write the directory from / to bytes.
+#[derive(Debug, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct Directory {
+    entries: Vec<Entry>,
+}
+
+impl Directory {
+    /// Returns the number of entries in the directory, also referred to as its 'length'.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns `true` if the directory contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Returns an iterator over the directory.
+    ///
+    /// The iterator yields all entries from start to end.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Directory implements IntoIterator trait, which should be used instead"
+    )]
+    pub fn iter(&self) -> Iter<'_, Entry> {
+        self.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Directory {
+    type IntoIter = Iter<'a, Entry>;
+    type Item = &'a Entry;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl Directory {
+    #[duplicate_item(
+        fn_name                  cfg_async_filter       input_traits                         decompress(compression, binding)              read_varint(type, reader)                  async;
+        [from_reader_impl]       [cfg(all())]           [impl Read]                          [decompress(compression, &mut binding)]       [reader.read_varint::<type>()]             [];
+        [from_async_reader_impl] [cfg(feature="async")] [(impl Unpin + Send + AsyncReadExt)] [decompress_async(compression, &mut binding)] [reader.read_varint_async::<type>().await] [async];
+    )]
+    #[allow(clippy::needless_range_loop)]
+    #[cfg_async_filter]
+    async fn fn_name(
+        input: &mut input_traits,
+        length: u64,
+        compression: Compression,
+    ) -> Result<Self> {
+        let mut binding = input.take(length);
+        let mut reader = decompress([compression], [binding])?;
+
+        let num_entries = read_varint([usize], [reader])?;
+
+        let mut entries = Vec::<Entry>::with_capacity(num_entries);
+
+        // read tile_id
+        let mut last_id = 0u64;
+        for _ in 0..num_entries {
+            let tmp = read_varint([u64], [reader])?;
+
+            last_id += tmp;
+            entries.push(Entry {
+                tile_id: last_id,
+                length: 0,
+                offset: 0,
+                run_length: 0,
+            });
+        }
+
+        // read run_length
+        for i in 0..num_entries {
+            entries[i].run_length = read_varint([_], [reader])?;
+        }
+
+        // read length
+        for i in 0..num_entries {
+            let len = read_varint([_], [reader])?;
+
+            if len == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Length of a directory entry must be greater than 0.",
+                ));
+            }
+
+            entries[i].length = len;
+        }
+
+        // read offset
+        for i in 0..num_entries {
+            let val = read_varint([u64], [reader])?;
+
+            entries[i].offset = if i > 0 && val == 0 {
+                entries[i - 1].offset + u64::from(entries[i - 1].length)
+            } else {
+                val - 1
+            };
+        }
+
+        Ok(Self { entries })
+    }
+
+    #[duplicate_item(
+        fn_name                cfg_async_filter       input_traits                       compress         flush   write_varint(writer, value)              add_await(code) async;
+        [to_writer_impl]       [cfg(all())]           [impl Write]                       [compress]       [flush] [writer.write_varint(value)]             [code]          [];
+        [to_async_writer_impl] [cfg(feature="async")] [(impl AsyncWrite + Unpin + Send)] [compress_async] [close] [writer.write_varint_async(value).await] [code.await]    [async];
+    )]
+    #[cfg_async_filter]
+    async fn fn_name(&self, output: &mut input_traits, compression: Compression) -> Result<()> {
+        let mut writer = compress(compression, output)?;
+
+        write_varint([writer], [self.entries.len()])?;
+
+        // write tile_id
+        let mut last_id = 0u64;
+        for entry in &self.entries {
+            write_varint([writer], [entry.tile_id - last_id])?;
+            last_id = entry.tile_id;
+        }
+
+        // write run_length
+        for entry in &self.entries {
+            write_varint([writer], [entry.run_length])?;
+        }
+
+        // write length
+        for entry in &self.entries {
+            if entry.length == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Length of a directory entry must be greater than 0.",
+                ));
+            }
+            write_varint([writer], [entry.length])?;
+        }
+
+        // write offset
+        let mut next_byte = 0u64;
+        for (index, entry) in self.into_iter().enumerate() {
+            let val = if index > 0 && entry.offset == next_byte {
+                0
+            } else {
+                entry.offset + 1
+            };
+
+            write_varint([writer], [val])?;
+
+            next_byte = entry.offset + u64::from(entry.length);
+        }
+
+        add_await([writer.flush()])?;
+
+        Ok(())
+    }
+}
+
+impl Directory {
+    /// Reads a directory from a [`std::io::Read`] and returns it.
+    ///
+    /// # Arguments
+    /// * `input` - Reader including directory bytes
+    /// * `length` - Length of the directory (in bytes)
+    /// * `compression` - Compression of the directory
+    ///
+    /// # Errors
+    /// Will return [`Err`] if `compression` is set to [`Compression::Unknown`], the data is not compressed correctly
+    /// according to `compression`, the directory includes a entry with a length of 0  or an I/O error occurred while
+    /// reading from `input`.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use pmtiles2::{Directory, Compression};
+    /// # use std::io::{Cursor, Seek, SeekFrom};
+    /// let bytes = include_bytes!("../example.pmtiles");
+    /// let mut reader = Cursor::new(bytes);
+    /// reader.seek(SeekFrom::Start(127)).unwrap();
+    ///
+    /// let directory = Directory::from_reader(&mut reader, 246, Compression::GZip).unwrap();
+    /// ```
+    pub fn from_reader(
+        input: &mut impl Read,
+        length: u64,
+        compression: Compression,
+    ) -> Result<Self> {
+        Self::from_reader_impl(input, length, compression)
+    }
+
+    /// Reads a directory from anything that can be turned into a byte slice (e.g. [`Vec<u8>`]).
+    ///
+    /// # Arguments
+    /// * `bytes` - Input bytes
+    /// * `compression` - Compression of the directory
+    ///
+    /// # Errors
+    /// Will return [`Err`] if `compression` is set to [`Compression::Unknown`], the data is not compressed correctly
+    /// according to `compression`, the directory includes a entry with a length of 0  or an I/O error occurred while
+    /// reading from `input`.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use pmtiles2::{Directory, Compression};
+    /// let bytes = include_bytes!("../example.pmtiles");
+    /// let directory = Directory::from_bytes(&bytes[127..], Compression::GZip).unwrap();
+    /// ```
+    ///
+    pub fn from_bytes(bytes: impl AsRef<[u8]>, compression: Compression) -> std::io::Result<Self> {
+        let length = bytes.as_ref().len() as u64;
+        let mut reader = std::io::Cursor::new(bytes);
+
+        Self::from_reader(&mut reader, length, compression)
+    }
+
+    /// Async version of [`from_reader`](Self::from_reader).
+    ///
+    /// Reads a directory from a [`futures::io::AsyncRead`](https://docs.rs/futures/latest/futures/io/trait.AsyncRead.html) and returns it.
+    ///
+    /// # Arguments
+    /// * `input` - Reader including directory bytes
+    /// * `length` - Length of the directory (in bytes)
+    /// * `compression` - Compression of the directory
+    ///
+    /// # Errors
+    /// Will return [`Err`] if `compression` is set to [`Compression::Unknown`], the data is not compressed correctly
+    /// according to `compression`, the directory includes a entry with a length of 0  or an I/O error occurred while
+    /// reading from `input`.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use pmtiles2::{Directory, Compression};
+    /// # use futures::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+    /// # tokio_test::block_on(async {
+    /// let bytes = include_bytes!("../example.pmtiles");
+    /// let mut reader = futures::io::Cursor::new(bytes);
+    /// reader.seek(SeekFrom::Start(127)).await.unwrap();
+    ///
+    /// let directory = Directory::from_async_reader(&mut reader, 246, Compression::GZip).await.unwrap();
+    /// # })
+    /// ```
+    #[cfg(feature = "async")]
+    pub async fn from_async_reader(
+        input: &mut (impl Unpin + Send + AsyncReadExt),
+        length: u64,
+        compression: Compression,
+    ) -> Result<Self> {
+        Self::from_async_reader_impl(input, length, compression).await
+    }
+
+    /// Writes the directory to a [`std::io::Write`].
+    ///
+    /// # Arguments
+    /// * `output` - Writer to write directory to
+    /// * `compression` - Compression to use
+    ///
+    /// # Errors
+    /// Will return [`Err`] if `compression` is set to [`Compression::Unknown`], the
+    /// directory includes a entry with a length of 0 or an I/O error occurred
+    /// while writing to `output`.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use pmtiles2::{Directory, Compression};
+    /// let directory: Directory = Vec::new().into();
+    ///
+    /// let mut output = std::io::Cursor::new(Vec::<u8>::new());
+    ///
+    /// directory.to_writer(&mut output, Compression::GZip).unwrap();
+    /// ```
+    pub fn to_writer(&self, output: &mut impl Write, compression: Compression) -> Result<()> {
+        self.to_writer_impl(output, compression)
+    }
+
+    /// Async version of [`to_writer`](Self::to_writer).
+    ///
+    /// Writes the directory to a [`futures::io::AsyncWrite`](https://docs.rs/futures/latest/futures/io/trait.AsyncWrite.html).
+    ///
+    /// # Arguments
+    /// * `output` - Writer to write directory to
+    /// * `compression` - Compression to use
+    ///
+    /// # Errors
+    /// Will return [`Err`] if `compression` is set to [`Compression::Unknown`], the
+    /// directory includes a entry with a length of 0 or an I/O error occurred
+    /// while writing to `output`.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use pmtiles2::{Directory, Compression};
+    /// # tokio_test::block_on(async {
+    /// let directory: Directory = Vec::new().into();
+    ///
+    /// let mut output = futures::io::Cursor::new(Vec::<u8>::new());
+    ///
+    /// directory.to_async_writer(&mut output, Compression::GZip).await.unwrap();
+    /// # })
+    /// ```
+    #[cfg(feature = "async")]
+    pub async fn to_async_writer(
+        &self,
+        output: &mut (impl AsyncWrite + Unpin + Send),
+        compression: Compression,
+    ) -> Result<()> {
+        self.to_async_writer_impl(output, compression).await
+    }
+}
+
+impl Directory {
+    /// Find a entry, which includes given `tile_id`.
+    ///
+    /// Returns [`None`] if the directory does not include a [`Entry`] that matches `tile_id`.
+    ///
+    pub fn find_entry_for_tile_id(&self, tile_id: u64) -> Option<&Entry> {
+        self.into_iter()
+            .find(|e| !e.is_leaf_dir_entry() && e.tile_id_range().contains(&tile_id))
+    }
+}
+
+impl<I: SliceIndex<[Entry]>> Index<I> for Directory {
+    type Output = I::Output;
+
+    fn index(&self, index: I) -> &Self::Output {
+        self.entries.index(index)
+    }
+}
+
+impl<I: SliceIndex<[Entry]>> IndexMut<I> for Directory {
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+        self.entries.index_mut(index)
+    }
+}
+
+impl From<Vec<Entry>> for Directory {
+    fn from(entries: Vec<Entry>) -> Self {
+        Self { entries }
+    }
+}
+
+impl From<Directory> for Vec<Entry> {
+    fn from(val: Directory) -> Self {
+        val.entries
+    }
+}
+
+// Test module removed - test files are not included in this fork

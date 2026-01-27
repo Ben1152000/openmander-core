@@ -8,12 +8,14 @@ use serde::{Deserialize, Serialize};
 pub enum PackFormat {
     /// Parquet format (requires parquet feature, not available for WASM)
     Parquet,
-    /// JSON format (WASM-compatible, no compression)
-    Json,
+    /// GeoJSON format with CSV data (WASM-compatible)
+    GeoJson,
+    /// PMTiles format for geometry storage (WASM-compatible, requires pmtiles feature)
+    Pmtiles,
 }
 
 impl PackFormat {
-    /// Default format (parquet if available, otherwise json)
+    /// Default format (parquet if available, otherwise geojson)
     pub fn default() -> Self {
         #[cfg(feature = "parquet")]
         {
@@ -21,7 +23,7 @@ impl PackFormat {
         }
         #[cfg(not(feature = "parquet"))]
         {
-            Self::Json
+            Self::GeoJson
         }
     }
 
@@ -29,7 +31,8 @@ impl PackFormat {
     pub fn data_extension(&self) -> &'static str {
         match self {
             Self::Parquet => "parquet",
-            Self::Json => "json",
+            Self::GeoJson => "csv",
+            Self::Pmtiles => "csv",
         }
     }
 
@@ -37,8 +40,14 @@ impl PackFormat {
     pub fn geometry_extension(&self) -> &'static str {
         match self {
             Self::Parquet => "geoparquet",
-            Self::Json => "geojson",
+            Self::GeoJson => "geojson",
+            Self::Pmtiles => "pmtiles",
         }
+    }
+
+    /// Get file extension for hull files (always WKB, regardless of format)
+    pub fn hull_extension(&self) -> &'static str {
+        "wkb"
     }
 }
 
@@ -54,8 +63,9 @@ impl FromStr for PackFormat {
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "parquet" => Ok(PackFormat::Parquet),
-            "json" => Ok(PackFormat::Json),
-            _ => Err(anyhow!("Unknown pack format: {}. Expected 'parquet' or 'json'", s)),
+            "geojson" | "json" => Ok(PackFormat::GeoJson),  // Accept both for compatibility
+            "pmtiles" => Ok(PackFormat::Pmtiles),
+            _ => Err(anyhow!("Unknown pack format: {}. Expected 'parquet', 'geojson', or 'pmtiles'", s)),
         }
     }
 }

@@ -1,14 +1,24 @@
-#[cfg(feature = "download")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-#[cfg(feature = "download")]
 use anyhow::{Context, Result};
 
-#[cfg(feature = "download")]
 use crate::common;
 
+/// Delete the `download/` directory (and all its contents) under `pack_dir`.
+pub(crate) fn cleanup_download_dir(pack_dir: &Path, verbose: u8) -> Result<()> {
+    let download_dir = pack_dir.join("download");
+
+    if !download_dir.exists() {
+        if verbose > 0 { eprintln!("[cleanup] nothing to remove at {}", download_dir.display()) }
+        return Ok(());
+    }
+
+    if verbose > 0 { eprintln!("[cleanup] removing {}", download_dir.display()) }
+    std::fs::remove_dir_all(&download_dir)
+        .with_context(|| format!("failed to remove {}", download_dir.display()))
+}
+
 /// Download demographic data from Dave's redistricting
-#[cfg(feature = "download")]
 fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
     let file_url = format!("https://data.dra2020.net/file/dra-block-data/Demographic_Data_Block_{state}.v06.zip");
     let zip_path = out_dir.join(format!("Demographic_Data_Block_{state}.v06.zip"));
@@ -24,7 +34,6 @@ fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> R
 }
 
 /// Download election data from Dave's redistricting
-#[cfg(feature = "download")]
 fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
     let file_url = format!("https://data.dra2020.net/file/dra-block-data/Election_Data_Block_{state}.v06.zip");
     let zip_path = out_dir.join(format!("Election_Data_Block_{state}.v06.zip"));
@@ -41,7 +50,6 @@ fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Resu
 
 /// Download geometry data from US Census TIGER 2020 PL directory
 /// Example URL: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
-#[cfg(feature = "download")]
 fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verbose: u8) -> Result<()> {
     let fips = common::state_abbr_to_fips(&state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
@@ -74,7 +82,6 @@ fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verb
 
 /// Download block-level crosswalks from the US Census website
 /// Example URL: "NE" -> "https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST31_NE.zip"
-#[cfg(feature = "download")]
 fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
     let fips = common::state_abbr_to_fips(&state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
@@ -95,7 +102,6 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
 
 /// Download all map files for the given state into the `download/` directory under `pack_dir`.
 /// Returns the path to the `download/` directory.
-#[cfg(feature = "download")]
 pub(crate) fn download_data(state: &str, pack_dir: &PathBuf, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
     common::require_dir_exists(&pack_dir)?;
 

@@ -1,9 +1,10 @@
-use std::{fs::File, io::Write, path::Path, sync::Arc};
+use std::{io::Write, sync::Arc};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 use bytes::Bytes;
+use geo::Polygon;
 use geo_traits::to_geo::ToGeoMultiPolygon;
 use geoarrow_array::{
     array::MultiPolygonArray,
@@ -23,16 +24,6 @@ use parquet::{
     format::FileMetaData,
 };
 
-/// Write geometries to a single-column GeoParquet file named `geometry`.
-pub(crate) fn write_to_geoparquet_file(path: &Path, geoms: &[geo::MultiPolygon<f64>]) -> Result<()> {
-    let file = File::create(path)
-        .with_context(|| format!("Failed to create geoparquet file: {}", path.display()))?;
-
-    // finish() returns metadata in your parquet version; ignore it.
-    let _meta = write_to_geoparquet(file, geoms)?;
-    Ok(())
-}
-
 /// Write geometries to GeoParquet bytes.
 pub(crate) fn write_to_geoparquet_bytes(geoms: &[geo::MultiPolygon<f64>]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -40,13 +31,6 @@ pub(crate) fn write_to_geoparquet_bytes(geoms: &[geo::MultiPolygon<f64>]) -> Res
     // Write into `out` directly. `&mut Vec<u8>` implements Write, and we keep `out` in scope.
     let _meta = write_to_geoparquet(&mut out, geoms)?;
     Ok(out)
-}
-
-/// Read a GeoParquet file (single `geometry` column) back into MultiPolygons.
-pub(crate) fn read_from_geoparquet_file(path: &Path) -> Result<Vec<geo::MultiPolygon<f64>>> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to read geoparquet file: {}", path.display()))?;
-    read_from_geoparquet(file)
 }
 
 /// Read GeoParquet from bytes.
@@ -57,6 +41,11 @@ pub(crate) fn read_from_geoparquet_bytes(bytes: &[u8]) -> Result<Vec<geo::MultiP
 
 /// Internal helper: write to any ArrowWriter-compatible sink.
 fn write_to_geoparquet<W: Write + Send>(writer: W, geoms: &[geo::MultiPolygon<f64>]) -> Result<FileMetaData> {
+    // Don't write empty geometry arrays - they can cause issues when reading back
+    if geoms.is_empty() {
+        return Err(anyhow::anyhow!("Cannot write empty geometry array to GeoParquet"));
+    }
+    
     // 1) Build a GeoArrow MultiPolygon array from geo-types
     let geom_type = MultiPolygonType::new(Dimension::XY, Default::default());
     let field = geom_type.to_field("geometry", false);
@@ -123,4 +112,27 @@ fn read_from_geoparquet<R: ChunkReader + 'static>(reader: R) -> Result<Vec<geo::
     }
 
     Ok(polys)
+}
+
+/// Write hulls (Polygons) to GeoParquet bytes.
+/// Converts each Polygon to a MultiPolygon for storage.
+#[cfg(feature = "parquet")]
+pub(crate) fn write_hulls_to_geoparquet_bytes(hulls: &[Polygon<f64>]) -> Result<Vec<u8>> {
+    // Convert Polygons to MultiPolygons (each polygon becomes a MultiPolygon with one polygon)
+    let multipolygons: Vec<geo::MultiPolygon<f64>> = hulls.iter()
+        .map(|poly| geo::MultiPolygon(vec![poly.clone()]))
+        .collect();
+    write_to_geoparquet_bytes(&multipolygons)
+}
+
+/// Read hulls (Polygons) from GeoParquet bytes.
+/// Extracts the first polygon from each MultiPolygon.
+#[cfg(feature = "parquet")]
+pub(crate) fn read_hulls_from_geoparquet_bytes(bytes: &[u8]) -> Result<Vec<Polygon<f64>>> {
+    let multipolygons = read_from_geoparquet_bytes(bytes)?;
+    // Extract first polygon from each MultiPolygon
+    let hulls: Vec<Polygon<f64>> = multipolygons.into_iter()
+        .filter_map(|mp| mp.0.into_iter().next())
+        .collect();
+    Ok(hulls)
 }

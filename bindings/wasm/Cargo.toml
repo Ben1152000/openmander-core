@@ -16,8 +16,7 @@ serde_json = "1"
 js-sys = "0.3"
 anyhow = "1"
 
-# For WASM: use JSON format instead of parquet
-# Parquet requires zstd-sys and lz4-sys which have C code that doesn't compile for WASM.
-# JSON format is WASM-compatible and provides the same functionality.
-openmander-core = { package = "openmander", path = "../..", default-features = false, features = ["json"] }
+# For WASM: disable parquet and download (C deps don't compile for WASM)
+# PMTiles is WASM-compatible and uses GZip compression (no zstd)
+openmander-core = { package = "openmander", path = "../..", default-features = false, features = ["pmtiles"] }
 

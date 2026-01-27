@@ -1,0 +1,260 @@
+use std::{collections::BTreeMap, fs::File, path::Path};
+
+use anyhow::{Context, Result};
+use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
+
+use crate::{common, map::{GeoType, Map, MapLayer, ParentRefs}, pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats, io::{csr, data, geometry}}};
+
+/// Get the recommended PMTiles zoom range for a given layer type.
+/// 
+/// Returns (min_zoom, max_zoom) - geometries are stored in all tiles they intersect
+/// across this zoom range.
+/// 
+/// The zoom range should match when that layer becomes visible in the UI:
+/// - Lower min_zoom = visible from further out (good for large features like states)
+/// - Higher max_zoom = more precision at close zoom (good for detailed boundaries)
+/// 
+/// Geometries crossing tile boundaries are stored in ALL intersecting tiles,
+/// ensuring no features are cut off at tile edges.
+fn pmtiles_zoom_range_for_layer(ty: GeoType) -> (u8, u8) {
+    match ty {
+        // States: visible from z4 (for Alaska, California) to z8
+        // This allows states to be seen from very zoomed out to medium zoom
+        GeoType::State => (4, 8),
+        // Counties: visible from z6 to z10
+        GeoType::County => (6, 10),
+        // Tracts/VTDs/Groups: visible from z8 to z12
+        GeoType::Tract => (8, 12),
+        GeoType::VTD => (8, 12),
+        GeoType::Group => (8, 12),
+        // Blocks: visible from z12 to z14
+        GeoType::Block => (12, 14),
+    }
+}
+
+impl MapLayer {
+    /// Prepare entity data (with parent refs) for writing to a parquet file.
+    fn pack_data(&self) -> Result<DataFrame> {
+        /// Helper to extract parent IDs as strings
+        fn get_parents(parents: &Vec<ParentRefs>, ty: GeoType) -> Vec<Option<&str>> {
+            parents.iter()
+                .map(|parents| parents.get(ty).map(|geo_id| geo_id.id()))
+                .collect()
+        }
+
+        let parents_df = df![
+            "geo_id" => self.geo_ids.iter().map(|geo_id| geo_id.id()).collect::<Vec<_>>(),
+            "parent_state" => get_parents(&self.parents, GeoType::State),
+            "parent_county" => get_parents(&self.parents, GeoType::County),
+            "parent_tract" => get_parents(&self.parents, GeoType::Tract),
+            "parent_group" => get_parents(&self.parents, GeoType::Group),
+            "parent_vtd" => get_parents(&self.parents, GeoType::VTD),
+        ]?;
+
+        Ok(self.unit_data
+            .inner_join(&parents_df, ["geo_id"], ["geo_id"])
+            .context("inner_join on 'geo_id' failed when preparing parquet")?)
+    }
+
+    fn write_to_pack_sink_with_formats(
+        &self,
+        sink: &mut dyn PackSink,
+        formats: &PackFormats,
+        counts: &mut BTreeMap<&'static str, usize>,
+        hashes: &mut BTreeMap<String, FileHash>,
+    ) -> Result<()> {
+        let layer_name = self.ty().to_str();
+        let adj_file = format!("adj/{layer_name}.csr.bin");
+        
+        // Determine file extensions from formats
+        let data_ext = match formats.data.as_str() {
+            "parquet" => "parquet",
+            "csv" => "csv",
+            _ => return Err(anyhow::anyhow!("Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data)),
+        };
+        let geom_ext = match formats.geometry.as_str() {
+            "geojson" => "geojson",
+            "geoparquet" => "geoparquet",
+            "pmtiles" => "pmtiles",
+            _ => return Err(anyhow::anyhow!("Unsupported geometry format: {}", formats.geometry)),
+        };
+        
+        let data_file = format!("data/{layer_name}.{data_ext}");
+        let geom_file = format!("geom/{layer_name}.{geom_ext}");
+        // Hull format depends on geometry format (geoparquet uses geoparquet, others use wkb)
+        let hull_ext = match formats.hull.as_str() {
+            "geoparquet" => "geoparquet",
+            _ => "wkb",
+        };
+        let hull_file = format!("hull/{layer_name}.{hull_ext}");
+
+        counts.insert(layer_name.into(), self.geo_ids.len());
+
+        // entities -> data bytes (parquet or csv)
+        let data_bytes = match formats.data.as_str() {
+            #[cfg(feature = "parquet")]
+            "parquet" => data::write_to_parquet_bytes(&mut self.pack_data()?)?,
+            "csv" => data::write_to_csv_bytes(&mut self.pack_data()?)?,
+            #[cfg(not(feature = "parquet"))]
+            "parquet" => {
+                return Err(anyhow::anyhow!("Parquet format requires 'parquet' feature to be enabled"));
+            }
+            _ => {
+                return Err(anyhow::anyhow!("Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data));
+            }
+        };
+        sink.put(&data_file, &data_bytes)?;
+        // hash the bytes (instead of reading from disk)
+        hashes.insert(
+            data_file.clone(),
+            FileHash {
+                sha256: common::sha256_bytes(&data_bytes),
+            },
+        );
+
+        // adjacency (CSR)
+        if self.ty() != GeoType::State {
+            let adj_bytes = csr::write_to_weighted_csr_bytes(&self.adjacencies, &self.edge_lengths)?;
+            sink.put(&adj_file, &adj_bytes)?;
+            hashes.insert(
+                adj_file.clone(),
+                FileHash {
+                    sha256: common::sha256_bytes(&adj_bytes),
+                },
+            );
+        }
+
+        // convex hulls (optional)
+        // Hull format matches geometry format for geoparquet, otherwise use wkb
+        // Only write hull file if hulls exist and are non-empty
+        if let Some(hulls) = &self.hulls {
+            if !hulls.is_empty() {
+                let hull_bytes = match formats.hull.as_str() {
+                    #[cfg(feature = "parquet")]
+                    "geoparquet" => geometry::write_hulls_to_geoparquet_bytes(hulls)?,
+                    "wkb" => {
+                        // Always compress WKB hulls (flate2 is always available)
+                        geometry::write_hulls_to_wkb_bytes(hulls, true)?
+                    },
+                    #[cfg(not(feature = "parquet"))]
+                    "geoparquet" => {
+                        return Err(anyhow::anyhow!("GeoParquet hull format requires 'parquet' feature to be enabled"));
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!("Unsupported hull format: {}. Use 'geoparquet' or 'wkb'.", formats.hull));
+                    }
+                };
+                sink.put(&hull_file, &hull_bytes)?;
+                hashes.insert(
+                    hull_file.clone(),
+                    FileHash {
+                        sha256: common::sha256_bytes(&hull_bytes),
+                    },
+                );
+            }
+        }
+
+        // geometries (optional)
+        // Only write geometry file if geometries exist and are non-empty
+        if let Some(geom) = &self.geoms {
+            let shapes = geom.shapes();
+            if !shapes.is_empty() {
+                let geom_bytes = match formats.geometry.as_str() {
+                    #[cfg(feature = "parquet")]
+                    "geoparquet" => geometry::write_to_geoparquet_bytes(shapes)?,
+                    "geojson" => geometry::write_to_geojson_bytes(shapes)?,
+                    #[cfg(feature = "pmtiles")]
+                    "pmtiles" => {
+                        let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(self.ty());
+                        geometry::write_to_pmtiles_bytes(shapes, min_zoom, max_zoom)?
+                    },
+                    #[cfg(not(feature = "parquet"))]
+                    "geoparquet" => {
+                        return Err(anyhow::anyhow!("GeoParquet format requires 'parquet' feature to be enabled"));
+                    }
+                    #[cfg(not(feature = "pmtiles"))]
+                    "pmtiles" => {
+                        return Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"));
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!("Unsupported geometry format: {}", formats.geometry));
+                    }
+                };
+                sink.put(&geom_file, &geom_bytes)?;
+                hashes.insert(
+                    geom_file.clone(),
+                    FileHash {
+                        sha256: common::sha256_bytes(&geom_bytes),
+                    },
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Old path-based helper (kept for compatibility).
+    fn write_to_pack(
+        &self,
+        path: &Path,
+        format: PackFormat,
+        counts: &mut BTreeMap<&'static str, usize>,
+        hashes: &mut BTreeMap<String, FileHash>,
+    ) -> Result<()> {
+        let mut sink = DiskPack::new(path);
+        let formats = PackFormats::from_pack_format(format);
+        self.write_to_pack_sink_with_formats(&mut sink, &formats, counts, hashes)
+    }
+}
+
+impl Map {
+    /// Old API: write pack to disk directory (uses default format).
+    pub fn write_to_pack(&self, path: &Path) -> Result<()> {
+        self.write_to_pack_with_format(path, PackFormat::default())
+    }
+
+    /// Write pack to disk directory with specified format.
+    pub fn write_to_pack_with_format(&self, path: &Path, format: PackFormat) -> Result<()> {
+        let dirs = ["adj", "data", "geom", "hull"];
+        common::ensure_dirs(path, &dirs)?;
+
+        let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
+        let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+
+        for layer in self.layers_iter() {
+            layer.write_to_pack(path, format, &mut counts, &mut file_hashes)?;
+        }
+
+        // Manifest (disk): keep your current behavior
+        let meta_path = path.join("manifest.json");
+        let formats = PackFormats::from_pack_format(format);
+        let manifest = Manifest::new(path, counts, file_hashes, formats);
+        serde_json::to_writer_pretty(File::create(&meta_path)?, &manifest)?;
+
+        Ok(())
+    }
+
+    /// New API: write pack into any sink (memory, disk, etc.) with default format.
+    pub fn write_to_pack_sink(&self, sink: &mut dyn PackSink, pack_root_for_manifest: &Path) -> Result<()> {
+        self.write_to_pack_sink_with_format(sink, pack_root_for_manifest, PackFormat::default())
+    }
+
+    /// New API: write pack into any sink (memory, disk, etc.) with specified format.
+    pub fn write_to_pack_sink_with_format(&self, sink: &mut dyn PackSink, pack_root_for_manifest: &Path, format: PackFormat) -> Result<()> {
+        let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
+        let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+
+        let formats = PackFormats::from_pack_format(format);
+        
+        for layer in self.layers_iter() {
+            layer.write_to_pack_sink_with_formats(sink, &formats, &mut counts, &mut file_hashes)?;
+        }
+
+        // Create manifest with format information
+        let manifest = Manifest::new(pack_root_for_manifest, counts, file_hashes, formats);
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+        sink.put("manifest.json", &manifest_bytes)?;
+
+        Ok(())
+    }
+}

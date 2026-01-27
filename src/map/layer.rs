@@ -131,12 +131,17 @@ impl MapLayer {
 
         let weights = WeightMatrix::new(self.len(), weights_i64, weights_f64);
 
+        // Use empty hulls if not available (hulls are optional)
+        // Create a local empty Vec that lives long enough for the function call
+        let empty_hulls: Vec<geo::Polygon<f64>> = Vec::new();
+        let hulls = self.hulls().unwrap_or(&empty_hulls);
+        
         self.graph = Arc::new(WeightedGraph::new(
             self.len(),
             &self.adjacencies,
             &self.edge_lengths,
             weights,
-            &self.hulls().unwrap(),
+            hulls,
         ));
     }
 

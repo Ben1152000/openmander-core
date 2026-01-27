@@ -1,7 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use std::sync::Arc;
 
-use pyo3::{pyclass, pymethods, PyResult};
+use pyo3::{pyclass, pymethods, Bound, PyResult};
 use pyo3::exceptions::PyValueError;
 
 /// Python-facing Map wrapper.
@@ -33,7 +33,7 @@ impl Map {
     ///     Pack format: "parquet" or "json". If None, auto-detects from files.
     #[pyo3(signature = (pack_dir, format=None))]
     #[classmethod]
-    pub fn from_pack(_cls: &pyo3::types::PyType, pack_dir: &str, format: Option<&str>) -> PyResult<Self> {
+    pub fn from_pack(_cls: &Bound<'_, pyo3::types::PyType>, pack_dir: &str, format: Option<&str>) -> PyResult<Self> {
         use std::str::FromStr;
         let path = std::path::PathBuf::from(pack_dir);
         let map = if let Some(fmt_str) = format {

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use crate::{common, map::Map};
 
 #[cfg(feature = "download")]
-use crate::pack::utils::{cleanup_download_dir, download_data};
+use crate::pack::download::{cleanup_download_dir, download_data};
 
 /// Download data files for a state, build the map pack, and write it to a new directory in `path`.
 /// Returns the path to the new pack directory.

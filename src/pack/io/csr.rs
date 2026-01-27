@@ -1,31 +1,15 @@
-use std::{fs::File, io::{BufReader, BufWriter, Cursor, Read, Write}, path::Path};
+use std::io::{Cursor, Read, Write};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 
-/// Write weighted adjacency list to a CSR binary file.
-pub(crate) fn write_to_weighted_csr_file(path: &Path, adjacencies: &[Vec<u32>], weights: &[Vec<f64>]) -> Result<()> {
-    let file = File::create(path)
-        .with_context(|| format!("Failed to create csr file: {}", path.display()))?;
-    let mut writer = BufWriter::new(file);
-    write_to_weighted_csr(&mut writer, adjacencies, weights)?;
-    writer.flush()?;
-    Ok(())
-}
-
-/// Read weighted adjacency from a CSR binary file written by `write_to_weighted_csr`.
-pub(crate) fn read_from_weighted_csr_file(path: &Path) -> Result<(Vec<Vec<u32>>, Vec<Vec<f64>>)> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to read csr file: {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    read_from_weighted_csr(&mut reader)
-}
-
+// Write weighted adjacency list to CSR binary.
 pub(crate) fn write_to_weighted_csr_bytes(adjacencies: &Vec<Vec<u32>>, weights: &Vec<Vec<f64>>) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     write_to_weighted_csr(&mut out, adjacencies, weights)?;
     Ok(out)
 }
 
+// Read weighted adjacency list from CSR binary.
 pub(crate) fn read_from_weighted_csr_bytes(bytes: &[u8]) -> Result<(Vec<Vec<u32>>, Vec<Vec<f64>>)> {
     let mut reader = Cursor::new(bytes);
     read_from_weighted_csr(&mut reader)

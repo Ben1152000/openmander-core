@@ -139,13 +139,13 @@ wasm-clean:
 	rm -rf $(WASM_OUT)
 	rm -rf $(WASM_BINDINGS_DIR)/target
 
-# Shallow clean: venv & wheels
-clean:
+# Clean: venv, wheels, and cargo build artifacts
+clean: wasm-clean
 	rm -rf $(VENV) $(WHEEL_DIR)
-
-# Deep clean: also clear Cargo artifacts and stray egg/dist-info
-clean-all: clean wasm-clean
 	cargo clean
+
+# Deep clean: also clear stray egg/dist-info
+clean-all: clean
 	find . -name '*.egg-info' -o -name '*.dist-info' -type d -prune -exec rm -rf {} +
 
 print-vars:
@@ -186,8 +186,8 @@ help:
 	@echo 'Common:'
 	@echo '  all                Build all bindings (Python + WASM with copy)'
 	@echo '  venv               Create virtualenv'
-	@echo '  clean              Remove venv and built wheels'
-	@echo '  clean-all          Also remove Cargo target, WASM artifacts, and egg/dist-info'
+	@echo '  clean              Remove venv, wheels, WASM artifacts, and Cargo build artifacts'
+	@echo '  clean-all          Also remove egg/dist-info directories'
 	@echo '  print-vars         Show all configuration variables'
 	@echo ''
 	@echo 'Variables:'

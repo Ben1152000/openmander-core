@@ -2,4 +2,5 @@ artifacts/
 images/
 images-saved/
 packs/
+test/
 __pycache__

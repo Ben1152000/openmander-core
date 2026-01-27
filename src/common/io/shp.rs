@@ -4,6 +4,50 @@ use anyhow::{Context, Result, bail};
 use regex::Regex;
 use shapefile::{self as shp, dbase::Record, Reader, Shape};
 
+/// Coerce a generic shape into an owned multipolygon, raising error if different shape
+pub(crate) fn shape_to_multipolygon(shape: Shape) -> Result<geo::MultiPolygon<f64>> {
+    match shape {
+        Shape::Polygon(polygon) => Ok(shp_to_geo(&polygon)),
+        other => bail!("found non-Polygon shape in layer: {:?}", other.shapetype())
+    }
+}
+
+/// Read all shapes and records from a shapefile.
+pub(crate) fn read_from_shapefile(path: &Path) -> Result<(Vec<Shape>, Vec<Record>)> {
+    let mut reader = Reader::from_path(path)
+        .with_context(|| format!("Failed to open shapefile: {}", path.display()))?;
+
+    let (shapes, records) = reader.iter_shapes_and_records()
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("Error reading shapes+records from shapefile: {}", path.display()))?
+        .into_iter().unzip();
+
+    Ok((shapes, records))
+}
+
+/// Parse .prj WKT next to .shp and guess an EPSG when possible.
+pub(crate) fn epsg_from_shapefile(shp_path: &Path) -> Option<u32> {
+    let prj_path = shp_path.with_extension("prj");
+    let wkt = fs::read_to_string(&prj_path).ok();
+
+    // AUTHORITY["EPSG","<digits>"]
+    wkt.as_deref().and_then(|txt| {
+        Regex::new(r#"AUTHORITY\["EPSG","(\d+)"\]"#)
+            .ok()
+            .and_then(|re| re.captures(txt))
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<u32>().ok())
+    })
+    // TIGER fallback (NAD83)
+    .or_else(|| {
+        wkt.as_deref().and_then(|txt| {
+            if txt.contains("NAD_1983") || txt.contains("North_American_1983") { Some(4269) }
+            else if txt.contains("WGS_1984") || txt.contains("WGS 84") { Some(4326) }
+            else { None }
+        })
+    })
+}
+
 /// Convert shapefile::Polygon to geo::MultiPolygon<f64>
 fn shp_to_geo(p: &shp::Polygon) -> geo::MultiPolygon<f64> {
     /// Ensure first and last are the same for geo::LineString coords
@@ -107,48 +151,4 @@ fn _geo_to_shp(mp: &geo::MultiPolygon<f64>) -> shp::Polygon {
     }
 
     shp::Polygon::with_rings(rings)
-}
-
-/// Coerce a generic shape into an owned multipolygon, raising error if different shape
-pub(crate) fn shape_to_multipolygon(shape: Shape) -> Result<geo::MultiPolygon<f64>> {
-    match shape {
-        Shape::Polygon(polygon) => Ok(shp_to_geo(&polygon)),
-        other => bail!("found non-Polygon shape in layer: {:?}", other.shapetype())
-    }
-}
-
-/// Read all shapes and records from a shapefile.
-pub(crate) fn read_from_shapefile(path: &Path) -> Result<(Vec<Shape>, Vec<Record>)> {
-    let mut reader = Reader::from_path(path)
-        .with_context(|| format!("Failed to open shapefile: {}", path.display()))?;
-
-    let (shapes, records) = reader.iter_shapes_and_records()
-        .collect::<Result<Vec<_>, _>>()
-        .with_context(|| format!("Error reading shapes+records from shapefile: {}", path.display()))?
-        .into_iter().unzip();
-
-    Ok((shapes, records))
-}
-
-/// Parse .prj WKT next to .shp and guess an EPSG when possible.
-pub(crate) fn epsg_from_shapefile(shp_path: &Path) -> Option<u32> {
-    let prj_path = shp_path.with_extension("prj");
-    let wkt = fs::read_to_string(&prj_path).ok();
-
-    // AUTHORITY["EPSG","<digits>"]
-    wkt.as_deref().and_then(|txt| {
-        Regex::new(r#"AUTHORITY\["EPSG","(\d+)"\]"#)
-            .ok()
-            .and_then(|re| re.captures(txt))
-            .and_then(|c| c.get(1))
-            .and_then(|m| m.as_str().parse::<u32>().ok())
-    })
-    // TIGER fallback (NAD83)
-    .or_else(|| {
-        wkt.as_deref().and_then(|txt| {
-            if txt.contains("NAD_1983") || txt.contains("North_American_1983") { Some(4269) }
-            else if txt.contains("WGS_1984") || txt.contains("WGS 84") { Some(4326) }
-            else { None }
-        })
-    })
 }

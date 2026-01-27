@@ -32,6 +32,14 @@ impl Metric {
         Self { inner }
     }
 
+    /// Population equality sharp (linear) metric for a given weight series (e.g., total population).
+    /// Scores on a linear scale: 0 for empty district, 1 for target population, 0 for double target or above.
+    #[staticmethod]
+    pub fn population_deviation_sharp(pop_series: &str) -> Self {
+        let inner = openmander_core::Metric::population_deviation_sharp(pop_series.to_string());
+        Self { inner }
+    }
+
     /// Polsby–Popper compactness metric.
     #[staticmethod]
     pub fn compactness_polsby_popper() -> Self {

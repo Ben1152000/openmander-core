@@ -6,6 +6,7 @@ pub(crate) enum MetricKind {
     PopulationDeviation { pop_series: String },
     PopulationDeviationAbsolute { pop_series: String },
     PopulationDeviationSmooth { pop_series: String },
+    PopulationDeviationSharp { pop_series: String },
 
     // Geometric metrics:
     CompactnessPolsbyPopper,
@@ -39,6 +40,13 @@ impl Metric {
     /// Smooth population equality metric for the given weight series.
     pub fn population_deviation_smooth(pop_series: String) -> Self {
         Self { kind: MetricKind::PopulationDeviationSmooth { pop_series } }
+    }
+
+    /// Sharp (linear) population equality metric for the given weight series.
+    /// Scores on a linear scale: 0 for empty district, 1 for target population,
+    /// 0 for double target or above.
+    pub fn population_deviation_sharp(pop_series: String) -> Self {
+        Self { kind: MetricKind::PopulationDeviationSharp { pop_series } }
     }
 
     /// Polsby–Popper compactness metric.
@@ -77,6 +85,7 @@ impl Metric {
             MetricKind::PopulationDeviation { .. } => "PopulationDeviation",
             MetricKind::PopulationDeviationAbsolute { .. } => "PopulationDeviationAbsolute",
             MetricKind::PopulationDeviationSmooth { .. } => "PopulationDeviationSmooth",
+            MetricKind::PopulationDeviationSharp { .. } => "PopulationDeviationSharp",
             MetricKind::CompactnessPolsbyPopper => "CompactnessPolsbyPopper",
             MetricKind::CompactnessSchwartzberg => "CompactnessSchwartzberg",
             MetricKind::CompetitivenessBinary { .. } => "CompetitivenessBinary",
@@ -98,6 +107,9 @@ impl Metric {
             }
             MetricKind::PopulationDeviationSmooth { pop_series } => {
                 districts.map(|part| partition.smooth_population_deviation(part, pop_series)).collect()
+            }
+            MetricKind::PopulationDeviationSharp { pop_series } => {
+                districts.map(|part| partition.sharp_population_deviation(part, pop_series)).collect()
             }
             MetricKind::CompactnessPolsbyPopper => {
                 districts.map(|part| partition.polsby_pobber(part)).collect()
@@ -138,6 +150,8 @@ impl fmt::Display for MetricKind {
                 write!(f, "PopulationDeviationAbsolute(series='{}')", pop_series),
             MetricKind::PopulationDeviationSmooth { pop_series } =>
                 write!(f, "PopulationDeviationSmooth(series='{}')", pop_series),
+            MetricKind::PopulationDeviationSharp { pop_series } =>
+                write!(f, "PopulationDeviationSharp(series='{}')", pop_series),
             MetricKind::CompactnessPolsbyPopper =>
                 write!(f, "CompactnessPolsbyPopper"),
             MetricKind::CompactnessSchwartzberg =>

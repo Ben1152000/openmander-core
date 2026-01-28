@@ -114,30 +114,31 @@ def main():
     
     print(f"Original pack: {original_pack_dir}")
     
-    # Output directory for webpack (in packs folder)
+    # Output directories for webpack (in packs folder)
     webpack_dir = packs_dir / f"{state_code}_2020_webpack"
+    pmtiles_pack_dir = packs_dir / f"{state_code}_2020_pmtiles_pack"
     
     # Create temporary directories for roundtrip test
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         
-        # Test 1: Convert parquet -> json
-        print("\n[Test 1] Converting parquet -> json...")
-        json_pack_dir = webpack_dir  # Write to packs folder instead of temp
+        # Test 1: Convert parquet -> csv (with geojson geometry)
+        print("\n[Test 1] Converting parquet -> csv/geojson...")
+        csv_pack_dir = webpack_dir  # Write to packs folder instead of temp
         
         try:
             # Read original (parquet)
             map_original = openmander.Map(str(original_pack_dir))
             print(f"  ✓ Read original pack (parquet format)")
             
-            # Write as JSON to packs folder
-            json_pack_dir.mkdir(parents=True, exist_ok=True)
-            map_original.to_pack(str(json_pack_dir), format="json")
-            print(f"  ✓ Wrote JSON pack to {json_pack_dir}")
+            # Write as CSV/GeoJSON to packs folder
+            csv_pack_dir.mkdir(parents=True, exist_ok=True)
+            map_original.to_pack(str(csv_pack_dir), format="geojson")
+            print(f"  ✓ Wrote CSV/GeoJSON pack to {csv_pack_dir}")
             
-            # Verify JSON pack can be read
-            map_json = openmander.Map.from_pack(str(json_pack_dir), format="json")
-            print(f"  ✓ Read JSON pack back")
+            # Verify CSV pack can be read
+            map_csv = openmander.Map.from_pack(str(csv_pack_dir), format="geojson")
+            print(f"  ✓ Read CSV/GeoJSON pack back")
             
         except Exception as e:
             print(f"  ✗ Error: {e}")
@@ -145,13 +146,32 @@ def main():
             traceback.print_exc()
             sys.exit(1)
         
-        # Test 2: Convert json -> parquet
-        print("\n[Test 2] Converting json -> parquet...")
+        # Test 2: Convert parquet -> pmtiles
+        print("\n[Test 2] Converting parquet -> pmtiles...")
+        
+        try:
+            # Write as PMTiles to packs folder
+            pmtiles_pack_dir.mkdir(parents=True, exist_ok=True)
+            map_original.to_pack(str(pmtiles_pack_dir), format="pmtiles")
+            print(f"  ✓ Wrote PMTiles pack to {pmtiles_pack_dir}")
+            
+            # Verify PMTiles pack can be read
+            map_pmtiles = openmander.Map.from_pack(str(pmtiles_pack_dir), format="pmtiles")
+            print(f"  ✓ Read PMTiles pack back")
+            
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        
+        # Test 3: Convert csv/geojson -> parquet
+        print("\n[Test 3] Converting csv/geojson -> parquet...")
         parquet_pack_dir = temp_path / f"{state_code}_2020_pack_roundtrip"
         
         try:
-            # Write JSON pack as parquet
-            map_json.to_pack(str(parquet_pack_dir), format="parquet")
+            # Write CSV/GeoJSON pack as parquet
+            map_csv.to_pack(str(parquet_pack_dir), format="parquet")
             print(f"  ✓ Wrote parquet pack to {parquet_pack_dir}")
             
             # Verify parquet pack can be read
@@ -164,20 +184,55 @@ def main():
             traceback.print_exc()
             sys.exit(1)
         
-        # Test 3: Compare original with roundtrip (parquet -> json -> parquet)
-        print("\n[Test 3] Verifying roundtrip conversion...")
+        # Test 4: Convert pmtiles -> parquet
+        print("\n[Test 4] Converting pmtiles -> parquet...")
+        pmtiles_roundtrip_dir = temp_path / f"{state_code}_2020_pack_pmtiles_roundtrip"
+        
+        try:
+            # Write PMTiles pack as parquet
+            map_pmtiles.to_pack(str(pmtiles_roundtrip_dir), format="parquet")
+            print(f"  ✓ Wrote parquet pack (from PMTiles) to {pmtiles_roundtrip_dir}")
+            
+            # Verify parquet pack can be read
+            map_pmtiles_parquet = openmander.Map.from_pack(str(pmtiles_roundtrip_dir), format="parquet")
+            print(f"  ✓ Read parquet pack back")
+            
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        
+        # Test 5: Compare original with roundtrip (parquet -> csv/geojson -> parquet)
+        print("\n[Test 5] Verifying roundtrip conversion (parquet -> csv/geojson -> parquet)...")
         if compare_packs(original_pack_dir, parquet_pack_dir, "parquet"):
             print("  ✓ Roundtrip conversion successful!")
         else:
             print("  ✗ Roundtrip conversion failed!")
             sys.exit(1)
         
-        # Test 4: Compare original with JSON version
-        print("\n[Test 4] Verifying parquet -> json conversion...")
-        if compare_packs(original_pack_dir, json_pack_dir, "json"):
-            print("  ✓ JSON conversion successful!")
+        # Test 6: Compare original with PMTiles roundtrip (parquet -> pmtiles -> parquet)
+        print("\n[Test 6] Verifying roundtrip conversion (parquet -> pmtiles -> parquet)...")
+        if compare_packs(original_pack_dir, pmtiles_roundtrip_dir, "parquet"):
+            print("  ✓ PMTiles roundtrip conversion successful!")
         else:
-            print("  ✗ JSON conversion failed!")
+            print("  ✗ PMTiles roundtrip conversion failed!")
+            sys.exit(1)
+        
+        # Test 7: Compare original with CSV/GeoJSON version
+        print("\n[Test 7] Verifying parquet -> csv/geojson conversion...")
+        if compare_packs(original_pack_dir, csv_pack_dir, "json"):
+            print("  ✓ CSV/GeoJSON conversion successful!")
+        else:
+            print("  ✗ CSV/GeoJSON conversion failed!")
+            sys.exit(1)
+        
+        # Test 8: Compare original with PMTiles version
+        print("\n[Test 8] Verifying parquet -> pmtiles conversion...")
+        if compare_packs(original_pack_dir, pmtiles_pack_dir, "pmtiles"):
+            print("  ✓ PMTiles conversion successful!")
+        else:
+            print("  ✗ PMTiles conversion failed!")
             sys.exit(1)
     
     print("\n" + "=" * 60)
@@ -185,9 +240,11 @@ def main():
     print(f"\nSummary:")
     print(f"  - Original pack: {original_pack_dir}")
     print(f"  - JSON webpack written to: {webpack_dir}")
-    print(f"  - Successfully converted to JSON format")
-    print(f"  - Successfully converted back to parquet format")
-    print(f"  - Data integrity verified")
+    print(f"  - PMTiles pack written to: {pmtiles_pack_dir}")
+    print(f"  - Successfully converted to CSV/GeoJSON format")
+    print(f"  - Successfully converted to PMTiles format (CSV data + PMTiles geometry)")
+    print(f"  - Successfully converted back to parquet format (from both CSV/GeoJSON and PMTiles)")
+    print(f"  - Data integrity verified for all formats")
 
 
 if __name__ == "__main__":

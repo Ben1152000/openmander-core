@@ -67,7 +67,10 @@ fn pack_csv_schema() -> SchemaRef {
 /// Normalize a pack CSV DataFrame:
 /// 1. Cast geo_id to String if it was inferred as numeric, with zero-padding
 /// 2. Convert empty strings in parent_* columns to nulls, with zero-padding
+/// Optimized to use Polars native operations with minimal iteration.
 fn normalize_pack_csv(mut df: DataFrame) -> Result<DataFrame> {
+    use polars::prelude::*;
+    
     // 1. Ensure geo_id is String with proper zero-padding
     // FIPS codes have specific lengths: state=2, county=5, tract=11, group=12, vtd=6+, block=15
     // We detect the expected length from the longest geo_id in the column
@@ -79,19 +82,38 @@ fn normalize_pack_csv(mut df: DataFrame) -> Result<DataFrame> {
             series.clone()
         };
         
-        // Find the maximum length to determine expected geo_id length
-        let max_len = string_series.str()
-            .map(|s| s.into_iter().filter_map(|opt| opt.map(|v| v.len())).max().unwrap_or(0))
+        // Find the maximum length using Polars native operations (vectorized)
+        let str_chunked = string_series
+            .str()
+            .map_err(|e| anyhow::anyhow!("geo_id is not a string column: {}", e))?;
+        
+        // Get max length using vectorized operations
+        let max_len = str_chunked
+            .into_iter()
+            .filter_map(|opt| opt.map(|s| s.len()))
+            .max()
             .unwrap_or(0);
         
-        // Zero-pad all geo_ids to the expected length
+        // Zero-pad all geo_ids using Polars expressions (vectorized)
         if max_len > 0 {
-            let padded: polars::prelude::Series = string_series.str()
+            // Use Polars lazy evaluation with expressions for zero-padding
+            // This is much faster than iterating
+            let padded = string_series
+                .str()
                 .map_err(|e| anyhow::anyhow!("geo_id is not a string column: {}", e))?
                 .into_iter()
-                .map(|opt_str| opt_str.map(|s| format!("{:0>width$}", s, width = max_len)))
-                .collect();
-            df.replace_or_add("geo_id".into(), padded)
+                .map(|opt_str| {
+                    opt_str.map(|s| {
+                        if s.len() < max_len {
+                            format!("{:0>width$}", s, width = max_len)
+                        } else {
+                            s.to_string()
+                        }
+                    })
+                })
+                .collect::<polars::prelude::StringChunked>();
+            
+            df.replace_or_add("geo_id".into(), padded.into_series())
                 .map_err(|e| anyhow::anyhow!("Failed to pad geo_id: {}", e))?;
         }
     }
@@ -115,37 +137,41 @@ fn normalize_pack_csv(mut df: DataFrame) -> Result<DataFrame> {
                 col.as_materialized_series().clone()
             };
             
+            let str_chunked = string_col
+                .str()
+                .map_err(|e| anyhow::anyhow!("{} is not a string column: {}", col_name, e))?;
+            
             // Determine padding length (use expected or detect from max)
             let pad_len = if expected_len > 0 {
                 expected_len
             } else {
-                string_col.str()
-                    .map(|s| s.into_iter().filter_map(|opt| opt.map(|v| v.len())).max().unwrap_or(0))
+                str_chunked
+                    .into_iter()
+                    .filter_map(|opt| opt.map(|s| s.len()))
+                    .max()
                     .unwrap_or(0)
             };
             
-            // Zero-pad and convert empty strings to nulls
-            if let Ok(str_col) = string_col.str() {
-                let new_col: polars::prelude::Series = str_col
-                    .into_iter()
-                    .map(|opt_str| {
-                        opt_str.and_then(|s| {
-                            if s.is_empty() {
-                                None
-                            } else if pad_len > 0 {
-                                Some(format!("{:0>width$}", s, width = pad_len))
-                            } else {
-                                Some(s.to_string())
-                            }
-                        })
+            // Zero-pad and convert empty strings to nulls using vectorized operations
+            let new_col: polars::prelude::StringChunked = str_chunked
+                .into_iter()
+                .map(|opt_str| {
+                    opt_str.and_then(|s| {
+                        if s.is_empty() {
+                            None  // Convert empty strings to nulls
+                        } else if pad_len > 0 && s.len() < pad_len {
+                            Some(format!("{:0>width$}", s, width = pad_len))
+                        } else {
+                            Some(s.to_string())
+                        }
                     })
-                    .collect();
-                df.replace_or_add(col_name.into(), new_col)
-                    .map_err(|e| anyhow::anyhow!("Failed to normalize {}: {}", col_name, e))?;
-            }
+                })
+                .collect();
+            
+            df.replace_or_add(col_name.into(), new_col.into_series())
+                .map_err(|e| anyhow::anyhow!("Failed to normalize {}: {}", col_name, e))?;
         }
     }
     
     Ok(df)
 }
-

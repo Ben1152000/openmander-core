@@ -127,13 +127,28 @@ impl MapLayer {
         let num_entities = self.geo_ids.len();
         
         // Verify that geometries match the number of entities
-        if num_shapes != num_entities {
+        // For PMTiles, some entities (e.g., water blocks) may not have geometries,
+        // so we allow fewer geometries than entities, but pad with empty MultiPolygons
+        if num_shapes > num_entities {
             return Err(anyhow!(
-                "[to_geojson_with_districts] Geometry count ({}) does not match entity count ({})",
+                "[to_geojson_with_districts] Geometry count ({}) exceeds entity count ({})",
                 num_shapes,
                 num_entities
             ));
         }
+        
+        // If we have fewer geometries than entities, we need to pad with empty geometries
+        // This can happen with PMTiles if some features are missing (e.g., water blocks)
+        // The PMTiles reader should have already created a properly indexed vector,
+        // but we still need to pad if the max feature ID is less than num_entities
+        let padded_shapes = if num_shapes < num_entities {
+            use geo::MultiPolygon;
+            let mut padded = shapes.clone();
+            padded.resize_with(num_entities, || MultiPolygon::new(vec![]));
+            padded
+        } else {
+            shapes.clone()
+        };
         
         // Verify that assignments length matches
         if assignments.len() != num_entities {
@@ -158,8 +173,13 @@ impl MapLayer {
         features.reserve(indices.len().min(10000)); // Cap initial capacity
 
         for idx in indices {
-            let mp = shapes.get(idx)
+            let mp = padded_shapes.get(idx)
                 .ok_or_else(|| anyhow!("[to_geojson_with_districts_and_bounds] Index {} out of bounds", idx))?;
+            
+            // Skip features with empty geometries (e.g., water blocks without geometry)
+            if mp.0.is_empty() {
+                continue;
+            }
             
             let district = assignments.get(idx).copied().unwrap_or(0);
             
@@ -272,4 +292,3 @@ fn multipolygon_to_geojson(mp: &MultiPolygon<f64>) -> Result<Value> {
         "coordinates": polygons_json
     }))
 }
-

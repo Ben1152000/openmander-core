@@ -155,6 +155,9 @@ impl MapLayer {
             // Only create Geometries if we have actual geometries
             // Empty geometry vectors should result in None (geometry file is optional)
             if !geoms.is_empty() {
+                // Note: We don't pad geometries here because we don't know which feature IDs
+                // are missing. The padding will be handled in to_geojson_with_districts
+                // when we know the expected count and can properly index them.
                 self.geoms = Some(Geometries::new(&geoms, None));
             }
         }

@@ -14,12 +14,18 @@ pub(crate) struct Geometries {
 impl Geometries {
     /// Construct a Geometries object from a vector of MultiPolygons
     pub(crate) fn new(polygons: &[MultiPolygon<f64>], epsg: Option<u32>) -> Self {
+        // Build R-tree, skipping empty MultiPolygons (they have no bounding rect)
+        // For empty polygons, we use a degenerate bounding box at (0, 0)
+        let bboxes: Vec<BoundingBox> = polygons.iter().enumerate()
+            .filter_map(|(i, polygon)| {
+                // Skip empty MultiPolygons in the R-tree (they can't be queried anyway)
+                // But we still keep them in the shapes vector for indexing purposes
+                polygon.bounding_rect().map(|rect| BoundingBox::new(i, rect))
+            })
+            .collect();
+        
         Self {
-            rtree: RTree::bulk_load(
-                polygons.iter().enumerate()
-                    .map(|(i, polygon)| BoundingBox::new(i, polygon.bounding_rect().unwrap()))
-                    .collect()
-            ),
+            rtree: RTree::bulk_load(bboxes),
             shapes: polygons.to_vec(),
             epsg,
         }

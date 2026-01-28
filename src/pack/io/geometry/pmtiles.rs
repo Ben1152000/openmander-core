@@ -1,36 +1,30 @@
+use std::io::Cursor;
+use std::f64::consts::PI;
+
 use anyhow::{Context, Result};
-use geo::{MultiPolygon, Coord, LineString, Polygon};
+use geo::{BooleanOps, MultiPolygon, Coord, LineString, Polygon, Simplify};
 #[cfg(feature = "pmtiles")]
 use geo_types::{GeometryCollection, LineString as GeoLineString, MultiLineString, MultiPoint, MultiPolygon as GeoMultiPolygon, Point, Polygon as GeoPolygon};
-use std::io::Cursor;
 
 /// Convert longitude to Web Mercator X coordinate (in radians)
-fn lon_to_mercator_x(lon: f64) -> f64 {
-    lon.to_radians()
-}
+fn lon_to_mercator_x(lon: f64) -> f64 { lon.to_radians() }
 
 /// Convert latitude to Web Mercator Y coordinate (in radians)
-fn lat_to_mercator_y(lat: f64) -> f64 {
-    (std::f64::consts::PI / 4.0 + lat.to_radians() / 2.0).tan().ln()
-}
+fn lat_to_mercator_y(lat: f64) -> f64 { (PI / 4.0 + lat.to_radians() / 2.0).tan().ln() }
 
 /// Convert Web Mercator X to longitude
-fn mercator_x_to_lon(x: f64) -> f64 {
-    x.to_degrees()
-}
+fn mercator_x_to_lon(x: f64) -> f64 { x.to_degrees() }
 
 /// Convert Web Mercator Y to latitude
-fn mercator_y_to_lat(y: f64) -> f64 {
-    (2.0 * (y.exp().atan() - std::f64::consts::PI / 4.0)).to_degrees()
-}
+fn mercator_y_to_lat(y: f64) -> f64 { (2.0 * (y.exp().atan() - PI / 4.0)).to_degrees() }
 
 /// Get tile bounds in Web Mercator coordinates
 fn tile_bounds(z: u8, x: u64, y: u64) -> (f64, f64, f64, f64) {
     let n = 2.0_f64.powi(z as i32);
-    let min_x = (x as f64 / n) * 2.0 * std::f64::consts::PI - std::f64::consts::PI;
-    let max_x = ((x + 1) as f64 / n) * 2.0 * std::f64::consts::PI - std::f64::consts::PI;
-    let min_y = std::f64::consts::PI - ((y + 1) as f64 / n) * 2.0 * std::f64::consts::PI;
-    let max_y = std::f64::consts::PI - (y as f64 / n) * 2.0 * std::f64::consts::PI;
+    let min_x = (x as f64 / n) * 2.0 * PI - PI;
+    let max_x = ((x + 1) as f64 / n) * 2.0 * PI - PI;
+    let min_y = PI - ((y + 1) as f64 / n) * 2.0 * PI;
+    let max_y = PI - (y as f64 / n) * 2.0 * PI;
     (min_x, min_y, max_x, max_y)
 }
 
@@ -133,7 +127,7 @@ where
 
 /// Calculate signed area of a ring (for winding order detection)
 /// Positive = counter-clockwise, Negative = clockwise
-fn ring_signed_area(ring: &[(f64, f64)]) -> f64 {
+fn _ring_signed_area(ring: &[(f64, f64)]) -> f64 {
     if ring.len() < 3 {
         return 0.0;
     }
@@ -200,12 +194,12 @@ fn clean_ring(ring: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
 
 /// Ensure correct winding order for MVT: outer rings clockwise, inner rings counter-clockwise
 /// Note: In tile coordinates, Y increases DOWNWARD, which inverts the signed area meaning
-fn ensure_winding_order(ring: Vec<(f64, f64)>, is_hole: bool) -> Vec<(f64, f64)> {
+fn _ensure_winding_order(ring: Vec<(f64, f64)>, is_hole: bool) -> Vec<(f64, f64)> {
     if ring.len() < 3 {
         return ring;
     }
     
-    let area = ring_signed_area(&ring);
+    let area = _ring_signed_area(&ring);
     // In tile coords (Y down): positive area = clockwise, negative = counter-clockwise
     // This is opposite of standard math coordinates (Y up)
     let is_clockwise = area > 0.0;
@@ -472,11 +466,11 @@ fn lon_to_tile_x(lon: f64, zoom: u8) -> u64 {
 fn lat_to_tile_y(lat: f64, zoom: u8) -> u64 {
     let n = 2.0_f64.powi(zoom as i32);
     let lat_rad = lat.to_radians();
-    ((1.0 - lat_rad.tan().asinh() / std::f64::consts::PI) / 2.0 * n).floor() as u64
+    ((1.0 - lat_rad.tan().asinh() / PI) / 2.0 * n).floor() as u64
 }
 
 /// Calculate the centroid of a polygon (simple average of exterior ring coordinates)
-fn polygon_centroid(poly: &Polygon<f64>) -> Option<(f64, f64)> {
+fn _polygon_centroid(poly: &Polygon<f64>) -> Option<(f64, f64)> {
     let coords: Vec<_> = poly.exterior().coords()
         .filter(|c| c.x.is_finite() && c.y.is_finite())
         .collect();
@@ -558,24 +552,69 @@ pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, 
         }
     }
     
+    /// Calculate simplification tolerance for a given zoom level.
+    /// Tolerance is in degrees and scales with tile size at that zoom level.
+    /// Lower zoom levels get higher tolerance (more aggressive simplification).
+    fn calculate_tolerance_for_zoom(zoom: u8) -> f64 {
+        // Approximate tile size in degrees at this zoom level
+        // At zoom z, one tile covers roughly 360 / 2^z degrees
+        let tile_size_degrees = 360.0 / (2.0_f64.powi(zoom as i32));
+        
+        // Use a larger fraction of tile size as tolerance for more aggressive simplification
+        // Using 1/20th of tile size (5x more aggressive than 1/100th)
+        // This ensures simplification is appropriate for the zoom level while being more aggressive
+        // Higher zoom = smaller tiles = smaller tolerance = less simplification
+        tile_size_degrees / 20.0
+    }
+    
+    /// Simplify a MultiPolygon using Douglas-Peucker algorithm.
+    /// Returns a new simplified MultiPolygon.
+    fn simplify_multipolygon(mp: &MultiPolygon<f64>, tolerance: f64) -> MultiPolygon<f64> {
+        let simplified_polygons: Vec<Polygon<f64>> = mp.0.iter()
+            .map(|poly| {
+                // Simplify exterior ring
+                let simplified_exterior = poly.exterior().simplify(&tolerance);
+                
+                // Simplify interior rings (holes)
+                let simplified_interiors: Vec<LineString<f64>> = poly.interiors()
+                    .iter()
+                    .map(|ring| ring.simplify(&tolerance))
+                    .collect();
+                
+                Polygon::new(simplified_exterior, simplified_interiors)
+            })
+            .collect();
+        
+        MultiPolygon(simplified_polygons)
+    }
+    
     // Build a map of (zoom, tile_x, tile_y) -> list of (geometry_index, polygon)
     // Each geometry is assigned to ALL tiles its bounding box intersects at each zoom level
     // This ensures geometries crossing tile boundaries appear in all relevant tiles
-    let mut tile_geometries: HashMap<(u8, u64, u64), Vec<(usize, &Polygon<f64>)>> = HashMap::new();
+    // We simplify geometries once per zoom level before assigning to tiles
+    let mut tile_geometries: HashMap<(u8, u64, u64), Vec<(usize, Polygon<f64>)>> = HashMap::new();
     
-    for (idx, mp) in geoms.iter().enumerate() {
-        for poly in &mp.0 {
-            // Get bounding box of this polygon
-            let (poly_min_lon, poly_min_lat, poly_max_lon, poly_max_lat) = polygon_bounds(poly);
-            
-            // Skip invalid polygons
-            if !poly_min_lon.is_finite() || !poly_min_lat.is_finite() || 
-               !poly_max_lon.is_finite() || !poly_max_lat.is_finite() {
-                continue;
-            }
-            
-            // Add this polygon to all intersecting tiles at each zoom level
-            for zoom in min_zoom..=max_zoom {
+    // Process geometries per zoom level, simplifying once per zoom
+    for zoom in min_zoom..=max_zoom {
+        let tolerance = calculate_tolerance_for_zoom(zoom);
+        
+        // Simplify all geometries for this zoom level
+        let simplified_geoms: Vec<MultiPolygon<f64>> = geoms.iter()
+            .map(|mp| simplify_multipolygon(mp, tolerance))
+            .collect();
+        
+        // Assign simplified geometries to tiles at this zoom level
+        for (idx, mp) in simplified_geoms.iter().enumerate() {
+            for poly in &mp.0 {
+                // Get bounding box of this polygon
+                let (poly_min_lon, poly_min_lat, poly_max_lon, poly_max_lat) = polygon_bounds(poly);
+                
+                // Skip invalid polygons
+                if !poly_min_lon.is_finite() || !poly_min_lat.is_finite() || 
+                   !poly_max_lon.is_finite() || !poly_max_lat.is_finite() {
+                    continue;
+                }
+                
                 // Calculate tile range that this polygon's bounding box spans
                 let tile_min_x = lon_to_tile_x(poly_min_lon, zoom);
                 let tile_max_x = lon_to_tile_x(poly_max_lon, zoom);
@@ -588,7 +627,7 @@ pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, 
                         tile_geometries
                             .entry((zoom, tile_x, tile_y))
                             .or_insert_with(Vec::new)
-                            .push((idx, poly));
+                            .push((idx, poly.clone()));
                     }
                 }
             }
@@ -759,9 +798,10 @@ pub(crate) fn read_from_pmtiles_bytes(bytes: &[u8]) -> Result<Vec<MultiPolygon<f
     let mut pmtiles = PMTiles::from_reader(&mut reader)
         .context("Failed to read PMTiles file")?;
     
-    // Use a HashMap to deduplicate geometries by their feature ID
-    // (since the same geometry appears in multiple tiles)
-    let mut geoms_by_id: HashMap<u64, MultiPolygon<f64>> = HashMap::new();
+    // Use a HashMap to collect all clipped pieces of each geometry by feature ID
+    // (since the same geometry appears in multiple tiles as clipped pieces)
+    // We'll merge them later to reconstruct the full geometry
+    let mut geoms_by_id: HashMap<u64, Vec<MultiPolygon<f64>>> = HashMap::new();
     
     // Get the zoom level and bounds from metadata
     let z = pmtiles.min_zoom;
@@ -814,17 +854,17 @@ pub(crate) fn read_from_pmtiles_bytes(bytes: &[u8]) -> Result<Vec<MultiPolygon<f
                                 None => continue,
                             };
                             
-                            // Skip if we've already processed this geometry
-                            if geoms_by_id.contains_key(&feature_id) {
-                                continue;
-                            }
-                            
                             let tile_geom = feature.get_geometry();
                             let extent = 4096.0_f32;
                             let world_geom = geometry_tile_to_world(z, tile_x, tile_y, extent, tile_geom);
                             
+                            // Collect all clipped pieces for this feature
+                            // (features spanning multiple tiles will have multiple clipped pieces)
                             if let Some(mp) = geometry_to_multipolygon(&world_geom) {
-                                geoms_by_id.insert(feature_id, mp);
+                                geoms_by_id
+                                    .entry(feature_id)
+                                    .or_insert_with(Vec::new)
+                                    .push(mp);
                             }
                         }
                     }
@@ -835,10 +875,47 @@ pub(crate) fn read_from_pmtiles_bytes(bytes: &[u8]) -> Result<Vec<MultiPolygon<f
         }
     }
     
-    // Convert HashMap to Vec, sorted by feature ID to maintain order
-    let mut geoms: Vec<_> = geoms_by_id.into_iter().collect();
-    geoms.sort_by_key(|(id, _)| *id);
-    let all_geoms: Vec<MultiPolygon<f64>> = geoms.into_iter().map(|(_, mp)| mp).collect();
+    // Merge all clipped pieces for each feature to reconstruct full geometries
+    let mut merged_geoms: Vec<(u64, MultiPolygon<f64>)> = Vec::new();
+    for (feature_id, pieces) in geoms_by_id {
+        if pieces.is_empty() {
+            continue;
+        }
+        
+        // If only one piece, use it directly (no merging needed)
+        // Otherwise, union all pieces to reconstruct the full geometry
+        let merged = if pieces.len() == 1 {
+            pieces.into_iter().next().unwrap()
+        } else {
+            // Merge all pieces using union operation
+            // Start with the first piece and union with each subsequent piece
+            let mut result = pieces[0].clone();
+            for piece in pieces.iter().skip(1) {
+                result = result.union(piece);
+            }
+            result
+        };
+        
+        merged_geoms.push((feature_id, merged));
+    }
+    
+    // Find the maximum feature ID to determine the size of the output vector
+    let max_feature_id = merged_geoms.iter()
+        .map(|(id, _)| *id)
+        .max()
+        .unwrap_or(0);
+    
+    // Create a vector where index i corresponds to feature ID i
+    // Fill missing feature IDs with empty MultiPolygons
+    let mut all_geoms: Vec<MultiPolygon<f64>> = Vec::new();
+    all_geoms.resize_with((max_feature_id + 1) as usize, || MultiPolygon::new(vec![]));
+    
+    // Fill in the actual geometries at their feature ID indices
+    for (feature_id, merged) in merged_geoms {
+        if (feature_id as usize) < all_geoms.len() {
+            all_geoms[feature_id as usize] = merged;
+        }
+    }
     
     // Return empty vector if no geometries found (geometry files are optional)
     // This allows layers without geometry to load successfully
@@ -855,4 +932,3 @@ pub(crate) fn write_to_pmtiles_bytes(_geoms: &[MultiPolygon<f64>], _zoom: u8) ->
 pub(crate) fn read_from_pmtiles_bytes(_bytes: &[u8]) -> Result<Vec<MultiPolygon<f64>>> {
     Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"))
 }
-

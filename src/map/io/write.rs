@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, fs::File, path::Path};
 
 use anyhow::{Context, Result};
 use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
+use geo::MultiPolygon;
 
 use crate::{common, map::{GeoType, Map, MapLayer, ParentRefs}, pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats, io::{csr, data, geometry}}};
 
@@ -74,10 +75,9 @@ impl MapLayer {
             _ => return Err(anyhow::anyhow!("Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data)),
         };
         let geom_ext = match formats.geometry.as_str() {
-            "geojson" => "geojson",
             "geoparquet" => "geoparquet",
             "pmtiles" => "pmtiles",
-            _ => return Err(anyhow::anyhow!("Unsupported geometry format: {}", formats.geometry)),
+            _ => return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry)),
         };
         
         let data_file = format!("data/{layer_name}.{data_ext}");
@@ -163,11 +163,14 @@ impl MapLayer {
                 let geom_bytes = match formats.geometry.as_str() {
                     #[cfg(feature = "parquet")]
                     "geoparquet" => geometry::write_to_geoparquet_bytes(shapes)?,
-                    "geojson" => geometry::write_to_geojson_bytes(shapes)?,
                     #[cfg(feature = "pmtiles")]
                     "pmtiles" => {
                         let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(self.ty());
-                        geometry::write_to_pmtiles_bytes(shapes, min_zoom, max_zoom)?
+                        // Extract geo_ids as strings for PMTiles encoding
+                        let geo_ids: Vec<String> = self.geo_ids.iter()
+                            .map(|g| g.id().to_string())
+                            .collect();
+                        geometry::write_to_pmtiles_bytes(shapes, Some(&geo_ids), min_zoom, max_zoom)?
                     },
                     #[cfg(not(feature = "parquet"))]
                     "geoparquet" => {
@@ -178,7 +181,7 @@ impl MapLayer {
                         return Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"));
                     }
                     _ => {
-                        return Err(anyhow::anyhow!("Unsupported geometry format: {}", formats.geometry));
+                        return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry));
                     }
                 };
                 sink.put(&geom_file, &geom_bytes)?;
@@ -219,18 +222,9 @@ impl Map {
         let dirs = ["adj", "data", "geom", "hull"];
         common::ensure_dirs(path, &dirs)?;
 
-        let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
-        let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
-
-        for layer in self.layers_iter() {
-            layer.write_to_pack(path, format, &mut counts, &mut file_hashes)?;
-        }
-
-        // Manifest (disk): keep your current behavior
-        let meta_path = path.join("manifest.json");
-        let formats = PackFormats::from_pack_format(format);
-        let manifest = Manifest::new(path, counts, file_hashes, formats);
-        serde_json::to_writer_pretty(File::create(&meta_path)?, &manifest)?;
+        // Use the sink-based API which handles multi-layer PMTiles
+        let mut sink = DiskPack::new(path);
+        self.write_to_pack_sink_with_format(&mut sink, path, format)?;
 
         Ok(())
     }
@@ -247,6 +241,12 @@ impl Map {
 
         let formats = PackFormats::from_pack_format(format);
         
+        // Special handling for PMTiles: write all layers to a single file
+        #[cfg(feature = "pmtiles")]
+        if format == PackFormat::Pmtiles {
+            return self.write_to_pack_sink_with_multilayer_pmtiles(sink, pack_root_for_manifest, &formats, &mut counts, &mut file_hashes);
+        }
+        
         for layer in self.layers_iter() {
             layer.write_to_pack_sink_with_formats(sink, &formats, &mut counts, &mut file_hashes)?;
         }
@@ -256,6 +256,90 @@ impl Map {
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
         sink.put("manifest.json", &manifest_bytes)?;
 
+        Ok(())
+    }
+    
+    /// Write all layers to a single PMTiles file (geom/geometries.pmtiles)
+    #[cfg(feature = "pmtiles")]
+    fn write_to_pack_sink_with_multilayer_pmtiles(
+        &self,
+        sink: &mut dyn PackSink,
+        pack_root_for_manifest: &Path,
+        formats: &PackFormats,
+        counts: &mut BTreeMap<&'static str, usize>,
+        file_hashes: &mut BTreeMap<String, FileHash>,
+    ) -> Result<()> {
+        // Write data, adjacency, and hull files for each layer (same as before)
+        for layer in self.layers_iter() {
+            let layer_name = layer.ty().to_str();
+            let adj_file = format!("adj/{layer_name}.csr.bin");
+            let data_file = format!("data/{layer_name}.csv");
+            let hull_file = format!("hull/{layer_name}.wkb");
+            
+            counts.insert(layer_name.into(), layer.geo_ids.len());
+            
+            // Write data file
+            let data_bytes = data::write_to_csv_bytes(&mut layer.pack_data()?)?;
+            sink.put(&data_file, &data_bytes)?;
+            file_hashes.insert(data_file.clone(), FileHash { sha256: common::sha256_bytes(&data_bytes) });
+            
+            // Write adjacency file (skip for state layer)
+            if layer.ty() != GeoType::State {
+                let adj_bytes = csr::write_to_weighted_csr_bytes(&layer.adjacencies, &layer.edge_lengths)?;
+                sink.put(&adj_file, &adj_bytes)?;
+                file_hashes.insert(adj_file.clone(), FileHash { sha256: common::sha256_bytes(&adj_bytes) });
+            }
+            
+            // Write hull file (if exists)
+            if let Some(hulls) = &layer.hulls {
+                if !hulls.is_empty() {
+                    let hull_bytes = geometry::write_hulls_to_wkb_bytes(hulls, true)?;
+                    sink.put(&hull_file, &hull_bytes)?;
+                    file_hashes.insert(hull_file.clone(), FileHash { sha256: common::sha256_bytes(&hull_bytes) });
+                }
+            }
+        }
+        
+        // Collect all layers with geometries for multi-layer PMTiles
+        // First collect all geo_ids to avoid borrow checker issues
+        let mut geo_id_vecs: Vec<Vec<String>> = Vec::new();
+        let mut layer_info: Vec<(&str, &[MultiPolygon<f64>], u8, u8, usize)> = Vec::new();
+        
+        for layer in self.layers_iter() {
+            if let Some(geom) = &layer.geoms {
+                let shapes = geom.shapes();
+                if !shapes.is_empty() {
+                    let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(layer.ty());
+                    let geo_ids: Vec<String> = layer.geo_ids.iter()
+                        .map(|g| g.id().to_string())
+                        .collect();
+                    let idx = geo_id_vecs.len();
+                    geo_id_vecs.push(geo_ids);
+                    layer_info.push((layer.ty().to_str(), shapes, min_zoom, max_zoom, idx));
+                }
+            }
+        }
+        
+        // Now build the pmtiles_layers vec with references
+        let pmtiles_layers: Vec<(&str, &[MultiPolygon<f64>], Option<&[String]>, u8, u8)> = layer_info.iter()
+            .map(|(name, shapes, min_zoom, max_zoom, idx)| {
+                (*name, *shapes, Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)
+            })
+            .collect();
+        
+        // Write single multi-layer PMTiles file
+        if !pmtiles_layers.is_empty() {
+            let geom_file = "geom/geometries.pmtiles";
+            let geom_bytes = geometry::write_multilayer_pmtiles_bytes(pmtiles_layers)?;
+            sink.put(geom_file, &geom_bytes)?;
+            file_hashes.insert(geom_file.to_string(), FileHash { sha256: common::sha256_bytes(&geom_bytes) });
+        }
+        
+        // Create manifest
+        let manifest = Manifest::new(pack_root_for_manifest, (*counts).clone(), (*file_hashes).clone(), (*formats).clone());
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+        sink.put("manifest.json", &manifest_bytes)?;
+        
         Ok(())
     }
 }

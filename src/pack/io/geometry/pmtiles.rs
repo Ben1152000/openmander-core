@@ -51,36 +51,44 @@ fn world_to_tile_coords(lon: f64, lat: f64, z: u8, x: u64, y: u64, extent: f64) 
 /// Clip a polygon ring to tile boundaries using Sutherland-Hodgman algorithm.
 /// This properly interpolates intersection points where lines cross tile edges,
 /// avoiding the "stair-step" effect from simple coordinate clamping.
-fn clip_ring_to_tile(ring: &[(f64, f64)], extent: f64) -> Vec<(f64, f64)> {
+/// 
+/// The buffer parameter extends the clipping bounds beyond the tile edges to ensure
+/// geometries that cross tile boundaries are rendered seamlessly without visible seams.
+/// A buffer of 256 pixels (out of 4096 extent) is recommended for production use.
+fn clip_ring_to_tile(ring: &[(f64, f64)], extent: f64, buffer: f64) -> Vec<(f64, f64)> {
     if ring.is_empty() {
         return Vec::new();
     }
     
+    // Extend clipping bounds by buffer amount
+    let min_bound = -buffer;
+    let max_bound = extent + buffer;
+    
     // Clip against each of the four tile edges in sequence
     let mut output = ring.to_vec();
     
-    // Clip against left edge (x = 0)
-    output = clip_against_edge(&output, |p| p.0 >= 0.0, |p1, p2| {
-        let t = (0.0 - p1.0) / (p2.0 - p1.0);
-        (0.0, p1.1 + t * (p2.1 - p1.1))
+    // Clip against left edge (x = -buffer)
+    output = clip_against_edge(&output, |p| p.0 >= min_bound, |p1, p2| {
+        let t = (min_bound - p1.0) / (p2.0 - p1.0);
+        (min_bound, p1.1 + t * (p2.1 - p1.1))
     });
     
-    // Clip against right edge (x = extent)
-    output = clip_against_edge(&output, |p| p.0 <= extent, |p1, p2| {
-        let t = (extent - p1.0) / (p2.0 - p1.0);
-        (extent, p1.1 + t * (p2.1 - p1.1))
+    // Clip against right edge (x = extent + buffer)
+    output = clip_against_edge(&output, |p| p.0 <= max_bound, |p1, p2| {
+        let t = (max_bound - p1.0) / (p2.0 - p1.0);
+        (max_bound, p1.1 + t * (p2.1 - p1.1))
     });
     
-    // Clip against top edge (y = 0)
-    output = clip_against_edge(&output, |p| p.1 >= 0.0, |p1, p2| {
-        let t = (0.0 - p1.1) / (p2.1 - p1.1);
-        (p1.0 + t * (p2.0 - p1.0), 0.0)
+    // Clip against top edge (y = -buffer)
+    output = clip_against_edge(&output, |p| p.1 >= min_bound, |p1, p2| {
+        let t = (min_bound - p1.1) / (p2.1 - p1.1);
+        (p1.0 + t * (p2.0 - p1.0), min_bound)
     });
     
-    // Clip against bottom edge (y = extent)
-    output = clip_against_edge(&output, |p| p.1 <= extent, |p1, p2| {
-        let t = (extent - p1.1) / (p2.1 - p1.1);
-        (p1.0 + t * (p2.0 - p1.0), extent)
+    // Clip against bottom edge (y = extent + buffer)
+    output = clip_against_edge(&output, |p| p.1 <= max_bound, |p1, p2| {
+        let t = (max_bound - p1.1) / (p2.1 - p1.1);
+        (p1.0 + t * (p2.0 - p1.0), max_bound)
     });
     
     output
@@ -505,6 +513,259 @@ fn polygon_bounds(poly: &Polygon<f64>) -> (f64, f64, f64, f64) {
     (min_lon, min_lat, max_lon, max_lat)
 }
 
+/// Write multiple layers to a single PMTiles file with each layer at its appropriate zoom range.
+/// This creates a single PMTiles archive containing all geometry layers, where each layer
+/// is visible at its designated zoom levels (e.g., states at z4-8, blocks at z12-14).
+/// 
+/// Parameters:
+/// - layers: Vec of (layer_name, geometries, geo_ids, min_zoom, max_zoom)
+/// 
+/// Returns: PMTiles file as bytes
+#[cfg(feature = "pmtiles")]
+pub(crate) fn write_multilayer_pmtiles_bytes(
+    layers: Vec<(&str, &[MultiPolygon<f64>], Option<&[String]>, u8, u8)>
+) -> Result<Vec<u8>> {
+    use pmtiles2::{PMTiles, TileType, Compression as PmtilesCompression};
+    use pmtiles2::util::tile_id;
+    use mvt::{Tile, GeomEncoder, GeomType};
+    use flate2::write::GzEncoder;
+    use flate2::Compression as Flate2Compression;
+    use std::io::Write;
+    use std::collections::HashMap;
+    
+    if layers.is_empty() {
+        return Err(anyhow::anyhow!("Cannot write empty layer list to PMTiles"));
+    }
+    
+    // Calculate overall bounds from all layers
+    let mut global_min_lon = f64::INFINITY;
+    let mut global_min_lat = f64::INFINITY;
+    let mut global_max_lon = f64::NEG_INFINITY;
+    let mut global_max_lat = f64::NEG_INFINITY;
+    let mut global_min_zoom = u8::MAX;
+    let mut global_max_zoom = u8::MIN;
+    
+    for (_, geoms, _, min_zoom, max_zoom) in &layers {
+        global_min_zoom = global_min_zoom.min(*min_zoom);
+        global_max_zoom = global_max_zoom.max(*max_zoom);
+        
+        for mp in *geoms {
+            for poly in &mp.0 {
+                let (pmin_lon, pmin_lat, pmax_lon, pmax_lat) = polygon_bounds(poly);
+                if pmin_lon.is_finite() && pmin_lat.is_finite() && 
+                   pmax_lon.is_finite() && pmax_lat.is_finite() {
+                    global_min_lon = global_min_lon.min(pmin_lon);
+                    global_min_lat = global_min_lat.min(pmin_lat);
+                    global_max_lon = global_max_lon.max(pmax_lon);
+                    global_max_lat = global_max_lat.max(pmax_lat);
+                }
+            }
+        }
+    }
+    
+    /// Calculate simplification tolerance for a given zoom level.
+    /// Returns 0.0 (no simplification) at max zoom to preserve full detail.
+    fn calculate_tolerance_for_zoom(zoom: u8, max_zoom: u8) -> f64 {
+        // No simplification at max zoom - preserve full detail
+        if zoom >= max_zoom {
+            return 0.0;
+        }
+        
+        let tile_size_degrees = 360.0 / (2.0_f64.powi(zoom as i32));
+        // Very conservative simplification at lower zooms
+        tile_size_degrees / 1000.0
+    }
+    
+    /// Simplify a MultiPolygon using Douglas-Peucker algorithm.
+    fn simplify_multipolygon(mp: &MultiPolygon<f64>, tolerance: f64) -> MultiPolygon<f64> {
+        let simplified_polygons: Vec<Polygon<f64>> = mp.0.iter()
+            .map(|poly| {
+                let simplified_exterior = poly.exterior().simplify(&tolerance);
+                let simplified_interiors: Vec<LineString<f64>> = poly.interiors()
+                    .iter()
+                    .map(|ring| ring.simplify(&tolerance))
+                    .collect();
+                Polygon::new(simplified_exterior, simplified_interiors)
+            })
+            .collect();
+        MultiPolygon(simplified_polygons)
+    }
+    
+    // Build a map of (zoom, tile_x, tile_y) -> Vec<(layer_name, geometry_index, polygon)>
+    let mut tile_geometries: HashMap<(u8, u64, u64), Vec<(&str, usize, Polygon<f64>)>> = HashMap::new();
+    
+    // Process each layer
+    for (layer_name, geoms, _geo_ids, min_zoom, max_zoom) in &layers {
+        // Process geometries per zoom level for this layer
+        for zoom in *min_zoom..=*max_zoom {
+            let tolerance = calculate_tolerance_for_zoom(zoom, *max_zoom);
+            
+            // Simplify all geometries for this zoom level
+            let simplified_geoms: Vec<MultiPolygon<f64>> = geoms.iter()
+                .map(|mp| simplify_multipolygon(mp, tolerance))
+                .collect();
+            
+            // Assign simplified geometries to tiles at this zoom level
+            for (idx, mp) in simplified_geoms.iter().enumerate() {
+                for poly in &mp.0 {
+                    let (poly_min_lon, poly_min_lat, poly_max_lon, poly_max_lat) = polygon_bounds(poly);
+                    
+                    if !poly_min_lon.is_finite() || !poly_min_lat.is_finite() || 
+                       !poly_max_lon.is_finite() || !poly_max_lat.is_finite() {
+                        continue;
+                    }
+                    
+                    let tile_min_x = lon_to_tile_x(poly_min_lon, zoom);
+                    let tile_max_x = lon_to_tile_x(poly_max_lon, zoom);
+                    let tile_min_y = lat_to_tile_y(poly_max_lat, zoom);
+                    let tile_max_y = lat_to_tile_y(poly_min_lat, zoom);
+                    
+                    for tile_x in tile_min_x..=tile_max_x {
+                        for tile_y in tile_min_y..=tile_max_y {
+                            tile_geometries
+                                .entry((zoom, tile_x, tile_y))
+                                .or_insert_with(Vec::new)
+                                .push((layer_name, idx, poly.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Create PMTiles writer
+    let mut pm = PMTiles::new(TileType::Mvt, PmtilesCompression::GZip);
+    
+    pm.min_zoom = global_min_zoom;
+    pm.max_zoom = global_max_zoom;
+    pm.min_longitude = global_min_lon;
+    pm.min_latitude = global_min_lat;
+    pm.max_longitude = global_max_lon;
+    pm.max_latitude = global_max_lat;
+    pm.center_zoom = (global_min_zoom + global_max_zoom) / 2;
+    pm.center_longitude = (global_min_lon + global_max_lon) / 2.0;
+    pm.center_latitude = (global_min_lat + global_max_lat) / 2.0;
+    
+    // Metadata with vector_layers for all layers
+    pm.meta_data.insert("name".into(), serde_json::json!("OpenMander geometries"));
+    pm.meta_data.insert("format".into(), serde_json::json!("pbf"));
+    pm.meta_data.insert("type".into(), serde_json::json!("overlay"));
+    pm.meta_data.insert("minzoom".into(), serde_json::json!(global_min_zoom));
+    pm.meta_data.insert("maxzoom".into(), serde_json::json!(global_max_zoom));
+    
+    let vector_layers: Vec<_> = layers.iter().map(|(layer_name, _, _, min_zoom, max_zoom)| {
+        serde_json::json!({
+            "id": layer_name,
+            "fields": {"index": "String"},
+            "minzoom": min_zoom,
+            "maxzoom": max_zoom
+        })
+    }).collect();
+    pm.meta_data.insert("vector_layers".into(), serde_json::json!(vector_layers));
+    
+    let extent = 4096u32;
+    let extent_f = extent as f64;
+    let buffer = 256.0;
+    
+    // Group geometries by tile, then by layer
+    let mut tiles_by_coord: HashMap<(u8, u64, u64), HashMap<&str, Vec<(usize, Polygon<f64>)>>> = HashMap::new();
+    for ((zoom, tile_x, tile_y), geoms) in tile_geometries.iter() {
+        let tile_layers = tiles_by_coord.entry((*zoom, *tile_x, *tile_y)).or_insert_with(HashMap::new);
+        for (layer_name, idx, poly) in geoms {
+            tile_layers.entry(layer_name).or_insert_with(Vec::new).push((*idx, poly.clone()));
+        }
+    }
+    
+    // Create tiles
+    for ((zoom, tile_x, tile_y), layer_geoms) in tiles_by_coord.iter() {
+        let mut tile = Tile::new(extent);
+        
+        // Create a layer for each geometry layer in this tile
+        for (layer_name, polygons) in layer_geoms.iter() {
+            let mut layer = tile.create_layer(layer_name);
+            
+            for (idx, poly) in polygons {
+                let mut encoder = GeomEncoder::new(GeomType::Polygon);
+                
+                // Process exterior ring
+                let exterior_coords: Vec<_> = poly.exterior().coords().collect();
+                if exterior_coords.len() < 3 {
+                    continue;
+                }
+                
+                let exterior_tile_coords_raw: Vec<(f64, f64)> = exterior_coords.iter()
+                    .filter(|coord| coord.x.is_finite() && coord.y.is_finite())
+                    .map(|coord| world_to_tile_coords(coord.x, coord.y, *zoom, *tile_x, *tile_y, extent_f))
+                    .collect();
+                
+                let exterior_clipped = clip_ring_to_tile(&exterior_tile_coords_raw, extent_f, buffer);
+                let mut exterior_tile_coords: Vec<(f64, f64)> = exterior_clipped.iter()
+                    .map(|(x, y)| (x.round(), y.round()))
+                    .collect();
+                exterior_tile_coords = clean_ring(exterior_tile_coords);
+                if exterior_tile_coords.len() < 3 {
+                    continue;
+                }
+                
+                for (x, y) in exterior_tile_coords.iter() {
+                    encoder = encoder.point(*x, *y)?;
+                }
+                encoder = encoder.complete()?;
+                
+                // Process interior rings
+                for interior in poly.interiors() {
+                    let interior_coords: Vec<_> = interior.coords().collect();
+                    if interior_coords.len() < 3 {
+                        continue;
+                    }
+                    
+                    let interior_tile_coords_raw: Vec<(f64, f64)> = interior_coords.iter()
+                        .filter(|coord| coord.x.is_finite() && coord.y.is_finite())
+                        .map(|coord| world_to_tile_coords(coord.x, coord.y, *zoom, *tile_x, *tile_y, extent_f))
+                        .collect();
+                    
+                    let interior_clipped = clip_ring_to_tile(&interior_tile_coords_raw, extent_f, buffer);
+                    let mut interior_tile_coords: Vec<(f64, f64)> = interior_clipped.iter()
+                        .map(|(x, y)| (x.round(), y.round()))
+                        .collect();
+                    interior_tile_coords = clean_ring(interior_tile_coords);
+                    if interior_tile_coords.len() < 3 {
+                        continue;
+                    }
+                    
+                    for (x, y) in interior_tile_coords.iter() {
+                        encoder = encoder.point(*x, *y)?;
+                    }
+                    encoder = encoder.complete()?;
+                }
+                
+                let geom_data = encoder.encode()?;
+                let mut feature = layer.into_feature(geom_data);
+                feature.set_id(*idx as u64);
+                feature.add_tag_string("index", &idx.to_string());
+                layer = feature.into_layer();
+            }
+            
+            tile.add_layer(layer)?;
+        }
+        
+        // Encode and compress tile
+        let tile_data = tile.to_bytes()?;
+        let mut encoder = GzEncoder::new(Vec::new(), Flate2Compression::default());
+        encoder.write_all(&tile_data)?;
+        let compressed = encoder.finish()?;
+        
+        let tile_id = tile_id(*zoom, *tile_x, *tile_y);
+        pm.add_tile(tile_id, compressed)?;
+    }
+    
+    // Write PMTiles to bytes
+    let mut buffer = Cursor::new(Vec::new());
+    pm.to_writer(&mut buffer)?;
+    
+    Ok(buffer.into_inner())
+}
+
 /// This implementation converts geometries to MVT (Mapbox Vector Tiles) format
 /// and stores them in a PMTiles archive at specified zoom levels.
 /// 
@@ -520,7 +781,7 @@ fn polygon_bounds(poly: &Polygon<f64>) -> (f64, f64, f64, f64) {
 /// - z12: Good for block groups
 /// - z14: Good for census blocks (visible when zoomed in)
 #[cfg(feature = "pmtiles")]
-pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, max_zoom: u8) -> Result<Vec<u8>> {
+pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], geo_ids: Option<&[String]>, min_zoom: u8, max_zoom: u8) -> Result<Vec<u8>> {
     use pmtiles2::{PMTiles, TileType, Compression as PmtilesCompression};
     use pmtiles2::util::tile_id;
     use mvt::{Tile, GeomEncoder, GeomType};
@@ -555,16 +816,22 @@ pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, 
     /// Calculate simplification tolerance for a given zoom level.
     /// Tolerance is in degrees and scales with tile size at that zoom level.
     /// Lower zoom levels get higher tolerance (more aggressive simplification).
-    fn calculate_tolerance_for_zoom(zoom: u8) -> f64 {
+    /// Returns 0.0 (no simplification) at max zoom to preserve full detail.
+    fn calculate_tolerance_for_zoom(zoom: u8, max_zoom: u8) -> f64 {
+        // No simplification at max zoom - preserve full detail
+        if zoom >= max_zoom {
+            return 0.0;
+        }
+        
         // Approximate tile size in degrees at this zoom level
         // At zoom z, one tile covers roughly 360 / 2^z degrees
         let tile_size_degrees = 360.0 / (2.0_f64.powi(zoom as i32));
         
-        // Use a larger fraction of tile size as tolerance for more aggressive simplification
-        // Using 1/20th of tile size (5x more aggressive than 1/100th)
-        // This ensures simplification is appropriate for the zoom level while being more aggressive
+        // Use a small fraction of tile size as tolerance
+        // Using 1/1000th of tile size for very conservative simplification
+        // This preserves detail while still reducing file size
         // Higher zoom = smaller tiles = smaller tolerance = less simplification
-        tile_size_degrees / 20.0
+        tile_size_degrees / 1000.0
     }
     
     /// Simplify a MultiPolygon using Douglas-Peucker algorithm.
@@ -596,7 +863,7 @@ pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, 
     
     // Process geometries per zoom level, simplifying once per zoom
     for zoom in min_zoom..=max_zoom {
-        let tolerance = calculate_tolerance_for_zoom(zoom);
+        let tolerance = calculate_tolerance_for_zoom(zoom, max_zoom);
         
         // Simplify all geometries for this zoom level
         let simplified_geoms: Vec<MultiPolygon<f64>> = geoms.iter()
@@ -669,6 +936,11 @@ pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, 
     let extent = 4096u32;
     let extent_f = extent as f64;
     
+    // CRITICAL: Add buffer zone to prevent phantom tile boundaries
+    // Buffer of 256 pixels (6.25% of 4096 extent) ensures geometries crossing
+    // tile boundaries are rendered seamlessly without visible seams
+    let buffer = 256.0;
+    
     // Create a tile for each tile that has geometries
     for ((zoom, tile_x, tile_y), polygons) in tile_geometries.iter() {
         let mut tile = Tile::new(extent);
@@ -692,7 +964,8 @@ pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, 
                 .collect();
             
             // Clip ring to tile boundaries (interpolates intersection points properly)
-            let exterior_clipped = clip_ring_to_tile(&exterior_tile_coords_raw, extent_f);
+            // Include buffer zone to prevent phantom boundaries at tile edges
+            let exterior_clipped = clip_ring_to_tile(&exterior_tile_coords_raw, extent_f, buffer);
             
             // Round and clean the clipped ring
             let mut exterior_tile_coords: Vec<(f64, f64)> = exterior_clipped.iter()
@@ -728,8 +1001,8 @@ pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, 
                     .map(|coord| world_to_tile_coords(coord.x, coord.y, *zoom, *tile_x, *tile_y, extent_f))
                     .collect();
                 
-                // Clip ring to tile boundaries
-                let interior_clipped = clip_ring_to_tile(&interior_tile_coords_raw, extent_f);
+                // Clip ring to tile boundaries (with buffer)
+                let interior_clipped = clip_ring_to_tile(&interior_tile_coords_raw, extent_f, buffer);
                 
                 // Round and clean
                 let mut interior_tile_coords: Vec<(f64, f64)> = interior_clipped.iter()
@@ -756,6 +1029,14 @@ pub(crate) fn write_to_pmtiles_bytes(geoms: &[MultiPolygon<f64>], min_zoom: u8, 
             let mut feature = layer.into_feature(geom);
             feature.set_id(*idx as u64);
             feature.add_tag_string("index", &idx.to_string());
+            
+            // Add geo_id as a property if available (for feature identification in MapLibre)
+            if let Some(geo_ids) = geo_ids {
+                if let Some(geo_id) = geo_ids.get(*idx) {
+                    feature.add_tag_string("geo_id", geo_id);
+                }
+            }
+            
             layer = feature.into_layer();
         }
         
@@ -924,7 +1205,7 @@ pub(crate) fn read_from_pmtiles_bytes(bytes: &[u8]) -> Result<Vec<MultiPolygon<f
 
 /// Placeholder implementations when pmtiles feature is not enabled
 #[cfg(not(feature = "pmtiles"))]
-pub(crate) fn write_to_pmtiles_bytes(_geoms: &[MultiPolygon<f64>], _zoom: u8) -> Result<Vec<u8>> {
+pub(crate) fn write_to_pmtiles_bytes(_geoms: &[MultiPolygon<f64>], _geo_ids: Option<&[String]>, _min_zoom: u8, _max_zoom: u8) -> Result<Vec<u8>> {
     Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"))
 }
 

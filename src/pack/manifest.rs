@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::map::GeoType;
 use crate::pack::{PackFormat, PackSource};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct FileHash {
     pub sha256: String,
 }
@@ -30,7 +30,7 @@ impl Default for PackFormats {
         Self {
             adjacency: "csr".to_string(),
             data: "csv".to_string(),  // CSV is the default (WASM-compatible)
-            geometry: "geojson".to_string(),
+            geometry: "pmtiles".to_string(),
             hull: "wkb".to_string(),
         }
     }
@@ -43,18 +43,15 @@ impl PackFormats {
             adjacency: "csr".to_string(),
             data: match format {
                 PackFormat::Parquet => "parquet".to_string(),
-                PackFormat::GeoJson => "csv".to_string(),
                 PackFormat::Pmtiles => "csv".to_string(),
             },
             geometry: match format {
                 PackFormat::Parquet => "geoparquet".to_string(),
-                PackFormat::GeoJson => "geojson".to_string(),
                 PackFormat::Pmtiles => "pmtiles".to_string(),
             },
             // Hull format matches geometry format for geoparquet, otherwise use wkb
             hull: match format {
                 PackFormat::Parquet => "geoparquet".to_string(),
-                PackFormat::GeoJson => "wkb".to_string(),
                 PackFormat::Pmtiles => "wkb".to_string(),
             },
         }

@@ -50,10 +50,9 @@ impl MapLayer {
             _ => return Err(anyhow::anyhow!("Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data)),
         };
         let geom_ext = match formats.geometry.as_str() {
-            "geojson" => "geojson",
             "geoparquet" => "geoparquet",
             "pmtiles" => "pmtiles",
-            _ => return Err(anyhow::anyhow!("Unsupported geometry format: {}", formats.geometry)),
+            _ => return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry)),
         };
         let hull_ext = match formats.hull.as_str() {
             "wkb" => "wkb",
@@ -137,7 +136,6 @@ impl MapLayer {
             let geoms = match formats.geometry.as_str() {
                 #[cfg(feature = "parquet")]
                 "geoparquet" => geometry::read_from_geoparquet_bytes(&geom_bytes)?,
-                "geojson" => geometry::read_from_geojson_bytes(&geom_bytes)?,
                 #[cfg(feature = "pmtiles")]
                 "pmtiles" => geometry::read_from_pmtiles_bytes(&geom_bytes)?,
                 #[cfg(not(feature = "parquet"))]
@@ -149,7 +147,7 @@ impl MapLayer {
                     return Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"));
                 }
                 _ => {
-                    return Err(anyhow::anyhow!("Unsupported geometry format: {}", formats.geometry));
+                    return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry));
                 }
             };
             // Only create Geometries if we have actual geometries
@@ -260,7 +258,7 @@ impl Map {
                 }
             }
         }
-        // If no geoparquet or pmtiles found, default to geojson (already set in default)
+        // Default is pmtiles if no geoparquet found
         
         // Detect hull format
         if let Some(hull_format) = Self::detect_hull_format(src) {
@@ -293,7 +291,7 @@ impl Map {
         None
     }
 
-    /// Detect pack format by checking for parquet, json, or pmtiles files
+    /// Detect pack format by checking for parquet or pmtiles files
     pub fn detect_pack_format(src: &dyn PackSource) -> Result<PackFormat> {
         // Check for parquet files first (if parquet feature is enabled)
         #[cfg(feature = "parquet")]
@@ -315,11 +313,11 @@ impl Map {
                 }
             }
         }
-        // Check for CSV/GeoJSON files (geojson format uses CSV for data)
+        // Check for CSV files (pmtiles format uses CSV for data)
         for ty in GeoType::ALL {
             let csv_file = format!("data/{}.csv", ty.to_str());
             if src.has(&csv_file) {
-                return Ok(PackFormat::GeoJson);
+                return Ok(PackFormat::Pmtiles);
             }
         }
         // If no files found, return error with helpful message

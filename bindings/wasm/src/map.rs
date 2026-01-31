@@ -20,7 +20,7 @@ impl WasmMap {
         // Auto-detect format from available files
         let format = openmander_core::Map::detect_pack_format(&mem)
             .map_err(js_err)
-            .unwrap_or_else(|_| openmander_core::PackFormat::GeoJson); // Default to JSON for WASM
+            .unwrap_or_else(|_| openmander_core::PackFormat::Pmtiles); // Default to PMTiles for WASM
         let map = openmander_core::Map::read_from_pack_source(&mem, format).map_err(js_err)?;
         Ok(WasmMap { inner: Arc::new(map) })
     }

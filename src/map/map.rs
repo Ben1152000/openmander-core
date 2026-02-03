@@ -48,7 +48,7 @@ impl Map {
     }
 
     /// Set a specific map layer, replacing any existing data for that geographic type.
-    pub(super) fn insert(&mut self, layer: MapLayer) {
+    pub(crate) fn insert(&mut self, layer: MapLayer) {
         let ty = layer.ty();
         self.layers[ty as usize] = Some(layer);
     }

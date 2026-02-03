@@ -1,3 +1,5 @@
+//! Shapefile format reading operations.
+
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result, bail};
@@ -8,18 +10,18 @@ use shapefile::{self as shp, dbase::Record, Reader, Shape};
 pub(crate) fn shape_to_multipolygon(shape: Shape) -> Result<geo::MultiPolygon<f64>> {
     match shape {
         Shape::Polygon(polygon) => Ok(shp_to_geo(&polygon)),
-        other => bail!("found non-Polygon shape in layer: {:?}", other.shapetype())
+        other => bail!("[io::shp] found non-Polygon shape in layer: {:?}", other.shapetype())
     }
 }
 
 /// Read all shapes and records from a shapefile.
-pub(crate) fn read_from_shapefile(path: &Path) -> Result<(Vec<Shape>, Vec<Record>)> {
+pub(crate) fn read_shapefile(path: &Path) -> Result<(Vec<Shape>, Vec<Record>)> {
     let mut reader = Reader::from_path(path)
-        .with_context(|| format!("Failed to open shapefile: {}", path.display()))?;
+        .with_context(|| format!("[io::shp] Failed to open shapefile: {}", path.display()))?;
 
     let (shapes, records) = reader.iter_shapes_and_records()
         .collect::<Result<Vec<_>, _>>()
-        .with_context(|| format!("Error reading shapes+records from shapefile: {}", path.display()))?
+        .with_context(|| format!("[io::shp] Error reading shapes+records from shapefile: {}", path.display()))?
         .into_iter().unzip();
 
     Ok((shapes, records))
@@ -104,7 +106,8 @@ fn shp_to_geo(p: &shp::Polygon) -> geo::MultiPolygon<f64> {
 }
 
 /// Convert geo::MultiPolygon<f64> to shapefile::Polygon
-fn _geo_to_shp(mp: &geo::MultiPolygon<f64>) -> shp::Polygon {
+#[allow(dead_code)]
+fn geo_to_shp(mp: &geo::MultiPolygon<f64>) -> shp::Polygon {
     /// Create a shapefile::Point
     #[inline] fn shp_point(x: f64, y: f64) -> shp::Point { shp::Point { x, y } }
 

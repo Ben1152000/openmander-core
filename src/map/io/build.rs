@@ -9,7 +9,7 @@ use crate::{ParentRefs, common, geom::Geometries, map::{GeoId, GeoType, Map, Map
 impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.
     fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<Self> {
-        let (shapes, records) = common::read_from_shapefile(path)?;
+        let (shapes, records) = crate::io::shp::read_shapefile(path)?;
 
         /// Convert a vector of records to a DataFrame (using TIGER/PL census format)
         fn records_to_dataframe(records: Vec<Record>, ty: GeoType) -> Result<DataFrame> {
@@ -95,10 +95,10 @@ impl MapLayer {
         // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64>
         layer.geoms = Some(Geometries::new(
             &shapes.into_iter()
-                .map(|shape| common::shape_to_multipolygon(shape))
+                .map(|shape| crate::io::shp::shape_to_multipolygon(shape))
                 .collect::<Result<Vec<_>>>()
                 .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?,
-            common::epsg_from_shapefile(path),
+            crate::io::shp::epsg_from_shapefile(path),
         ));
 
         Ok(layer)
@@ -446,7 +446,7 @@ impl Map {
                 layer.assign_parents_from_map(
                     GeoType::VTD,
                     map_from_crosswalk_df(
-                        &common::read_from_pipe_delimited_txt(&input_dir.join(format!("BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt")))?, 
+                        &crate::io::csv::read_pipe_delimited_txt(&input_dir.join(format!("BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt")))?, 
                         (GeoType::Block, GeoType::VTD), 
                         ("BLOCKID", "DISTRICT")
                     )?
@@ -467,12 +467,12 @@ impl Map {
         }
 
         if verbose > 0 { eprintln!("[build_pack] loading demographic data"); }
-        map.merge_block_data(ensure_geoid_is_str(common::read_from_csv(
+        map.merge_block_data(ensure_geoid_is_str(crate::io::csv::read_csv(
             &input_dir.join(format!("Demographic_Data_Block_{state_code}/demographic_data_block_{state_code}.v06.csv"))
         )?)?, "GEOID")?;
 
         if verbose > 0 { eprintln!("[build_pack] loading election data"); }
-        map.merge_block_data(ensure_geoid_is_str(common::read_from_csv(
+        map.merge_block_data(ensure_geoid_is_str(crate::io::csv::read_csv(
             &input_dir.join(format!("Election_Data_Block_{state_code}/election_data_block_{state_code}.v06.csv"))
         )?)?, "GEOID")?;
 

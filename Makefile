@@ -76,11 +76,11 @@ venv: $(PYTHON)
 $(PYTHON):
 	$(PY) -m venv $(VENV)
 	source $(VENV)/bin/activate && \
-	$(PIP) install -U pip
+	$(PIP) install -q -U pip
 
 # Install Python-side build/test deps into the venv
 python-deps: venv
-	$(PIP) install -U maturin ipykernel
+	$(PIP) install -q -U maturin ipykernel
 
 # (Optional) ensure rust target is available if TARGET is set
 prepare-target:

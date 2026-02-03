@@ -2,6 +2,7 @@
 mod common;
 mod geom;
 mod graph;
+mod io;
 mod map;
 mod objective;
 mod pack;

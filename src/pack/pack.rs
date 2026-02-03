@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::{common, map::Map};
+use crate::{common, map::Map, pack::utils};
 
 #[cfg(feature = "download")]
 use crate::pack::download::{cleanup_download_dir, download_data};
@@ -44,7 +44,7 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
 
     let pack_name = format!("{state_code}_2020_pack");
     let pack_url = format!("https://media.githubusercontent.com/media/Ben1152000/openmander-data/master/packs/{state_code}/{pack_name}.zip");
-    if !common::remote_file_exists(&pack_url)? {
+    if !utils::remote_file_exists(&pack_url)? {
         if verbose > 0 { eprintln!("No prebuilt pack found for {state_code}, building locally..."); }
         return build_pack(&state_code, path, true, verbose)
     }
@@ -53,7 +53,7 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
     let pack_dir = path.join(pack_name);
 
     if verbose > 0 { eprintln!("[download] downloading {pack_url}"); }
-    common::download_big_file(pack_url, &zip_path, true)?;
+    utils::download_big_file(pack_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     common::extract_zip(&zip_path, &path, true)?;

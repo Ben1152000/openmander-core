@@ -1,4 +1,6 @@
-use std::{io::Write};
+//! Projection utilities for SVG visualization.
+
+use std::io::Write;
 
 use anyhow::{Ok, Result};
 use geo::{Coord, CoordsIter, LineString, MultiPolygon, Point};
@@ -40,7 +42,7 @@ pub(crate) fn draw_polygons(writer: &mut impl Write, polygons: &[MultiPolygon<f6
 /// Draw polygons with specified fill colors.
 pub(crate) fn draw_polygons_with_fill(writer: &mut impl Write, polygons: &[MultiPolygon<f64>], colors: &[String], project: &Projection) -> Result<()> {
     assert_eq!(colors.len(), polygons.len(),
-        "[to_svg] length mismatch: {} colors for {} geometries",
+        "[io::svg] length mismatch: {} colors for {} geometries",
         colors.len(),
         polygons.len(),
     );

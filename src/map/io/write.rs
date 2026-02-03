@@ -1,41 +1,25 @@
-use std::{collections::BTreeMap, fs::File, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result};
 use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
 use geo::MultiPolygon;
 
-use crate::{common, map::{GeoType, Map, MapLayer, ParentRefs}, pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats, io::{csr, data, geometry}}};
+use crate::{common, map::{GeoType, Map, MapLayer, ParentRefs}, pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats}};
 
 /// Get the recommended PMTiles zoom range for a given layer type.
-/// 
-/// Returns (min_zoom, max_zoom) - geometries are stored in all tiles they intersect
-/// across this zoom range.
-/// 
-/// The zoom range should match when that layer becomes visible in the UI:
-/// - Lower min_zoom = visible from further out (good for large features like states)
-/// - Higher max_zoom = more precision at close zoom (good for detailed boundaries)
-/// 
-/// Geometries crossing tile boundaries are stored in ALL intersecting tiles,
-/// ensuring no features are cut off at tile edges.
 fn pmtiles_zoom_range_for_layer(ty: GeoType) -> (u8, u8) {
     match ty {
-        // States: visible from z4 (for Alaska, California) to z8
-        // This allows states to be seen from very zoomed out to medium zoom
         GeoType::State => (4, 8),
-        // Counties: visible from z6 to z10
         GeoType::County => (6, 10),
-        // Tracts/VTDs/Groups: visible from z8 to z12
-        // Using max_zoom=12 keeps intermediate levels at the original precision
         GeoType::Tract => (8, 12),
         GeoType::VTD => (8, 12),
         GeoType::Group => (8, 12),
-        // Blocks: visible from z12 to z14
         GeoType::Block => (12, 14),
     }
 }
 
 impl MapLayer {
-    /// Prepare entity data (with parent refs) for writing to a parquet file.
+    /// Prepare entity data (with parent refs) for writing to a pack file.
     fn pack_data(&self) -> Result<DataFrame> {
         /// Helper to extract parent IDs as strings
         fn get_parents(parents: &Vec<ParentRefs>, ty: GeoType) -> Vec<Option<&str>> {
@@ -82,7 +66,6 @@ impl MapLayer {
         
         let data_file = format!("data/{layer_name}.{data_ext}");
         let geom_file = format!("geom/{layer_name}.{geom_ext}");
-        // Hull format depends on geometry format (geoparquet uses geoparquet, others use wkb)
         let hull_ext = match formats.hull.as_str() {
             "geoparquet" => "geoparquet",
             _ => "wkb",
@@ -94,8 +77,8 @@ impl MapLayer {
         // entities -> data bytes (parquet or csv)
         let data_bytes = match formats.data.as_str() {
             #[cfg(feature = "parquet")]
-            "parquet" => data::write_to_parquet_bytes(&mut self.pack_data()?)?,
-            "csv" => data::write_to_csv_bytes(&mut self.pack_data()?)?,
+            "parquet" => crate::io::parquet::write_parquet_bytes(&mut self.pack_data()?)?,
+            "csv" => crate::io::csv::write_csv_bytes(&mut self.pack_data()?)?,
             #[cfg(not(feature = "parquet"))]
             "parquet" => {
                 return Err(anyhow::anyhow!("Parquet format requires 'parquet' feature to be enabled"));
@@ -105,7 +88,6 @@ impl MapLayer {
             }
         };
         sink.put(&data_file, &data_bytes)?;
-        // hash the bytes (instead of reading from disk)
         hashes.insert(
             data_file.clone(),
             FileHash {
@@ -115,7 +97,7 @@ impl MapLayer {
 
         // adjacency (CSR)
         if self.ty() != GeoType::State {
-            let adj_bytes = csr::write_to_weighted_csr_bytes(&self.adjacencies, &self.edge_lengths)?;
+            let adj_bytes = crate::io::csr::write_weighted_csr_bytes(&self.adjacencies, &self.edge_lengths)?;
             sink.put(&adj_file, &adj_bytes)?;
             hashes.insert(
                 adj_file.clone(),
@@ -126,17 +108,12 @@ impl MapLayer {
         }
 
         // convex hulls (optional)
-        // Hull format matches geometry format for geoparquet, otherwise use wkb
-        // Only write hull file if hulls exist and are non-empty
         if let Some(hulls) = &self.hulls {
             if !hulls.is_empty() {
                 let hull_bytes = match formats.hull.as_str() {
                     #[cfg(feature = "parquet")]
-                    "geoparquet" => geometry::write_hulls_to_geoparquet_bytes(hulls)?,
-                    "wkb" => {
-                        // Always compress WKB hulls (flate2 is always available)
-                        geometry::write_hulls_to_wkb_bytes(hulls, true)?
-                    },
+                    "geoparquet" => crate::io::geoparquet::write_hulls_to_geoparquet_bytes(hulls)?,
+                    "wkb" => crate::io::wkb::write_hulls_to_wkb_bytes(hulls, true)?,
                     #[cfg(not(feature = "parquet"))]
                     "geoparquet" => {
                         return Err(anyhow::anyhow!("GeoParquet hull format requires 'parquet' feature to be enabled"));
@@ -156,31 +133,29 @@ impl MapLayer {
         }
 
         // geometries (optional)
-        // Only write geometry file if geometries exist and are non-empty
         if let Some(geom) = &self.geoms {
             let shapes = geom.shapes();
             if !shapes.is_empty() {
-                let geom_bytes = match formats.geometry.as_str() {
+                let geom_bytes: Vec<u8> = match formats.geometry.as_str() {
                     #[cfg(feature = "parquet")]
-                    "geoparquet" => geometry::write_to_geoparquet_bytes(shapes)?,
+                    "geoparquet" => crate::io::geoparquet::write_geoparquet_bytes(shapes)?,
                     #[cfg(feature = "pmtiles")]
                     "pmtiles" => {
                         let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(self.ty());
-                        // Extract geo_ids as strings for PMTiles encoding
                         let geo_ids: Vec<String> = self.geo_ids.iter()
                             .map(|g| g.id().to_string())
                             .collect();
-                        geometry::write_to_pmtiles_bytes(shapes, Some(&geo_ids), min_zoom, max_zoom)?
+                        crate::io::pmtiles::write_to_pmtiles_bytes(shapes, Some(&geo_ids), min_zoom, max_zoom)?
                     },
-                    #[cfg(not(feature = "parquet"))]
-                    "geoparquet" => {
-                        return Err(anyhow::anyhow!("GeoParquet format requires 'parquet' feature to be enabled"));
-                    }
-                    #[cfg(not(feature = "pmtiles"))]
-                    "pmtiles" => {
-                        return Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"));
-                    }
                     _ => {
+                        #[cfg(not(feature = "parquet"))]
+                        if formats.geometry == "geoparquet" {
+                            return Err(anyhow::anyhow!("GeoParquet format requires 'parquet' feature to be enabled"));
+                        }
+                        #[cfg(not(feature = "pmtiles"))]
+                        if formats.geometry == "pmtiles" {
+                            return Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"));
+                        }
                         return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry));
                     }
                 };
@@ -196,19 +171,6 @@ impl MapLayer {
 
         Ok(())
     }
-
-    /// Old path-based helper (kept for compatibility).
-    fn write_to_pack(
-        &self,
-        path: &Path,
-        format: PackFormat,
-        counts: &mut BTreeMap<&'static str, usize>,
-        hashes: &mut BTreeMap<String, FileHash>,
-    ) -> Result<()> {
-        let mut sink = DiskPack::new(path);
-        let formats = PackFormats::from_pack_format(format);
-        self.write_to_pack_sink_with_formats(&mut sink, &formats, counts, hashes)
-    }
 }
 
 impl Map {
@@ -222,7 +184,6 @@ impl Map {
         let dirs = ["adj", "data", "geom", "hull"];
         common::ensure_dirs(path, &dirs)?;
 
-        // Use the sink-based API which handles multi-layer PMTiles
         let mut sink = DiskPack::new(path);
         self.write_to_pack_sink_with_format(&mut sink, path, format)?;
 
@@ -269,7 +230,7 @@ impl Map {
         counts: &mut BTreeMap<&'static str, usize>,
         file_hashes: &mut BTreeMap<String, FileHash>,
     ) -> Result<()> {
-        // Write data, adjacency, and hull files for each layer (same as before)
+        // Write data, adjacency, and hull files for each layer
         for layer in self.layers_iter() {
             let layer_name = layer.ty().to_str();
             let adj_file = format!("adj/{layer_name}.csr.bin");
@@ -279,13 +240,13 @@ impl Map {
             counts.insert(layer_name.into(), layer.geo_ids.len());
             
             // Write data file
-            let data_bytes = data::write_to_csv_bytes(&mut layer.pack_data()?)?;
+            let data_bytes = crate::io::csv::write_csv_bytes(&mut layer.pack_data()?)?;
             sink.put(&data_file, &data_bytes)?;
             file_hashes.insert(data_file.clone(), FileHash { sha256: common::sha256_bytes(&data_bytes) });
             
             // Write adjacency file (skip for state layer)
             if layer.ty() != GeoType::State {
-                let adj_bytes = csr::write_to_weighted_csr_bytes(&layer.adjacencies, &layer.edge_lengths)?;
+                let adj_bytes = crate::io::csr::write_weighted_csr_bytes(&layer.adjacencies, &layer.edge_lengths)?;
                 sink.put(&adj_file, &adj_bytes)?;
                 file_hashes.insert(adj_file.clone(), FileHash { sha256: common::sha256_bytes(&adj_bytes) });
             }
@@ -293,7 +254,7 @@ impl Map {
             // Write hull file (if exists)
             if let Some(hulls) = &layer.hulls {
                 if !hulls.is_empty() {
-                    let hull_bytes = geometry::write_hulls_to_wkb_bytes(hulls, true)?;
+                    let hull_bytes = crate::io::wkb::write_hulls_to_wkb_bytes(hulls, true)?;
                     sink.put(&hull_file, &hull_bytes)?;
                     file_hashes.insert(hull_file.clone(), FileHash { sha256: common::sha256_bytes(&hull_bytes) });
                 }
@@ -301,7 +262,6 @@ impl Map {
         }
         
         // Collect all layers with geometries for multi-layer PMTiles
-        // First collect all geo_ids to avoid borrow checker issues
         let mut geo_id_vecs: Vec<Vec<String>> = Vec::new();
         let mut layer_info: Vec<(&str, &[MultiPolygon<f64>], u8, u8, usize)> = Vec::new();
         
@@ -320,7 +280,7 @@ impl Map {
             }
         }
         
-        // Now build the pmtiles_layers vec with references
+        // Build the pmtiles_layers vec with references
         let pmtiles_layers: Vec<(&str, &[MultiPolygon<f64>], Option<&[String]>, u8, u8)> = layer_info.iter()
             .map(|(name, shapes, min_zoom, max_zoom, idx)| {
                 (*name, *shapes, Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)
@@ -330,7 +290,7 @@ impl Map {
         // Write single multi-layer PMTiles file
         if !pmtiles_layers.is_empty() {
             let geom_file = "geom/geometries.pmtiles";
-            let geom_bytes = geometry::write_multilayer_pmtiles_bytes(pmtiles_layers)?;
+            let geom_bytes = crate::io::pmtiles::write_multilayer_pmtiles_bytes(pmtiles_layers)?;
             sink.put(geom_file, &geom_bytes)?;
             file_hashes.insert(geom_file.to_string(), FileHash { sha256: common::sha256_bytes(&geom_bytes) });
         }

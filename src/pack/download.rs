@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::pack::utils;
 use crate::common;
 
 /// Delete the `download/` directory (and all its contents) under `pack_dir`.
@@ -25,7 +26,7 @@ fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> R
     let out_path = out_dir.join(format!("Demographic_Data_Block_{state}"));
 
     if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
-    common::download_big_file(file_url, &zip_path, true)?;
+    utils::download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     common::extract_zip(&zip_path, &out_path, true)?;
@@ -40,7 +41,7 @@ fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Resu
     let out_path = out_dir.join(format!("Election_Data_Block_{state}"));
 
     if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
-    common::download_big_file(file_url, &zip_path, true)?;
+    utils::download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     common::extract_zip(&zip_path, &out_path, true)?;
@@ -71,7 +72,7 @@ fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verb
         let out_path = out_dir.join(format!("tl_2020_{fips}_{name}"));
 
         if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
-        common::download_big_file(file_url, &zip_path, true)?;
+        utils::download_big_file(file_url, &zip_path, true)?;
 
         if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
         common::extract_zip(&zip_path, &out_path, true)?;
@@ -92,7 +93,7 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
     let out_path = out_dir.join(format!("BlockAssign_ST{fips}_{state}"));
 
     if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
-    common::download_big_file(file_url, &zip_path, true)?;
+    utils::download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     common::extract_zip(&zip_path, &out_path, true)?;

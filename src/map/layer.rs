@@ -21,7 +21,7 @@ pub struct MapLayer {
 }
 
 impl MapLayer {
-    pub(super) fn new(ty: GeoType) -> Self {
+    pub(crate) fn new(ty: GeoType) -> Self {
         Self {
             ty,
             geo_ids: Vec::new(),
@@ -34,6 +34,33 @@ impl MapLayer {
             hulls: None,
             graph: Arc::default(),
         }
+    }
+
+    /// Set layer data from pack reading (used by IO operations).
+    /// This is a helper method for the IO module to populate layer data.
+    pub(crate) fn set_pack_data(
+        &mut self,
+        unit_data: DataFrame,
+        parents: Vec<ParentRefs>,
+        geo_ids: Vec<GeoId>,
+        index: HashMap<GeoId, u32>,
+        adjacencies: Vec<Vec<u32>>,
+        edge_lengths: Vec<Vec<f64>>,
+        hulls: Option<Vec<Polygon<f64>>>,
+    ) -> Result<(), anyhow::Error> {
+        self.unit_data = unit_data;
+        self.parents = parents;
+        self.geo_ids = geo_ids;
+        self.index = index;
+        self.adjacencies = adjacencies;
+        self.edge_lengths = edge_lengths;
+        self.hulls = hulls;
+        Ok(())
+    }
+
+    /// Set geometries (used by IO operations).
+    pub(crate) fn set_geometries(&mut self, geoms: Option<Geometries>) {
+        self.geoms = geoms;
     }
 
     /// Get the number of entities in this layer.
@@ -103,7 +130,7 @@ impl MapLayer {
 
     /// Construct a graph representation of the layer for partitioning.
     /// Requires data, adjacencies, and shared_perimeters to be computed first.
-    pub(super) fn construct_graph(&mut self) {
+    pub(crate) fn construct_graph(&mut self) {
         assert!(self.unit_data.height() != 0, "DataFrame must be populated before constructing graph");
 
         let weights_i64 = self.unit_data.get_columns().iter()

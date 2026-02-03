@@ -1,3 +1,5 @@
+//! Color mapping utilities for SVG visualization.
+
 use std::fmt;
 
 /// Simple RGB color.

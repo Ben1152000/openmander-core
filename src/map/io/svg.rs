@@ -5,7 +5,7 @@ use geo::Coord;
 // use geo_traits::PointTrait;
 use polars::prelude::{ChunkAgg, DataType};
 
-use crate::{common, map::MapLayer};
+use crate::map::MapLayer;
 
 impl MapLayer {
     /// Small wrapper with defaults.
@@ -40,20 +40,20 @@ impl MapLayer {
         };
 
         // --- Write SVG to string ---
-        let mut writer = common::SvgStringWriter::new();
+        let mut writer = crate::io::svg::SvgStringWriter::new();
         writer.write_header(width, height, margin, scale, &bounds)?;
         writer.write_styles()?;
 
         // Compute colors if necessary.
         if let Some(series) = series {
-            common::draw_polygons_with_fill(
+            crate::io::svg::draw_polygons_with_fill(
                 &mut writer,
                 geoms.shapes(),
                 &self.compute_fill_colors(series)?,
                 &project,
             )?;
         } else {
-            common::draw_polygons(&mut writer, geoms.shapes(), &project)?;
+            crate::io::svg::draw_polygons(&mut writer, geoms.shapes(), &project)?;
         }
 
         // Draw adjacency lines between centroids
@@ -64,7 +64,7 @@ impl MapLayer {
             })
             .map(|(i, j)| (&centroids[i], &centroids[j]))
             .collect::<Vec<_>>();
-        common::draw_edges(&mut writer, &edges, &project)?;
+        crate::io::svg::draw_edges(&mut writer, &edges, &project)?;
 
         writer.write_footer()?;
         writer.into_string()
@@ -94,20 +94,20 @@ impl MapLayer {
         };
 
         // --- Write SVG ---
-        let mut writer = common::SvgWriter::new(path)?;
+        let mut writer = crate::io::svg::SvgWriter::new(path)?;
         writer.write_header(width, height, margin, scale, &bounds)?;
         writer.write_styles()?;
 
         // Compute colors if necessary.
         if let Some(series) = series {
-            common::draw_polygons_with_fill(
+            crate::io::svg::draw_polygons_with_fill(
                 &mut writer,
                 geoms.shapes(),
                 &self.compute_fill_colors(series)?,
                 &project,
             )?;
         } else {
-            common::draw_polygons(&mut writer, geoms.shapes(), &project)?;
+            crate::io::svg::draw_polygons(&mut writer, geoms.shapes(), &project)?;
         }
 
         // Draw adjacency lines between centroids
@@ -118,7 +118,7 @@ impl MapLayer {
             })
             .map(|(i, j)| (&centroids[i], &centroids[j]))
             .collect::<Vec<_>>();
-        common::draw_edges(&mut writer, &edges, &project)?;
+        crate::io::svg::draw_edges(&mut writer, &edges, &project)?;
 
         // // --- Draw a circle at each centroid (nodes), on top of edges ---
         // // Radius is in screen pixels; tweak as desired.

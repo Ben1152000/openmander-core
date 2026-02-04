@@ -10,9 +10,9 @@ use crate::{common, map::{GeoType, Map, MapLayer, ParentRefs}, pack::{DiskPack, 
 fn pmtiles_zoom_range_for_layer(ty: GeoType) -> (u8, u8) {
     match ty {
         GeoType::State => (4, 8),
-        GeoType::County => (6, 10),
+        GeoType::County => (4, 10),
         GeoType::Tract => (8, 12),
-        GeoType::VTD => (8, 12),
+        GeoType::VTD => (4, 12),  // Start at 4 to enable preloading
         GeoType::Group => (8, 12),
         GeoType::Block => (12, 14),
     }

@@ -241,9 +241,14 @@ impl Plan {
                 &frontier_edges,
             );
 
+            let unique_frontier_blocks: std::collections::HashSet<usize> =
+                frontier_edges.iter().map(|&(src, _)| src).collect();
+            let ring_points = boundary.0.first()
+                .map(|p| p.exterior().0.len())
+                .unwrap_or(0);
             eprintln!(
-                "[D{}] frontier_edges={}, polygons={}",
-                district, frontier_edges.len(), boundary.0.len()
+                "[D{}] frontier_blocks={}, ring_points={}, polygons={}",
+                district, unique_frontier_blocks.len(), ring_points, boundary.0.len()
             );
 
             let wkb = multipolygon_to_wkb(&boundary)?;

@@ -345,124 +345,41 @@ pub fn extract_district_boundary_with_debug(
 
 /// Extract district boundary by connecting frontier block centroids.
 ///
-/// Algorithm:
-/// 1. Get unique frontier blocks from frontier edges
-/// 2. Build adjacency graph restricted to frontier blocks
-/// 3. Walk the adjacency graph to order blocks around the boundary
-/// 4. Connect centroids to form a closed polygon
-/// 5. If the walk doesn't close naturally, close with a straight line
+/// Sorts frontier blocks by angle from the center of the frontier block set,
+/// producing a closed polygon that includes all frontier block centroids.
 pub fn extract_district_boundary_centroids(
     centroids: &[Coord<f64>],
-    adjacencies: &[Vec<u32>],
+    _adjacencies: &[Vec<u32>],
     frontier_edges: &[(usize, usize)],
 ) -> MultiPolygon<f64> {
-    // 1. Unique frontier blocks (src nodes from frontier edges)
+    // Unique frontier blocks (src nodes from frontier edges)
     let frontier_set: HashSet<usize> = frontier_edges.iter().map(|&(src, _)| src).collect();
 
     if frontier_set.is_empty() {
         return MultiPolygon::new(vec![]);
     }
 
-    // 2. Adjacency restricted to frontier blocks
-    let mut frontier_adj: HashMap<usize, Vec<usize>> = HashMap::new();
-    for &block in &frontier_set {
-        let neighbors: Vec<usize> = adjacencies[block]
-            .iter()
-            .map(|&n| n as usize)
-            .filter(|n| frontier_set.contains(n))
-            .collect();
-        frontier_adj.insert(block, neighbors);
+    // Compute center of frontier block centroids
+    let mut cx = 0.0_f64;
+    let mut cy = 0.0_f64;
+    for &b in &frontier_set {
+        cx += centroids[b].x;
+        cy += centroids[b].y;
     }
+    cx /= frontier_set.len() as f64;
+    cy /= frontier_set.len() as f64;
 
-    // 3. Walk to form ordered rings
-    let mut visited: HashSet<usize> = HashSet::new();
-    let mut rings = Vec::new();
+    // Sort frontier blocks by angle from center
+    let mut blocks: Vec<usize> = frontier_set.into_iter().collect();
+    blocks.sort_by(|&a, &b| {
+        let angle_a = f64::atan2(centroids[a].y - cy, centroids[a].x - cx);
+        let angle_b = f64::atan2(centroids[b].y - cy, centroids[b].x - cx);
+        angle_a.partial_cmp(&angle_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    // Deterministic iteration order
-    let mut starts: Vec<usize> = frontier_set.iter().copied().collect();
-    starts.sort();
+    // Build closed ring
+    let mut coords: Vec<Coord<f64>> = blocks.iter().map(|&b| centroids[b]).collect();
+    coords.push(coords[0]);
 
-    for start in starts {
-        if visited.contains(&start) { continue; }
-
-        let mut ring = vec![start];
-        visited.insert(start);
-        let mut current = start;
-        let mut prev: Option<usize> = None;
-
-        loop {
-            let neighbors = &frontier_adj[&current];
-
-            // Pick the next unvisited frontier neighbor, using angular ordering
-            // to stay on the perimeter rather than cutting across.
-            let next = if neighbors.len() <= 1 || prev.is_none() {
-                // No angular choice needed
-                neighbors.iter().find(|&&n| !visited.contains(&n)).copied()
-            } else {
-                pick_angular_next(&centroids, prev.unwrap(), current, neighbors, &visited)
-            };
-
-            match next {
-                Some(n) => {
-                    prev = Some(current);
-                    ring.push(n);
-                    visited.insert(n);
-                    current = n;
-                }
-                None => break,
-            }
-        }
-
-        // Close the ring
-        let mut coords: Vec<Coord<f64>> = ring.iter().map(|&b| centroids[b]).collect();
-        coords.push(coords[0]);
-
-        if coords.len() >= 4 {
-            rings.push(Polygon::new(LineString::new(coords), vec![]));
-        }
-    }
-
-    MultiPolygon::new(rings)
-}
-
-/// Pick the next frontier neighbor that makes the smallest counterclockwise turn
-/// from the incoming direction (prev → current). This keeps the walk on the
-/// outer perimeter of the frontier band.
-fn pick_angular_next(
-    centroids: &[Coord<f64>],
-    prev: usize,
-    current: usize,
-    neighbors: &[usize],
-    visited: &HashSet<usize>,
-) -> Option<usize> {
-    let pc = centroids[current];
-    let pp = centroids[prev];
-    let incoming = f64::atan2(pc.y - pp.y, pc.x - pp.x);
-
-    let mut best: Option<(usize, f64)> = None;
-
-    for &n in neighbors {
-        if visited.contains(&n) { continue; }
-        let pn = centroids[n];
-        let outgoing = f64::atan2(pn.y - pc.y, pn.x - pc.x);
-        // Relative angle: how much we turn left (counterclockwise)
-        // We want the smallest positive (CCW) turn, i.e. the rightmost turn
-        // to stay on the outer boundary.
-        let mut angle = outgoing - incoming;
-        // Normalize to (-PI, PI]
-        while angle <= -std::f64::consts::PI { angle += 2.0 * std::f64::consts::PI; }
-        while angle > std::f64::consts::PI { angle -= 2.0 * std::f64::consts::PI; }
-
-        // We want the most clockwise (most negative) turn to stay on the outside
-        match &best {
-            None => best = Some((n, angle)),
-            Some((_, best_angle)) => {
-                if angle < *best_angle {
-                    best = Some((n, angle));
-                }
-            }
-        }
-    }
-
-    best.map(|(n, _)| n)
+    MultiPolygon::new(vec![Polygon::new(LineString::new(coords), vec![])])
 }

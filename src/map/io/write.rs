@@ -261,21 +261,33 @@ impl Map {
             }
         }
         
-        // Collect all layers with geometries for multi-layer PMTiles
+        // Write individual per-layer PMTiles and collect layers for multi-layer file
         let mut geo_id_vecs: Vec<Vec<String>> = Vec::new();
         let mut layer_info: Vec<(&str, &[MultiPolygon<f64>], u8, u8, usize)> = Vec::new();
-        
+
         for layer in self.layers_iter() {
             if let Some(geom) = &layer.geoms {
                 let shapes = geom.shapes();
                 if !shapes.is_empty() {
+                    let layer_name = layer.ty().to_str();
                     let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(layer.ty());
                     let geo_ids: Vec<String> = layer.geo_ids.iter()
                         .map(|g| g.id().to_string())
                         .collect();
+
+                    // Write individual layer PMTiles
+                    let layer_geom_file = format!("geom/{layer_name}.pmtiles");
+                    let layer_geom_bytes = crate::io::pmtiles::write_to_pmtiles_bytes(
+                        shapes, Some(&geo_ids), min_zoom, max_zoom,
+                    )?;
+                    sink.put(&layer_geom_file, &layer_geom_bytes)?;
+                    file_hashes.insert(layer_geom_file, FileHash {
+                        sha256: common::sha256_bytes(&layer_geom_bytes),
+                    });
+
                     let idx = geo_id_vecs.len();
                     geo_id_vecs.push(geo_ids);
-                    layer_info.push((layer.ty().to_str(), shapes, min_zoom, max_zoom, idx));
+                    layer_info.push((layer_name, shapes, min_zoom, max_zoom, idx));
                 }
             }
         }

@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use pyo3::{pyclass, pymethods, Bound, Py, PyResult, Python};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
-use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList};
+use pyo3::types::{PyAnyMethods, PyBytes, PyDict, PyDictMethods, PyList, PyListMethods};
 
 use crate::Map;
 
@@ -233,5 +233,55 @@ impl Plan {
     pub fn to_svg(&self, path: &str, color_partisan: bool) -> PyResult<()> {
         self.inner.to_svg(&PathBuf::from(path), color_partisan)
             .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    /// Get district geometries as WKB bytes.
+    ///
+    /// Returns a list of tuples: [(district_id, wkb_bytes), ...]
+    /// Districts 1 through num_districts are included. District 0 (unassigned) is excluded.
+    pub fn district_geometries_wkb<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let geometries = py.allow_threads(|| {
+            self.inner.district_geometries_wkb()
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })?;
+
+        let result = PyList::empty_bound(py);
+        for (district, wkb) in geometries {
+            let tuple = (district, PyBytes::new_bound(py, &wkb));
+            result.append(tuple)?;
+        }
+
+        Ok(result)
+    }
+
+    /// Get debug info about district boundary extraction.
+    ///
+    /// Returns a list of dicts with debug info for each district:
+    /// [{"district": int, "boundary_edges": int, "vertices": int,
+    ///   "deg1": int, "deg2": int, "deg3_plus": int,
+    ///   "walks": int, "closed": int, "stuck": int, "max_len": int}, ...]
+    pub fn debug_frontier_info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let info = py.allow_threads(|| {
+            self.inner.debug_frontier_info()
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })?;
+
+        let result = PyList::empty_bound(py);
+        for (district, edges, verts, deg1, deg2, deg3, walks, closed, stuck, max_len) in info {
+            let dict = PyDict::new_bound(py);
+            dict.set_item("district", district)?;
+            dict.set_item("boundary_edges", edges)?;
+            dict.set_item("vertices", verts)?;
+            dict.set_item("deg1", deg1)?;
+            dict.set_item("deg2", deg2)?;
+            dict.set_item("deg3_plus", deg3)?;
+            dict.set_item("walks", walks)?;
+            dict.set_item("closed", closed)?;
+            dict.set_item("stuck", stuck)?;
+            dict.set_item("max_len", max_len)?;
+            result.append(dict)?;
+        }
+
+        Ok(result)
     }
 }

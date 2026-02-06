@@ -1,6 +1,6 @@
 /// PartitionSet maintains a total assignment of elements to sets, with O(1) move/contains
 #[derive(Debug, Clone)]
-pub(super) struct PartitionSet {
+pub(crate) struct PartitionSet {
     sets: Vec<Vec<usize>>,  // sets[s] = elements currently in set s
     index: Vec<usize>,      // index[e] = s when e is in sets[s]
     position: Vec<usize>    // position[e] = i when sets[s][i] is e
@@ -9,7 +9,7 @@ pub(super) struct PartitionSet {
 impl PartitionSet {
     /// Create a MultiSet with `num_sets` sets and `num_elems` elements,
     /// initially assigning all elements to set 0.
-    pub(super) fn new(num_sets: usize, num_elems: usize) -> Self {
+    pub(crate) fn new(num_sets: usize, num_elems: usize) -> Self {
         assert!(num_sets > 0, "must have at least one set");
         let capacity = (num_elems / num_sets.max(1)).isqrt().saturating_add(1);
         let mut sets = (0..num_sets)
@@ -59,7 +59,7 @@ impl PartitionSet {
     }
 
     /// Remove all elements from all sets, placing them in set 0.
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.sets.iter_mut().for_each(|v| v.clear());
         self.sets[0] = (0..self.num_elems()).collect();
         self.index = vec![0; self.num_elems()];
@@ -67,7 +67,7 @@ impl PartitionSet {
     }
 
     /// Rebuild partition from a complete slice of assignments.
-    pub(super) fn rebuild(&mut self, assignments: &[usize]) {
+    pub(crate) fn rebuild(&mut self, assignments: &[usize]) {
         assert!(assignments.len() == self.num_elems(), "assignments length mismatch");
 
         self.sets.iter_mut().for_each(|v| v.clear());
@@ -80,7 +80,7 @@ impl PartitionSet {
     }
 
     /// Move `elem` to `set`. Panics in debug if out of range.
-    pub(super) fn move_to(&mut self, elem: usize, set: usize) {
+    pub(crate) fn move_to(&mut self, elem: usize, set: usize) {
         debug_assert!(elem < self.index.len(), "element out of range");
         debug_assert!(set < self.sets.len(), "set out of range");
 
@@ -103,7 +103,7 @@ impl PartitionSet {
 
 #[cfg(test)]
 mod tests {
-    use super::PartitionSet;
+    use crate::partition::PartitionSet;
 
     #[test]
     fn new_fills_first_set() {

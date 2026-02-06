@@ -1,13 +1,13 @@
-/// MultiSet maintains "elements per set" with O(1) insert/remove/contains.
+/// MultiSet maintains a partial assignment of elements to sets, with O(1) insert/remove/contains.
 #[derive(Debug, Clone)]
-pub(super) struct MultiSet {
+pub(crate) struct MultiSet {
     sets: Vec<Vec<usize>>,              // sets[s] = elements currently in set s
     index: Vec<Option<(usize, usize)>>, // index[e] = Some((set, pos)) if e is in sets[set][pos]
 }
 
 impl MultiSet {
     /// Create an empty MultiSet with `num_sets` sets and a universe of `num_elems` elements.
-    pub(super) fn new(num_sets: usize, num_elems: usize) -> Self {
+    pub(crate) fn new(num_sets: usize, num_elems: usize) -> Self {
         let capacity = (num_elems / num_sets.max(1)).isqrt().saturating_add(1);
         Self {
             sets: (0..num_sets).map(|_| Vec::with_capacity(capacity)).collect(),
@@ -16,49 +16,49 @@ impl MultiSet {
     }
 
     /// Number of sets.
-    #[inline] pub(super) fn num_sets(&self) -> usize { self.sets.len() }
+    #[inline] pub(crate) fn num_sets(&self) -> usize { self.sets.len() }
 
     /// Universe size (number of elements addressable by index).
-    #[inline] pub(super) fn num_elems(&self) -> usize { self.index.len() }
+    #[inline] pub(crate) fn num_elems(&self) -> usize { self.index.len() }
 
     /// Return the set that `elem` is currently in, or `None` if absent.
     #[inline]
-    pub(super) fn find(&self, elem: usize) -> Option<usize> {
+    pub(crate) fn find(&self, elem: usize) -> Option<usize> {
         debug_assert!(elem < self.index.len(), "element out of range");
         self.index[elem].map(|(set, _)| set)
     }
 
     /// Returns true if element is in any set.
-    #[inline] pub(super) fn contains(&self, elem: usize) -> bool { self.find(elem).is_some() }
+    #[inline] pub(crate) fn contains(&self, elem: usize) -> bool { self.find(elem).is_some() }
 
     /// Read-only view of elements in set.
     #[inline]
-    pub(super) fn get(&self, set: usize) -> &[usize] {
+    pub(crate) fn get(&self, set: usize) -> &[usize] {
         debug_assert!(set < self.sets.len(), "bucket out of range");
         &self.sets[set]
     }
 
     /// Iterator over each set as a slice.
     #[inline]
-    pub(super) fn iter(&self) -> impl Iterator<Item = &[usize]> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &[usize]> + '_ {
         self.sets.iter().map(|v| v.as_slice())
     }
 
     /// Iterator over all elements present (across all sets).
     #[inline]
-    pub(super) fn iter_all(&self) -> impl Iterator<Item = usize> + '_ {
+    pub(crate) fn iter_all(&self) -> impl Iterator<Item = usize> + '_ {
         self.sets.iter().flat_map(|v| v.iter().copied())
     }
 
     /// Remove all elements from all sets (O(total_size)).
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         for set in &mut self.sets { set.clear(); }
         self.index.fill(None);
     }
 
     /// Rebuild from an iterator of (elem, set) pairs. Elements not mentioned end up in no set.
     /// Panics in debug if elem/set are out of range or an element is listed more than once.
-    pub(super) fn rebuild_from<I>(&mut self, iter: I) where I: IntoIterator<Item = (usize, usize)> {
+    pub(crate) fn rebuild_from<I>(&mut self, iter: I) where I: IntoIterator<Item = (usize, usize)> {
         self.clear();
 
         for (elem, set) in iter {
@@ -73,7 +73,7 @@ impl MultiSet {
     }
 
     /// Insert single element into set. If it's already in a set, it is moved.
-    pub(super) fn insert(&mut self, elem: usize, set: usize) {
+    pub(crate) fn insert(&mut self, elem: usize, set: usize) {
         debug_assert!(elem < self.index.len(), "element out of range");
         debug_assert!(set < self.sets.len(), "set out of range");
         match self.index[elem] {
@@ -84,7 +84,7 @@ impl MultiSet {
     }
 
     /// Remove element from whichever set it is in (no-op if absent).
-    pub(super) fn remove(&mut self, elem: usize) {
+    pub(crate) fn remove(&mut self, elem: usize) {
         if let Some((set, pos)) = self.index[elem] {
             let vec = &mut self.sets[set];
             let last = vec.pop().unwrap();
@@ -106,7 +106,7 @@ impl MultiSet {
 
 #[cfg(test)]
 mod tests {
-    use super::MultiSet;
+    use crate::partition::MultiSet;
 
     #[test]
     fn new_sizes() {

@@ -69,6 +69,19 @@ impl WeightedGraph {
     /// Get the degree (number of neighbors) of a given node.
     #[inline] pub(crate) fn degree(&self, node: usize) -> usize { self.range(node).len() }
 
+    /// Get the starting offset for a node's edges in the CSR arrays.
+    #[inline] pub(crate) fn offset(&self, node: usize) -> usize { self.offsets[node] as usize }
+
+    /// Get the (source, target) nodes for a directed edge index.
+    /// Returns None if the edge index is out of range.
+    pub(crate) fn edge_endpoints(&self, edge_idx: usize) -> Option<(usize, usize)> {
+        if edge_idx >= self.edges.len() { return None; }
+        // Binary search to find which node this edge belongs to
+        let source = self.offsets.partition_point(|&off| (off as usize) <= edge_idx) - 1;
+        let target = self.edges[edge_idx] as usize;
+        Some((source, target))
+    }
+
     /// Get the ith neighbor of a given node.
     #[inline]
     pub(crate) fn edge(&self, node: usize, i: usize) -> Option<usize> {

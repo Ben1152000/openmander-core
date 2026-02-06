@@ -1,6 +1,6 @@
 
 // Maintains relationship between convex hull points and units.
-pub struct HullSet {
+pub(crate) struct HullSet {
 
 }
 

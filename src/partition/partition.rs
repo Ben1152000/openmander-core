@@ -2,7 +2,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use crate::{
     graph::{WeightedGraph, WeightMatrix},
-    partition::{MultiSet, PartitionSet},
+    partition::{FrontierEdgeList, MultiSet, PartitionSet},
 };
 
 /// A partition of a graph into contiguous parts (districts).
@@ -10,6 +10,7 @@ use crate::{
 pub(crate) struct Partition {
     pub(super) parts: PartitionSet,          // Sets of nodes in each part (including unassigned 0)
     pub(super) frontiers: MultiSet,          // Nodes on the boundary of each part
+    pub(super) frontier_edges: FrontierEdgeList, // Half-edges on the boundary of each part
     pub(super) part_graph: WeightedGraph,    // Graph structure for parts (including aggregated weights)
     unit_graph: Arc<WeightedGraph>,          // Reference to graph of basic units (census block)
     region_graph: Arc<WeightedGraph>,        // Reference to full region graph (state)
@@ -34,9 +35,13 @@ impl Partition {
             &vec![], // To be implemented later
         );
 
+        // edge_count() returns total directed edges (each undirected edge counted twice)
+        let num_directed_edges = unit_graph.edge_count();
+
         Self {
             parts: PartitionSet::new(num_parts, unit_graph.node_count()),
             frontiers: MultiSet::new(num_parts, unit_graph.node_count()),
+            frontier_edges: FrontierEdgeList::new(num_parts, num_directed_edges / 2),
             part_graph,
             unit_graph: unit_graph,
             region_graph,
@@ -63,6 +68,15 @@ impl Partition {
         self.parts.assignments().iter().map(|&p| p as u32).collect()
     }
 
+    /// Get all nodes belonging to a given part.
+    pub(crate) fn part_nodes(&self, part: u32) -> Vec<usize> {
+        self.parts.assignments()
+            .iter()
+            .enumerate()
+            .filter_map(|(node, &p)| if p == part as usize { Some(node) } else { None })
+            .collect()
+    }
+
     /// Get the set of boundary nodes for a given part.
     pub(crate) fn frontier(&self, part: u32) -> &[usize] { self.frontiers.get(part as usize) }
 
@@ -70,9 +84,133 @@ impl Partition {
     pub(crate) fn clear_assignments(&mut self) {
         self.parts.clear();
         self.frontiers.clear();
+        self.frontier_edges.clear();
 
         self.part_graph.node_weights_mut().clear_all_rows();
         self.part_graph.node_weights_mut().set_row_to_sum_of(0, self.unit_graph.node_weights());
+    }
+
+    /// Get the directed edge index for the edge from node u at local index i.
+    /// In CSR format, this is simply offsets[u] + i.
+    #[inline]
+    fn directed_edge_index(&self, node: usize, local_idx: usize) -> usize {
+        self.unit_graph.offset(node) + local_idx
+    }
+
+    /// Get the set of frontier edges for a given part.
+    pub(crate) fn frontier_edges(&self, part: u32) -> &[usize] {
+        self.frontier_edges.get(part as usize)
+    }
+
+    /// Get the (source, target) node pairs for all frontier edges of a given part.
+    /// Each edge is a directed half-edge from a node in `part` to a node in a different part.
+    pub(crate) fn frontier_edge_endpoints(&self, part: u32) -> Vec<(usize, usize)> {
+        self.frontier_edges.get(part as usize)
+            .iter()
+            .filter_map(|&edge_idx| self.unit_graph.edge_endpoints(edge_idx))
+            .collect()
+    }
+
+    /// Verify that frontier edges are consistent with current assignments.
+    /// Returns true if all frontier edges are correctly tracked.
+    #[cfg(debug_assertions)]
+    pub(crate) fn verify_frontier_edges(&self) -> bool {
+        use std::collections::HashSet;
+
+        // Collect expected frontier edges from scratch
+        let mut expected: HashSet<(usize, usize)> = HashSet::new(); // (edge_idx, part)
+        for u in 0..self.num_nodes() {
+            let part_u = self.assignment(u) as usize;
+            for (local_idx, v) in self.unit_graph.edges(u).enumerate() {
+                let part_v = self.assignment(v) as usize;
+                if part_u != part_v {
+                    let edge_idx = self.directed_edge_index(u, local_idx);
+                    expected.insert((edge_idx, part_u));
+                }
+            }
+        }
+
+        // Check all expected edges are present
+        for &(edge_idx, part) in &expected {
+            match self.frontier_edges.find(edge_idx) {
+                Some(p) if p == part => {}
+                Some(p) => {
+                    eprintln!("Frontier edge {} should be in part {} but is in part {}", edge_idx, part, p);
+                    return false;
+                }
+                None => {
+                    eprintln!("Frontier edge {} should be in part {} but is missing", edge_idx, part);
+                    return false;
+                }
+            }
+        }
+
+        // Check no extra edges are present
+        for part in 0..self.num_parts() as usize {
+            for &edge_idx in self.frontier_edges.get(part) {
+                if !expected.contains(&(edge_idx, part)) {
+                    eprintln!("Frontier edge {} in part {} should not exist", edge_idx, part);
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Walk the frontier nodes of a part in order, forming a cycle.
+    /// Returns a list of frontier nodes in traversal order, or empty if the frontier is not a simple cycle.
+    pub(crate) fn frontier_cycle(&self, part: u32) -> Vec<usize> {
+        use std::collections::{HashMap, HashSet};
+
+        let frontier_nodes: HashSet<usize> = self.frontiers.get(part as usize).iter().copied().collect();
+        if frontier_nodes.is_empty() {
+            return vec![];
+        }
+
+        // Build adjacency among frontier nodes (only same-part neighbors)
+        let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
+        for &node in &frontier_nodes {
+            let neighbors: Vec<usize> = self.unit_graph.edges(node)
+                .filter(|&v| frontier_nodes.contains(&v) && self.assignment(v) == part)
+                .collect();
+            adj.insert(node, neighbors);
+        }
+
+        // Walk the frontier starting from any node
+        let start = *frontier_nodes.iter().next().unwrap();
+        let mut cycle = vec![start];
+        let mut visited: HashSet<usize> = HashSet::new();
+        visited.insert(start);
+
+        let mut current = start;
+        loop {
+            let neighbors = adj.get(&current).map(|v| v.as_slice()).unwrap_or(&[]);
+            let next = neighbors.iter().find(|&&n| !visited.contains(&n));
+
+            match next {
+                Some(&n) => {
+                    cycle.push(n);
+                    visited.insert(n);
+                    current = n;
+                }
+                None => {
+                    // Check if we can close the cycle
+                    if neighbors.contains(&start) && cycle.len() > 2 {
+                        cycle.push(start); // Close the cycle
+                    }
+                    break;
+                }
+            }
+        }
+
+        // If we didn't visit all frontier nodes, the frontier is not a simple cycle
+        if visited.len() != frontier_nodes.len() {
+            eprintln!("[District {}] Frontier has {} nodes but only visited {} - not a simple cycle",
+                      part, frontier_nodes.len(), visited.len());
+        }
+
+        cycle
     }
 
     /// Generate assignments map from GeoId to district.
@@ -96,6 +234,20 @@ impl Partition {
                 on_boundary[node].then_some((node, part as usize))
             })
         );
+
+        // Recompute frontier edges.
+        // A directed edge u→v belongs to part(u) if part(u) != part(v).
+        self.frontier_edges.clear();
+        for u in 0..self.num_nodes() {
+            let part_u = self.assignment(u) as usize;
+            for (local_idx, v) in self.unit_graph.edges(u).enumerate() {
+                let part_v = self.assignment(v) as usize;
+                if part_u != part_v {
+                    let edge_idx = self.directed_edge_index(u, local_idx);
+                    self.frontier_edges.insert(edge_idx, part_u);
+                }
+            }
+        }
 
         // Recompute per-part totals.
         let mut part_weights = WeightMatrix::copy_of_size(self.unit_graph.node_weights(), self.num_parts() as usize);

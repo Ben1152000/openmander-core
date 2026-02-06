@@ -31,6 +31,37 @@ impl Partition {
             }
         }
 
+        // Update frontier edges for `node` and its neighbors.
+        // Collect edge info first to avoid borrow conflicts.
+        let node_offset = self.graph().offset(node);
+        let edges_info: Vec<(usize, usize, usize, u32)> = self.graph().edges(node)
+            .enumerate()
+            .map(|(local_idx, v)| {
+                let part_v = self.assignment(v);
+                let v_offset = self.graph().offset(v);
+                // Find reverse edge index
+                let reverse_idx = self.graph().edges(v)
+                    .enumerate()
+                    .find(|(_, u)| *u == node)
+                    .map(|(idx, _)| v_offset + idx)
+                    .unwrap_or(0);
+                (node_offset + local_idx, v, reverse_idx, part_v)
+            })
+            .collect();
+
+        for (edge_node_to_v, _v, edge_v_to_node, part_v) in edges_info {
+            if part != part_v {
+                // Edge node→v is now on node's frontier
+                self.frontier_edges.insert(edge_node_to_v, part as usize);
+                // Edge v→node is now on v's frontier
+                self.frontier_edges.insert(edge_v_to_node, part_v as usize);
+            } else {
+                // Edges no longer on frontier
+                self.frontier_edges.remove(edge_node_to_v);
+                self.frontier_edges.remove(edge_v_to_node);
+            }
+        }
+
         // Update aggregated integer totals (subtract from old, add to new).
         self.update_on_node_move(node, prev, part);
     }
@@ -78,6 +109,31 @@ impl Partition {
                 self.frontiers.insert(u, self.assignment(u) as usize);
             } else {
                 self.frontiers.remove(u);
+            }
+        }
+
+        // Update frontier edges for all boundary nodes.
+        // Collect edge updates first to avoid borrow conflicts.
+        let mut edge_updates: Vec<(usize, Option<usize>)> = Vec::new();
+        for &u in &boundary {
+            let part_u = self.assignment(u);
+            let u_offset = self.graph().offset(u);
+            for (local_idx, v) in self.graph().edges(u).enumerate() {
+                let part_v = self.assignment(v);
+                let edge_idx = u_offset + local_idx;
+                if part_u != part_v {
+                    edge_updates.push((edge_idx, Some(part_u as usize)));
+                } else {
+                    edge_updates.push((edge_idx, None));
+                }
+            }
+        }
+
+        for (edge_idx, part_opt) in edge_updates {
+            if let Some(part_u) = part_opt {
+                self.frontier_edges.insert(edge_idx, part_u);
+            } else {
+                self.frontier_edges.remove(edge_idx);
             }
         }
 

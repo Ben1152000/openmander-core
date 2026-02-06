@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, sync::Arc};
 
 use anyhow::{ensure, Ok, Result};
 
-use crate::{Metric, Objective, map::{GeoId, Map}, partition::Partition};
+use crate::{Metric, Objective, io::wkb::multipolygon_to_wkb, map::{GeoId, Map}, partition::Partition};
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Clone, Debug)]
@@ -179,5 +179,77 @@ impl Plan {
         );
 
         Ok(())
+    }
+
+    /// Compute the geometry for each district and return as WKB bytes.
+    ///
+    /// Returns a vector of (district_id, wkb_bytes) pairs for districts 1..=num_districts.
+    /// District 0 (unassigned) is excluded.
+    /// Districts with no assigned units will have an empty WKB (empty MultiPolygon).
+    ///
+    /// Debug info about frontiers for each district.
+    /// Returns (district, boundary_edges, vertices, deg1, deg2, deg3+, walks, closed, stuck, max_len)
+    pub fn debug_frontier_info(&self) -> Result<Vec<(u32, usize, usize, usize, usize, usize, usize, usize, usize, usize)>> {
+        let base_layer = self.map.base()?;
+        let shapes = base_layer.shapes()
+            .ok_or_else(|| anyhow::anyhow!("No shapes"))?;
+        let adjacencies = base_layer.adjacencies();
+        let graph = base_layer.get_graph_ref();
+        let num_blocks = shapes.len();
+
+        // Build state-border filter from outer_perimeter_m
+        let is_state_border: Vec<bool> = (0..num_blocks)
+            .map(|i| graph.node_weights().get_as_f64("outer_perimeter_m", i).unwrap_or(0.0) > 0.0)
+            .collect();
+
+        let assignments = self.partition.assignments();
+
+        Ok((1..=self.num_districts)
+            .map(|d| {
+                let edges = self.partition.frontier_edge_endpoints(d);
+                let (_, debug) = super::boundary::extract_district_boundary_with_debug(shapes, adjacencies, &edges, &assignments, d, &is_state_border);
+                let s = &debug.stitch;
+                (d, debug.boundary_edges_found, s.num_vertices, s.degree_1_count,
+                 s.degree_2_count, s.degree_3_plus_count, s.walks_attempted,
+                 s.walks_closed, s.walks_stuck, s.max_walk_len)
+            })
+            .collect())
+    }
+
+    /// Extract district boundaries by connecting frontier block centroids.
+    ///
+    /// Walks the frontier blocks in angular order and connects their centroids
+    /// to form a closed polygon for each district.
+    pub fn district_geometries_wkb(&self) -> Result<Vec<(u32, Vec<u8>)>> {
+        let base_layer = self.map.base()?;
+        let adjacencies = base_layer.adjacencies();
+
+        // Get centroids as Coord<f64> for boundary extraction
+        let centroids: Vec<geo::Coord<f64>> = base_layer.centroids()
+            .into_iter()
+            .map(|p| geo::Coord { x: p.x(), y: p.y() })
+            .collect();
+
+        let mut results = Vec::with_capacity(self.num_districts as usize);
+
+        for district in 1..=self.num_districts {
+            let frontier_edges = self.partition.frontier_edge_endpoints(district);
+
+            let boundary = super::boundary::extract_district_boundary_centroids(
+                &centroids,
+                adjacencies,
+                &frontier_edges,
+            );
+
+            eprintln!(
+                "[D{}] frontier_edges={}, polygons={}",
+                district, frontier_edges.len(), boundary.0.len()
+            );
+
+            let wkb = multipolygon_to_wkb(&boundary)?;
+            results.push((district, wkb));
+        }
+
+        Ok(results)
     }
 }

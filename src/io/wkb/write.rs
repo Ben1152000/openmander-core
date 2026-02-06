@@ -3,11 +3,13 @@
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;
-use geo::Polygon;
+use geo::{MultiPolygon, Polygon};
 use std::io::Write;
 
 /// WKB geometry type for Polygon
 const WKB_POLYGON: u32 = 3;
+/// WKB geometry type for MultiPolygon
+const WKB_MULTIPOLYGON: u32 = 6;
 /// WKB byte order: little endian
 const WKB_LE: u8 = 1;
 
@@ -47,6 +49,29 @@ fn polygon_to_wkb(poly: &Polygon<f64>) -> Result<Vec<u8>> {
         }
     }
     
+    Ok(wkb)
+}
+
+/// Write a MultiPolygon to WKB format.
+pub(crate) fn multipolygon_to_wkb(mp: &MultiPolygon<f64>) -> Result<Vec<u8>> {
+    let mut wkb = Vec::new();
+
+    // Byte order (little endian)
+    wkb.write_all(&[WKB_LE])?;
+
+    // Geometry type (MultiPolygon)
+    wkb.write_all(&WKB_MULTIPOLYGON.to_le_bytes())?;
+
+    // Number of polygons
+    let num_polygons = mp.0.len() as u32;
+    wkb.write_all(&num_polygons.to_le_bytes())?;
+
+    // Write each polygon
+    for poly in &mp.0 {
+        let poly_wkb = polygon_to_wkb(poly)?;
+        wkb.write_all(&poly_wkb)?;
+    }
+
     Ok(wkb)
 }
 

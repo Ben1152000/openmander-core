@@ -30,6 +30,8 @@ sha2 = "0.10"
 shapefile = "0.6"
 smallvec = "1.15"
 tempfile = "3"
+# Optional: redirect println!/eprintln! to browser console on WASM targets
+web-sys = { version = "0.3", features = ["console"], optional = true }
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
@@ -70,6 +72,8 @@ download = ["reqwest", "polars/lazy"]
 parquet = ["polars/parquet", "dep:arrow-array", "dep:arrow-schema", "dep:parquet", "dep:geoarrow-array", "dep:geoarrow-schema", "dep:geoparquet"]
 # PMTiles format for geometry storage - works everywhere including WASM
 pmtiles = ["dep:pmtiles2", "dep:mvt", "dep:mvt-reader", "dep:geo-types"]
+# Redirect println!/eprintln! to browser console (for WASM bindings)
+wasm-console = ["dep:web-sys"]
 
 [workspace]
 members = ["bindings/python", "bindings/wasm"]

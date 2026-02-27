@@ -5,3 +5,4 @@ edition = { workspace = true }
 description = "Self-contained DCEL (Doubly Connected Edge List) for planar graph geometry"
 
 [dependencies]
+geo = "0.30"

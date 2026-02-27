@@ -1231,6 +1231,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "geograph"
+version = "0.1.3"
+
+[[package]]
 name = "geographiclib-rs"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

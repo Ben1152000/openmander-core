@@ -76,7 +76,7 @@ pmtiles = ["dep:pmtiles2", "dep:mvt", "dep:mvt-reader", "dep:geo-types"]
 wasm-console = ["dep:web-sys"]
 
 [workspace]
-members = ["bindings/python", "bindings/wasm"]
+members = ["crates/geograph", "bindings/python", "bindings/wasm"]
 resolver = "2"
 
 [workspace.package]

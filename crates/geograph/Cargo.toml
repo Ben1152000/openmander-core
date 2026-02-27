@@ -1,0 +1,7 @@
+[package]
+name = "geograph"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Self-contained DCEL (Doubly Connected Edge List) for planar graph geometry"
+
+[dependencies]

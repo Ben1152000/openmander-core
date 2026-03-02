@@ -27,7 +27,7 @@ use std::fmt;
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct VertexId(pub usize);
+pub(crate) struct VertexId(pub(crate) usize);
 
 impl fmt::Display for VertexId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -36,7 +36,7 @@ impl fmt::Display for VertexId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct HalfEdgeId(pub usize);
+pub(crate) struct HalfEdgeId(pub(crate) usize);
 
 impl fmt::Display for HalfEdgeId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -45,7 +45,7 @@ impl fmt::Display for HalfEdgeId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FaceId(pub usize);
+pub(crate) struct FaceId(pub(crate) usize);
 
 impl fmt::Display for FaceId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -54,7 +54,7 @@ impl fmt::Display for FaceId {
 }
 
 /// The unbounded (outer) face — always `FaceId(0)`.
-pub const OUTER_FACE: FaceId = FaceId(0);
+pub(crate) const OUTER_FACE: FaceId = FaceId(0);
 
 // ---------------------------------------------------------------------------
 // Records
@@ -63,33 +63,33 @@ pub const OUTER_FACE: FaceId = FaceId(0);
 /// A vertex with an arbitrary coordinate payload `C` and one incident
 /// half-edge (any half-edge whose `origin` is this vertex).
 #[derive(Clone, Debug)]
-pub struct Vertex<C> {
-    pub coords: C,
+pub(crate) struct Vertex<C> {
+    pub(crate) coords: C,
     /// Any half-edge leaving this vertex.  `None` for isolated vertices.
-    pub half_edge: Option<HalfEdgeId>,
+    pub(crate) half_edge: Option<HalfEdgeId>,
 }
 
 /// A directed half-edge.
 #[derive(Clone, Debug)]
-pub struct HalfEdge {
+pub(crate) struct HalfEdge {
     /// Vertex this half-edge leaves from.
-    pub origin: VertexId,
+    pub(crate) origin: VertexId,
     /// The other half-edge of the same undirected edge (opposite direction).
-    pub twin: HalfEdgeId,
+    pub(crate) twin: HalfEdgeId,
     /// Next half-edge around `face` in CCW order.
-    pub next: HalfEdgeId,
+    pub(crate) next: HalfEdgeId,
     /// Previous half-edge around `face` in CCW order.
-    pub prev: HalfEdgeId,
+    pub(crate) prev: HalfEdgeId,
     /// Face to the left of this half-edge.
-    pub face: FaceId,
+    pub(crate) face: FaceId,
 }
 
 /// A face (bounded region or the outer face) with one incident half-edge.
 #[derive(Clone, Debug)]
-pub struct Face {
+pub(crate) struct Face {
     /// Any half-edge on the boundary of this face.  `None` for faces with no
     /// boundary (only possible for the outer face of an empty DCEL).
-    pub half_edge: Option<HalfEdgeId>,
+    pub(crate) half_edge: Option<HalfEdgeId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -101,19 +101,19 @@ pub struct Face {
 /// `vertices[0]` through `faces[0]` etc. are valid; the outer face is always
 /// at index 0 and is pre-inserted on construction.
 #[derive(Clone, Debug)]
-pub struct Dcel<C> {
-    pub vertices:   Vec<Vertex<C>>,
-    pub half_edges: Vec<HalfEdge>,
-    pub faces:      Vec<Face>,
+pub(crate) struct Dcel<C> {
+    pub(crate) vertices:   Vec<Vertex<C>>,
+    pub(crate) half_edges: Vec<HalfEdge>,
+    pub(crate) faces:      Vec<Face>,
 }
 
 impl<C> Default for Dcel<C> {
-    fn default() -> Self { Self::new() }
+    #[inline] fn default() -> Self { Self::new() }
 }
 
 impl<C> Dcel<C> {
     /// Create an empty DCEL. The outer face (`OUTER_FACE`) is pre-inserted.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             vertices: Vec::new(),
             half_edges: Vec::new(),
@@ -126,39 +126,38 @@ impl<C> Dcel<C> {
     // Counts
     // -----------------------------------------------------------------------
 
-    pub fn num_vertices(&self)   -> usize { self.vertices.len() }
-    pub fn num_half_edges(&self) -> usize { self.half_edges.len() }
+    #[inline] pub(crate) fn num_vertices(&self)   -> usize { self.vertices.len() }
+    #[inline] pub(crate) fn num_half_edges(&self) -> usize { self.half_edges.len() }
     /// Number of faces including the outer face.
-    pub fn num_faces(&self)      -> usize { self.faces.len() }
-    /// Number of bounded faces (excludes the outer face).
-    pub fn num_bounded_faces(&self) -> usize { self.faces.len().saturating_sub(1) }
+    #[inline] pub(crate) fn num_faces(&self)      -> usize { self.faces.len() }
 
     // -----------------------------------------------------------------------
     // Accessors
     // -----------------------------------------------------------------------
 
-    pub fn vertex(&self, id: VertexId) -> &Vertex<C> { &self.vertices[id.0] }
-    pub fn vertex_mut(&mut self, id: VertexId) -> &mut Vertex<C> { &mut self.vertices[id.0] }
+    #[inline] pub(crate) fn vertex(&self, id: VertexId) -> &Vertex<C> { &self.vertices[id.0] }
 
-    pub fn half_edge(&self, id: HalfEdgeId) -> &HalfEdge { &self.half_edges[id.0] }
-    pub fn half_edge_mut(&mut self, id: HalfEdgeId) -> &mut HalfEdge { &mut self.half_edges[id.0] }
+    #[inline] pub(crate) fn half_edge(&self, id: HalfEdgeId) -> &HalfEdge { &self.half_edges[id.0] }
+    #[inline] pub(crate) fn half_edge_mut(&mut self, id: HalfEdgeId) -> &mut HalfEdge { &mut self.half_edges[id.0] }
 
-    pub fn face(&self, id: FaceId) -> &Face { &self.faces[id.0] }
-    pub fn face_mut(&mut self, id: FaceId) -> &mut Face { &mut self.faces[id.0] }
+    #[inline] pub(crate) fn face(&self, id: FaceId) -> &Face { &self.faces[id.0] }
+    #[inline] pub(crate) fn face_mut(&mut self, id: FaceId) -> &mut Face { &mut self.faces[id.0] }
 
     // -----------------------------------------------------------------------
     // Builders
     // -----------------------------------------------------------------------
 
     /// Add an isolated vertex with the given coordinates.
-    pub fn add_vertex(&mut self, coords: C) -> VertexId {
+    #[inline]
+    pub(crate) fn add_vertex(&mut self, coords: C) -> VertexId {
         let id = VertexId(self.vertices.len());
         self.vertices.push(Vertex { coords, half_edge: None });
         id
     }
 
     /// Add a new bounded face (returns its id).
-    pub fn add_face(&mut self) -> FaceId {
+    #[inline]
+    pub(crate) fn add_face(&mut self) -> FaceId {
         let id = FaceId(self.faces.len());
         self.faces.push(Face { half_edge: None });
         id
@@ -172,7 +171,8 @@ impl<C> Dcel<C> {
     /// building all edges and faces.
     ///
     /// Returns `(uv, vu)` — the half-edge from u to v and its twin.
-    pub fn add_edge(&mut self,
+    #[inline]
+    pub(crate) fn add_edge(&mut self,
         u: VertexId,
         v: VertexId,
         face_left: FaceId,
@@ -193,7 +193,8 @@ impl<C> Dcel<C> {
     }
 
     /// Set `he.next = next` and `next.prev = he`.
-    pub fn set_next(&mut self, he: HalfEdgeId, next: HalfEdgeId) {
+    #[inline]
+    pub(crate) fn set_next(&mut self, he: HalfEdgeId, next: HalfEdgeId) {
         self.half_edges[he.0].next = next;
         self.half_edges[next.0].prev = he;
     }
@@ -204,13 +205,15 @@ impl<C> Dcel<C> {
 
     /// Iterate over all half-edges around the face of `start` in CCW order,
     /// starting (and ending just before returning to) `start`.
-    pub fn face_cycle(&self, start: HalfEdgeId) -> FaceCycle<'_, C> {
+    #[inline]
+    pub(crate) fn face_cycle(&self, start: HalfEdgeId) -> FaceCycle<'_, C> {
         FaceCycle { dcel: self, start, current: start, done: false }
     }
 
     /// Iterate over all outgoing half-edges around a vertex in CCW order
     /// (using `twin.next` links), starting from `start`.
-    pub fn vertex_star(&self, start: HalfEdgeId) -> VertexStar<'_, C> {
+    #[inline]
+    pub(crate) fn vertex_star(&self, start: HalfEdgeId) -> VertexStar<'_, C> {
         VertexStar { dcel: self, start, current: start, done: false }
     }
 
@@ -219,7 +222,8 @@ impl<C> Dcel<C> {
     // -----------------------------------------------------------------------
 
     /// The vertex at the head (destination) of a half-edge.
-    pub fn dest(&self, he: HalfEdgeId) -> VertexId {
+    #[inline]
+    pub(crate) fn dest(&self, he: HalfEdgeId) -> VertexId {
         self.half_edges[self.half_edges[he.0].twin.0].origin
     }
 }
@@ -229,7 +233,7 @@ impl<C> Dcel<C> {
 // ---------------------------------------------------------------------------
 
 /// Iterator over half-edges in a face cycle (CCW).
-pub struct FaceCycle<'a, C> {
+pub(crate) struct FaceCycle<'a, C> {
     dcel:    &'a Dcel<C>,
     start:   HalfEdgeId,
     current: HalfEdgeId,
@@ -239,6 +243,7 @@ pub struct FaceCycle<'a, C> {
 impl<'a, C> Iterator for FaceCycle<'a, C> {
     type Item = HalfEdgeId;
 
+    #[inline]
     fn next(&mut self) -> Option<HalfEdgeId> {
         if self.done { return None; }
         let he = self.current;
@@ -249,7 +254,7 @@ impl<'a, C> Iterator for FaceCycle<'a, C> {
 }
 
 /// Iterator over half-edges in a vertex star (CCW), using `twin.next`.
-pub struct VertexStar<'a, C> {
+pub(crate) struct VertexStar<'a, C> {
     dcel:    &'a Dcel<C>,
     start:   HalfEdgeId,
     current: HalfEdgeId,
@@ -259,6 +264,7 @@ pub struct VertexStar<'a, C> {
 impl<'a, C> Iterator for VertexStar<'a, C> {
     type Item = HalfEdgeId;
 
+    #[inline]
     fn next(&mut self) -> Option<HalfEdgeId> {
         if self.done { return None; }
         let he = self.current;
@@ -485,9 +491,9 @@ mod tests {
     }
 
     #[test]
-    fn new_has_zero_bounded_faces() {
+    fn new_has_one_face_the_outer_face() {
         let d = Dcel::<(f64, f64)>::new();
-        assert_eq!(d.num_bounded_faces(), 0);
+        assert_eq!(d.num_faces(), 1);
     }
 
     #[test]
@@ -580,13 +586,13 @@ mod tests {
     }
 
     #[test]
-    fn add_face_increments_bounded_count() {
+    fn add_face_increments_face_count() {
         let mut d = Dcel::<(f64, f64)>::new();
-        assert_eq!(d.num_bounded_faces(), 0);
+        assert_eq!(d.num_faces(), 1); // outer face
         d.add_face();
-        assert_eq!(d.num_bounded_faces(), 1);
+        assert_eq!(d.num_faces(), 2);
         d.add_face();
-        assert_eq!(d.num_bounded_faces(), 2);
+        assert_eq!(d.num_faces(), 3);
     }
 
     // -----------------------------------------------------------------------
@@ -885,7 +891,7 @@ mod tests {
         let (d, _, _, _) = make_wheel();
         assert_eq!(d.num_vertices(), 5);
         assert_eq!(d.num_half_edges(), 16);
-        assert_eq!(d.num_bounded_faces(), 4);
+        assert_eq!(d.num_faces() - 1, 4);
     }
 
     #[test]
@@ -936,7 +942,7 @@ mod tests {
         let (d, _, _, _) = make_nested();
         assert_eq!(d.num_vertices(), 6);
         assert_eq!(d.num_half_edges(), 12);
-        assert_eq!(d.num_bounded_faces(), 2);
+        assert_eq!(d.num_faces() - 1, 2);
     }
 
     #[test]

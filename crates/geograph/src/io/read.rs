@@ -131,6 +131,16 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         compute_exterior_boundary_length(&dcel, &face_to_unit, &edge_length, nu);
     let centroid    = compute_centroids(&dcel, &face_to_unit, nu);
     let bounds      = compute_bounds(&dcel, &face_to_unit, nu);
+    let bounds_all  = {
+        let mut rect = bounds[0];
+        for b in &bounds[1..] {
+            rect = Rect::new(
+                Coord { x: rect.min().x.min(b.min().x), y: rect.min().y.min(b.min().y) },
+                Coord { x: rect.max().x.max(b.max().x), y: rect.max().y.max(b.max().y) },
+            );
+        }
+        rect
+    };
     let is_exterior = compute_is_exterior(&dcel, &face_to_unit, nu);
     let geometries  = reconstruct_geometries(&dcel, &face_to_unit, nu);
 
@@ -143,6 +153,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         exterior_boundary_length,
         centroid,
         bounds,
+        bounds_all,
         is_exterior,
         edge_length,
         adjacent,

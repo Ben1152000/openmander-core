@@ -502,7 +502,25 @@ impl Region {
             Rect::new(Coord { x: mnx, y: mny }, Coord { x: mxx, y: mxy })
         }).collect();
 
-        // 4g. is_exterior flag.
+        // 4g. Region-wide bounding box.
+        let bounds_all = {
+            let mut rect = bounds[0];
+            for b in &bounds[1..] {
+                rect = Rect::new(
+                    Coord {
+                        x: rect.min().x.min(b.min().x),
+                        y: rect.min().y.min(b.min().y),
+                    },
+                    Coord {
+                        x: rect.max().x.max(b.max().x),
+                        y: rect.max().y.max(b.max().y),
+                    },
+                );
+            }
+            rect
+        };
+
+        // 4h. is_exterior flag.
         let mut is_exterior = vec![false; nu];
         for h in 0..nhe {
             let he = dcel.half_edge(HalfEdgeId(h));
@@ -528,6 +546,7 @@ impl Region {
             exterior_boundary_length,
             centroid,
             bounds,
+            bounds_all,
             is_exterior,
             edge_length,
             adjacent,

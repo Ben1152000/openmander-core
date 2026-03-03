@@ -77,8 +77,8 @@ district assignment.
 
 ### 3.2 Adjacency tables
 
-Two separate CSR adjacency matrices are stored on `Region`, both built lazily
-on first access and then cached:
+Two separate CSR adjacency matrices are built eagerly during construction and
+stored on `Region`:
 
 **Rook adjacency** (shared edge — positive-length boundary):
 
@@ -91,23 +91,24 @@ on first access and then cached:
 
 **Queen adjacency** (shared point — corner touch counts):
 
-- Start from the Rook pairs (every shared edge is also a shared point).
-- Additionally, walk every DCEL vertex `v`.  For each pair of distinct units
-  `(a, b)` that appear in the vertex star of `v` (via `vertex_star()`), emit
-  `(a, b)` and `(b, a)`.
-- Collect, sort, deduplicate (so Rook ⊆ Queen), and build CSR.
+- Walk every DCEL vertex `v`.  For each pair of distinct units `(a, b)` that
+  appear in the vertex star of `v` (via `vertex_star()`), emit `(a, b)` and
+  `(b, a)`.
+- Collect, sort, deduplicate, and build CSR.
+- Because every shared edge is also a shared point, Rook ⊆ Queen holds
+  automatically.
 
 The two matrices are stored as separate fields:
 
 ```
-adj:      Option<AdjacencyMatrix>   // Rook — None until first access
-touching: Option<AdjacencyMatrix>   // Queen — None until first access
+adjacent: AdjacencyMatrix   // Rook
+touching: AdjacencyMatrix   // Queen
 ```
 
 `AdjacencyMatrix` is a plain CSR structure: `offsets: Vec<u32>` (length
-`num_units + 1`) and `neighbors: Vec<u32>` (sorted within each row for binary
-search).  Row `u` gives the sorted list of units adjacent to `u` under the
-chosen mode.
+`num_units + 1`) and `neighbors: Vec<UnitId>` (sorted within each row for
+binary search).  Row `u` gives the sorted list of units adjacent to `u` under
+the chosen mode.
 
 ### 3.3 Per-unit cache
 
@@ -122,8 +123,10 @@ stored in `Vec`s indexed by `UnitId`:
 - `exterior_boundary_length: Vec<f64>` — sum of `edge_length` values for
   half-edges whose twin belongs to `UnitId::EXTERIOR`.  Zero for interior
   units.  In metres.
-- `centroid: Vec<Coord<f64>>` — centroid of each unit's geometry in lon/lat,
-  computed as the area-weighted average of ring centroids.
+- `centroid: Vec<Coord<f64>>` — approximate centroid of each unit in lon/lat,
+  computed as the unweighted average of all half-edge origin vertices belonging
+  to the unit.  This is a vertex-average, not the true area-weighted centroid;
+  it is fast to compute and sufficient for angular ordering and display.
 - `bounds: Vec<Rect<f64>>` — axis-aligned bounding box of each unit in lon/lat.
 - `is_exterior: Vec<bool>` — true if the unit has any half-edge whose twin
   belongs to `UnitId::EXTERIOR` (i.e. the unit touches the region boundary).
@@ -132,11 +135,15 @@ Shared-edge lengths are stored on the half-edge pairs:
 `edge_length: Vec<f64>` indexed by `HalfEdgeId / 2` (one entry per undirected
 edge), in metres using the same per-edge `cos(φ_mid)` correction.
 
-### 3.4 Spatial index
+### 3.4 Edge matching
 
-During construction an R-tree of edge bounding boxes is used to detect which
-polygon edges are shared between adjacent units (within a snapping tolerance).
-This is discarded after the DCEL is built.
+During construction, shared polygon edges are detected using a `HashMap` keyed
+on snapped vertex-pair coordinates.  After vertex snapping (§4, step 1) brings
+near-coincident vertices to exact canonical positions, two directed edges from
+different units that share the same (origin, dest) vertex pair — in forward or
+reverse direction — are identified as the same undirected boundary segment and
+twinned in the DCEL.  Edges with no matching reverse edge are twinned with the
+outer face.  The map is discarded after the DCEL is built.
 
 ---
 
@@ -226,9 +233,6 @@ Return as `MultiLineString`.  O(boundary length in edges).
 Walk half-edges of unit `a`; sum `edge_length` for edges whose twin belongs to
 `b`.  O(edges of `a`).
 
-Alternatively, look up the pre-indexed `shared_lengths: HashMap<(UnitId, UnitId), f64>`
-built at construction time.  O(1).
-
 ### 5.6 `is_contiguous(units)`
 
 BFS on the Rook adjacency graph restricted to `units` (treat as a
@@ -261,7 +265,7 @@ O(n) where n = total number of units.
 
 O(k) via the cached scalar sums.
 
-### 5.10 `centroid(unit)` / `bounds(unit)` / `is_exterior(unit)` / `exterior_boundary_length(unit)`
+### 5.10 `centroid(unit)` / `bounds(unit)` / `is_exterior(unit)` / `exterior_boundary_length(unit)` / `bounds_all()`
 
 O(1) — all pre-cached at construction time (see §3.3).
 
@@ -290,9 +294,9 @@ need the outline should prefer `boundary_of`.
 
 ```rust
 // Construction
-Region::from_shapefile(path, snap_tol) -> Result<Region>
-Region::from_geojson(data, snap_tol)   -> Result<Region>
-Region::new(geometries, snap_tol)      -> Result<Region>
+Region::new(geometries, snap_tol)       -> Result<Region>
+Region::from_geojson(data, snap_tol)    -> Result<Region>       // not yet implemented
+Region::from_shapefile(path, snap_tol)  -> Result<Region>       // not yet implemented
 
 // Unit access
 region.unit_ids()       -> impl Iterator<Item = UnitId>
@@ -314,6 +318,9 @@ region.centroid(unit)                 -> Coord<f64>
 region.bounds(unit)                   -> Rect<f64>
 region.is_exterior(unit)              -> bool
 region.boundary(unit)                 -> MultiLineString<f64>
+
+// Region-wide geometry (O(1), pre-cached)
+region.bounds_all()                   -> Rect<f64>
 
 // Subset geometry (O(k) unless noted)
 region.area_of(units)                      -> f64
@@ -367,13 +374,14 @@ impl AdjacencyMatrix {
 | `centroid(unit)` | O(1) | cached |
 | `bounds(unit)` | O(1) | cached |
 | `is_exterior(unit)` | O(1) | cached |
+| `bounds_all()` | O(1) | cached |
 | `area_of(units)` | O(k) | sum of cached values |
 | `perimeter_of(units)` | O(k · avg_deg) | boundary walk |
 | `exterior_boundary_length_of(units)` | O(k) | sum of cached values |
 | `bounds_of(units)` | O(k) | expand cached bounding boxes |
 | `boundary_of(units)` | O(boundary edges) | half-edge walk |
-| `union_of(units)` | O(polygon complexity) | polygon boolean ops |
-| `shared_boundary_length` | O(1) | pre-indexed map |
+| `union_of(units)` | O(boundary edges) | DCEL boundary walk |
+| `shared_boundary_length` | O(edges of a) | half-edge walk |
 | `is_contiguous` | O(k) | BFS on subgraph |
 | `connected_components` | O(k) | BFS on subgraph |
 | `has_holes` / `enclaves` | O(n) | complement BFS |
@@ -455,7 +463,7 @@ k = size of query subset, n = total number of units.
 
    ```
    [Header]
-     magic:          4 bytes  ("GPHR")
+     magic:          4 bytes  ("OMRP")
      version:        1 byte
      reserved:       3 bytes
      num_vertices:   u32

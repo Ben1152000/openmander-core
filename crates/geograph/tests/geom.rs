@@ -139,19 +139,39 @@ fn bounds_of_subset_contains_all_unit_bounds() {
 }
 
 #[test]
-fn boundary_of_subset_is_closed() {
-    // boundary_of is still todo!, so skip if it panics.
+fn boundary_of_single_unit_is_closed() {
     let r = two_squares();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        r.boundary_of([UnitId(0)])
-    }));
-    if let Ok(b) = result {
-        for ring in &b.0 {
-            let pts = &ring.0;
-            assert_eq!(pts.first(), pts.last(), "boundary ring is not closed");
-        }
+    let b = r.boundary_of([UnitId(0)]);
+    assert!(!b.0.is_empty(), "boundary_of should return at least one ring");
+    for ring in &b.0 {
+        let pts = &ring.0;
+        assert_eq!(pts.first(), pts.last(), "boundary ring is not closed");
     }
-    // If it panicked (todo!), the test passes silently — the feature isn't ready yet.
+}
+
+#[test]
+fn boundary_of_single_unit_has_one_ring() {
+    let r = two_squares();
+    let b = r.boundary_of([UnitId(0)]);
+    assert_eq!(b.0.len(), 1, "single convex unit should have exactly one boundary ring");
+}
+
+#[test]
+fn boundary_of_all_units_has_one_ring() {
+    let r = two_squares();
+    let b = r.boundary_of(r.unit_ids());
+    assert_eq!(b.0.len(), 1, "two adjacent units should have one outer boundary ring");
+}
+
+#[test]
+fn boundary_of_all_units_excludes_internal_edge() {
+    let r = two_squares();
+    // Single unit: 4 edges → 5 coords (closing).
+    let b_single = r.boundary_of([UnitId(0)]);
+    assert_eq!(b_single.0[0].0.len(), 5, "single unit boundary has 5 coords");
+    // Both units merged: outer boundary is 6 edges → 7 coords (closing).
+    let b_both = r.boundary_of(r.unit_ids());
+    assert_eq!(b_both.0[0].0.len(), 7, "merged boundary has 7 coords");
 }
 
 #[test]
@@ -179,16 +199,39 @@ fn compactness_of_circle_approximation_near_one() {
 }
 
 #[test]
-fn union_of_subset_covers_same_area() {
-    // union_of is still todo!, so skip if it panics.
+fn union_of_single_unit_has_one_polygon() {
     let r = two_squares();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        r.union_of(r.unit_ids())
-    }));
-    if let Ok(_mp) = result {
-        // If implemented, we could check area equality.
-        // For now, just verify it doesn't panic.
-    }
+    let mp = r.union_of([UnitId(0)]);
+    assert_eq!(mp.0.len(), 1, "single unit union should be one polygon");
+}
+
+#[test]
+fn union_of_single_unit_exterior_ring_has_five_coords() {
+    let r = two_squares();
+    let mp = r.union_of([UnitId(0)]);
+    assert_eq!(mp.0[0].exterior().0.len(), 5, "square has 4 corners + closing = 5 coords");
+}
+
+#[test]
+fn union_of_all_units_has_one_polygon() {
+    let r = two_squares();
+    let mp = r.union_of(r.unit_ids());
+    assert_eq!(mp.0.len(), 1, "two adjacent units union should be one polygon");
+}
+
+#[test]
+fn union_of_all_units_exterior_ring_has_seven_coords() {
+    // Merged 2×1 rectangle: 6 edges → 7 coords (closing).
+    let r = two_squares();
+    let mp = r.union_of(r.unit_ids());
+    assert_eq!(mp.0[0].exterior().0.len(), 7, "merged rectangle has 6 corners + closing");
+}
+
+#[test]
+fn union_of_all_units_has_no_holes() {
+    let r = two_squares();
+    let mp = r.union_of(r.unit_ids());
+    assert!(mp.0[0].interiors().is_empty(), "simple union should have no holes");
 }
 
 #[test]

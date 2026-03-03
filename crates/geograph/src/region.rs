@@ -48,6 +48,9 @@ pub struct Region {
     /// Pre-cached axis-aligned bounding box in lon/lat.
     pub(crate) bounds: Vec<Rect<f64>>,
 
+    /// Pre-cached bounding box of the entire region (union of all unit bounds).
+    pub(crate) bounds_all: Rect<f64>,
+
     /// Pre-cached flag: true if the unit has any half-edge whose twin belongs
     /// to `UnitId::EXTERIOR`.
     pub(crate) is_exterior: Vec<bool>,
@@ -186,6 +189,7 @@ pub(crate) mod test_helpers {
                 Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 1.0, y: 1.0 }),
                 Rect::new(Coord { x: 1.0, y: 0.0 }, Coord { x: 2.0, y: 1.0 }),
             ],
+            bounds_all: Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 2.0, y: 1.0 }),
             is_exterior: vec![true, true],
             // 7 undirected edges, each with length 1.0
             edge_length: vec![1.0; 7],

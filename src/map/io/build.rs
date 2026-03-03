@@ -228,6 +228,30 @@ impl MapLayer {
         Ok(())
     }
 
+    /// Sort each node's adjacency list in counter-clockwise (CCW) angular order,
+    /// using centroid-to-centroid angles.
+    ///
+    /// Angles are quantized to 1e-6 radians with neighbor-index tiebreaking for
+    /// deterministic, platform-independent ordering.
+    fn sort_adjacencies_ccw(&mut self) {
+        let centroids = self.centroids();
+
+        for (i, neighbors) in self.adjacencies.iter_mut().enumerate() {
+            let cx = centroids[i].x();
+            let cy = centroids[i].y();
+
+            neighbors.sort_by(|&a, &b| {
+                let angle_a = (centroids[a as usize].y() - cy).atan2(centroids[a as usize].x() - cx);
+                let angle_b = (centroids[b as usize].y() - cy).atan2(centroids[b as usize].x() - cx);
+
+                let qa = (angle_a * 1e6).round() as i64;
+                let qb = (angle_b * 1e6).round() as i64;
+
+                (qa, a).cmp(&(qb, b))
+            });
+        }
+    }
+
     /// Compute shared perimeters for the layer geometries, if it exists.
     fn compute_shared_perimeters(&mut self) -> Result<()> {
         let geoms = self.geoms.as_ref()
@@ -481,11 +505,19 @@ impl Map {
         if let Some(block_layer) = map.layer_mut(GeoType::Block) {
             block_layer.compute_adjacencies()?;
             block_layer.patch_adjacencies()?;
+            block_layer.sort_adjacencies_ccw();
             map.aggregate_adjacencies(GeoType::Block, GeoType::VTD)?;
             map.aggregate_adjacencies(GeoType::Block, GeoType::Group)?;
             map.aggregate_adjacencies(GeoType::Group, GeoType::Tract)?;
             map.aggregate_adjacencies(GeoType::Tract, GeoType::County)?;
             map.aggregate_adjacencies(GeoType::County, GeoType::State)?;
+        }
+
+        if verbose > 0 { eprintln!("[build_pack] sorting adjacencies CCW"); }
+        for layer in map.layers_iter_mut() {
+            if layer.ty() != GeoType::Block {
+                layer.sort_adjacencies_ccw();
+            }
         }
 
         if verbose > 0 { eprintln!("[build_pack] computing shared perimeters"); }

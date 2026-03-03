@@ -206,8 +206,11 @@ impl Plan {
 
         Ok((1..=self.num_districts)
             .map(|d| {
+                let frontier_nodes = self.partition.frontier(d);
                 let edges = self.partition.frontier_edge_endpoints(d);
-                let (_, debug) = super::boundary::extract_district_boundary_with_debug(shapes, adjacencies, &edges, &assignments, d, &is_state_border);
+                let (_, debug) = super::boundary::extract_district_boundary_with_debug(
+                    shapes, adjacencies, frontier_nodes, &edges, &assignments, d, &is_state_border,
+                );
                 let s = &debug.stitch;
                 (d, debug.boundary_edges_found, s.num_vertices, s.degree_1_count,
                  s.degree_2_count, s.degree_3_plus_count, s.walks_attempted,
@@ -216,39 +219,29 @@ impl Plan {
             .collect())
     }
 
-    /// Extract district boundaries by connecting frontier block centroids.
+    /// Extract district boundaries using the segment-based approach.
     ///
-    /// Walks the frontier blocks in angular order and connects their centroids
-    /// to form a closed polygon for each district.
+    /// To revert to the union-based approach, replace the call to
+    /// `extract_district_boundary_segments` with:
+    ///   `extract_district_boundary_union(shapes, frontier_nodes)`
+    /// and remove the `adjacencies` / `assignments` lines below.
     pub fn district_geometries_wkb(&self) -> Result<Vec<(u32, Vec<u8>)>> {
         let base_layer = self.map.base()?;
+        let shapes = base_layer.shapes()
+            .ok_or_else(|| anyhow::anyhow!("No shapes available for boundary extraction"))?;
         let adjacencies = base_layer.adjacencies();
-
-        // Get centroids as Coord<f64> for boundary extraction
-        let centroids: Vec<geo::Coord<f64>> = base_layer.centroids()
-            .into_iter()
-            .map(|p| geo::Coord { x: p.x(), y: p.y() })
-            .collect();
+        let assignments = self.partition.assignments();
 
         let mut results = Vec::with_capacity(self.num_districts as usize);
 
         for district in 1..=self.num_districts {
-            let frontier_edges = self.partition.frontier_edge_endpoints(district);
-
-            let boundary = super::boundary::extract_district_boundary_centroids(
-                &centroids,
+            let frontier_nodes = self.partition.frontier(district);
+            let boundary = super::boundary::extract_district_boundary_segments(
+                shapes,
                 adjacencies,
-                &frontier_edges,
-            );
-
-            let unique_frontier_blocks: std::collections::HashSet<usize> =
-                frontier_edges.iter().map(|&(src, _)| src).collect();
-            let ring_points = boundary.0.first()
-                .map(|p| p.exterior().0.len())
-                .unwrap_or(0);
-            eprintln!(
-                "[D{}] frontier_blocks={}, ring_points={}, polygons={}",
-                district, unique_frontier_blocks.len(), ring_points, boundary.0.len()
+                &assignments,
+                frontier_nodes,
+                district,
             );
 
             let wkb = multipolygon_to_wkb(&boundary)?;
@@ -256,5 +249,38 @@ impl Plan {
         }
 
         Ok(results)
+    }
+
+    /// Get detailed frontier edge information for debugging.
+    /// Returns a HashMap where:
+    /// - key = block index
+    /// - value = (district, num_inter_district_edges, is_exterior, is_state_border)
+    pub fn get_frontier_edge_blocks(&self) -> Result<HashMap<usize, (u32, usize, bool, bool)>> {
+        let base_layer = self.map.base()?;
+        let graph = base_layer.get_graph_ref();
+
+        let mut result = HashMap::new();
+
+        // For each district, get frontier edges and categorize by block
+        for district in 1..=self.num_districts {
+            let frontier_edges = self.partition.frontier_edge_endpoints(district);
+
+            // Group edges by source block
+            let mut block_edges: HashMap<usize, usize> = HashMap::new();
+
+            for (src, _tgt) in frontier_edges {
+                *block_edges.entry(src).or_insert(0) += 1;
+            }
+
+            // Store results
+            for (block, inter) in block_edges {
+                result.insert(
+                    block,
+                    (district, inter, graph.is_exterior(block), graph.is_exterior(block))
+                );
+            }
+        }
+
+        Ok(result)
     }
 }

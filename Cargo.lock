@@ -1233,6 +1233,9 @@ dependencies = [
 [[package]]
 name = "geograph"
 version = "0.1.3"
+dependencies = [
+ "geo",
+]
 
 [[package]]
 name = "geographiclib-rs"

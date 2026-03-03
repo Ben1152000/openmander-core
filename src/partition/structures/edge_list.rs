@@ -1,3 +1,7 @@
+use std::collections::HashSet;
+
+use crate::graph::WeightedGraph;
+
 /// A per-part bucketed set for directed half-edges, with O(1) insert/remove/find.
 ///
 /// Intended use (OpenMander):
@@ -127,6 +131,134 @@ impl FrontierEdgeList {
         let bucket = &mut self.parts[part];
         self.loc[edge] = Some((part, bucket.len()));
         bucket.push(edge);
+    }
+
+    /// Walk the frontier edges of `part` in CCW boundary order, using the
+    /// planar embedding encoded in the graph's CCW-sorted adjacency lists.
+    ///
+    /// Returns a vector of boundary cycles. Each cycle is a sequence of
+    /// `(inside_node, outside_node)` directed frontier edges tracing one
+    /// connected component of the boundary counter-clockwise.
+    ///
+    /// The algorithm at each step: starting from frontier edge `(u, v)` with
+    /// `u` inside the part, find `v` in `u`'s CCW adjacency list and advance
+    /// to the next neighbor. If that neighbor is outside the part, it is the
+    /// next frontier edge. If inside, transition to that neighbor and repeat.
+    ///
+    /// Requires that the graph's adjacency lists were sorted in CCW angular
+    /// order during pack construction (see `sort_adjacencies_ccw`).
+    pub(crate) fn walk_boundary(
+        &self,
+        part: usize,
+        graph: &WeightedGraph,
+        assignments: &[usize],
+    ) -> Vec<Vec<(usize, usize)>> {
+        let edge_indices = self.get(part);
+        if edge_indices.is_empty() {
+            return vec![];
+        }
+
+        // Collect all frontier edges as (source, target) for this part.
+        // Build a set for O(1) visited checks.
+        let mut all_frontier: Vec<(usize, usize)> = Vec::with_capacity(edge_indices.len());
+        for &edge_idx in edge_indices {
+            if let Some(pair) = graph.edge_endpoints(edge_idx) {
+                all_frontier.push(pair);
+            }
+        }
+
+        let frontier_set: HashSet<(usize, usize)> = all_frontier.iter().copied().collect();
+        let mut visited: HashSet<(usize, usize)> = HashSet::with_capacity(all_frontier.len());
+        let mut cycles: Vec<Vec<(usize, usize)>> = Vec::new();
+
+        for &start in &all_frontier {
+            if visited.contains(&start) {
+                continue;
+            }
+
+            let mut cycle: Vec<(usize, usize)> = Vec::new();
+            let (mut u, mut v) = start;
+
+            loop {
+                debug_assert_eq!(assignments[u], part);
+                debug_assert!(v == u || assignments[v] != part);
+
+                cycle.push((u, v));
+                visited.insert((u, v));
+
+                // Find the next frontier edge by walking CCW from v in u's
+                // adjacency list, transitioning through interior nodes.
+                let (next_u, next_v) = Self::next_frontier_edge(
+                    u, v, part, graph, assignments,
+                );
+
+                u = next_u;
+                v = next_v;
+
+                if (u, v) == start {
+                    break;
+                }
+
+                // Safety check: if we hit an edge we already visited (but not
+                // the start), the walk diverged — break to avoid an infinite loop.
+                if visited.contains(&(u, v)) {
+                    break;
+                }
+            }
+
+            // Only keep cycles where every edge is actually a frontier edge
+            // of this part (sanity check).
+            if cycle.iter().all(|e| frontier_set.contains(e)) {
+                cycles.push(cycle);
+            }
+        }
+
+        cycles
+    }
+
+    /// Given frontier edge `(u, v)` with `u` in `part`, find the next frontier
+    /// edge in the CCW boundary walk.
+    ///
+    /// Starting at `u`, advance CCW past `v` in `u`'s adjacency list. If the
+    /// next neighbor is outside the part, that's the next frontier edge.
+    /// If inside, transition to that neighbor and repeat.
+    fn next_frontier_edge(
+        u: usize,
+        v: usize,
+        part: usize,
+        graph: &WeightedGraph,
+        assignments: &[usize],
+    ) -> (usize, usize) {
+        let mut cur = u;
+        let mut prev = v;
+
+        loop {
+            let deg = graph.degree(cur);
+            debug_assert!(deg > 0);
+
+            // Find prev's position in cur's adjacency list.
+            let mut pos = 0;
+            for (i, nbr) in graph.edges(cur).enumerate() {
+                if nbr == prev {
+                    pos = i;
+                    break;
+                }
+            }
+
+            // Advance one step CCW (next position, wrapping).
+            let next_pos = (pos + 1) % deg;
+            let w = graph.edge(cur, next_pos).unwrap();
+
+            if w == cur || assignments[w] != part {
+                // w is outside the part (or a self-edge exterior sentinel)
+                // — found the next frontier edge.
+                return (cur, w);
+            } else {
+                // w is inside — transition to w and continue walking.
+                prev = cur;
+                cur = w;
+            }
+        }
     }
 }
 
@@ -258,6 +390,158 @@ mod tests {
 
         let all_edges: std::collections::HashSet<usize> = fel.iter_all().collect();
         assert_eq!(all_edges, [0, 2, 4].into_iter().collect());
+    }
+
+    /// Build a 3x3 grid graph with CCW-ordered adjacency lists.
+    ///
+    /// Node layout (column, row):
+    ///   6(0,2)  7(1,2)  8(2,2)
+    ///   3(0,1)  4(1,1)  5(2,1)
+    ///   0(0,0)  1(1,0)  2(2,0)
+    ///
+    /// CCW adjacency order is by atan2(dy, dx) from node centroid to
+    /// the shared-boundary point (here identical to neighbor centroid
+    /// for a regular grid).
+    fn make_grid_3x3() -> WeightedGraph {
+        use crate::graph::WeightMatrix;
+        // For a regular grid, CCW order from east going counter-clockwise:
+        //   east(0), north(π/2), west(π), south(-π/2)
+        // Sorted by atan2: south(-π/2), east(0), north(π/2), west(π)
+        //
+        // Neighbors for each node (only rook-adjacent), sorted by angle:
+        let adj: Vec<Vec<u32>> = vec![
+            /* 0 (0,0) */ vec![1, 3],            // east, north
+            /* 1 (1,0) */ vec![2, 0, 4],         // S=-π/2 is absent; east=2(0), west=0(π), north=4(π/2) → sorted: 2(0), 4(π/2), 0(π)
+            /* 2 (2,0) */ vec![5, 1],            // north=5(π/2), west=1(π) → sorted: 5(π/2), 1(π)
+            /* 3 (0,1) */ vec![0, 4, 6],         // south=0(-π/2), east=4(0), north=6(π/2) → sorted: 0(-π/2), 4(0), 6(π/2)
+            /* 4 (1,1) */ vec![1, 5, 7, 3],      // south=1(-π/2), east=5(0), north=7(π/2), west=3(π)
+            /* 5 (2,1) */ vec![2, 8, 4],         // south=2(-π/2), north=8(π/2), west=4(π)
+            /* 6 (0,2) */ vec![3, 7],            // south=3(-π/2), east=7(0)
+            /* 7 (1,2) */ vec![6, 4, 8],         // west=6(π), south=4(-π/2), east=8(0) → sorted: 4(-π/2), 8(0), 6(π)
+            /* 8 (2,2) */ vec![7, 5],            // west=7(π), south=5(-π/2) → sorted: 5(-π/2), 7(π)
+        ];
+        let weights: Vec<Vec<f64>> = adj.iter().map(|a| vec![1.0; a.len()]).collect();
+        WeightedGraph::new(9, &adj, &weights, WeightMatrix::empty(9), &[])
+    }
+
+    #[test]
+    fn walk_boundary_single_node_district() {
+        let graph = make_grid_3x3();
+        // District = {4} (center node), everything else is part 0
+        let assignments = [0, 0, 0, 0, 1, 0, 0, 0, 0];
+
+        // Build frontier edges: directed edges from 4 to its neighbors
+        // Node 4's adj list: [1, 5, 7, 3], offsets[4] = 2+3+2+3 = 10
+        // Actually let's compute offsets properly:
+        //   0: 2 edges → offsets[0]=0
+        //   1: 3 edges → offsets[1]=2
+        //   2: 2 edges → offsets[2]=5
+        //   3: 3 edges → offsets[3]=7
+        //   4: 4 edges → offsets[4]=10
+        //   5: 3 edges → offsets[5]=14
+        //   6: 2 edges → offsets[6]=17
+        //   7: 3 edges → offsets[7]=19
+        //   8: 2 edges → offsets[8]=22
+        // Node 4's edges are at CSR indices 10, 11, 12, 13
+        // 4→1 at idx 10, 4→5 at idx 11, 4→7 at idx 12, 4→3 at idx 13
+        let num_undirected = graph.edge_count() / 2;
+        let mut fel = FrontierEdgeList::new(2, num_undirected);
+        for local_idx in 0..graph.degree(4) {
+            let edge_idx = graph.offset(4) + local_idx;
+            fel.insert(edge_idx, 1); // part 1's frontier
+        }
+
+        let cycles = fel.walk_boundary(1, &graph, &assignments);
+        assert_eq!(cycles.len(), 1, "single-node district should have exactly one boundary cycle");
+
+        let cycle = &cycles[0];
+        assert_eq!(cycle.len(), 4, "center node has 4 frontier edges");
+
+        // All edges should be from node 4
+        assert!(cycle.iter().all(|&(u, _)| u == 4));
+
+        // The targets should be all neighbors of 4 in CCW order: [1, 5, 7, 3]
+        let targets: Vec<usize> = cycle.iter().map(|&(_, v)| v).collect();
+        // Find where 1 starts in the cycle (the walk can start from any frontier edge)
+        // Find the starting position and verify CCW order
+        let expected_ccw = [1, 5, 7, 3]; // CCW order of node 4's neighbors
+        // The cycle should be a rotation of this CCW order
+        let first_in_expected = expected_ccw.iter().position(|&t| t == targets[0]).unwrap();
+        for i in 0..4 {
+            assert_eq!(targets[i], expected_ccw[(first_in_expected + i) % 4],
+                "boundary walk should follow CCW order");
+        }
+    }
+
+    #[test]
+    fn walk_boundary_two_node_district() {
+        let graph = make_grid_3x3();
+        // District = {3, 4} (left-center + center), everything else is part 0
+        let assignments = [0, 0, 0, 1, 1, 0, 0, 0, 0];
+
+        // Frontier edges for part 1:
+        // From node 3 (adj [0, 4, 6]): 3→0 (outside), 3→4 (inside, skip), 3→6 (outside)
+        //   CSR: node 3 starts at offset 7. 3→0 at 7, 3→4 at 8, 3→6 at 9
+        //   Frontier: idx 7 (3→0), idx 9 (3→6)
+        // From node 4 (adj [1, 5, 7, 3]): 4→1 (out), 4→5 (out), 4→7 (out), 4→3 (in, skip)
+        //   CSR: node 4 starts at offset 10. 4→1 at 10, 4→5 at 11, 4→7 at 12, 4→3 at 13
+        //   Frontier: idx 10 (4→1), idx 11 (4→5), idx 12 (4→7)
+        let num_undirected = graph.edge_count() / 2;
+        let mut fel = FrontierEdgeList::new(2, num_undirected);
+        // Insert frontier edges from node 3
+        for local_idx in 0..graph.degree(3) {
+            let nbr = graph.edge(3, local_idx).unwrap();
+            if assignments[nbr] != 1 {
+                fel.insert(graph.offset(3) + local_idx, 1);
+            }
+        }
+        // Insert frontier edges from node 4
+        for local_idx in 0..graph.degree(4) {
+            let nbr = graph.edge(4, local_idx).unwrap();
+            if assignments[nbr] != 1 {
+                fel.insert(graph.offset(4) + local_idx, 1);
+            }
+        }
+
+        let cycles = fel.walk_boundary(1, &graph, &assignments);
+        assert_eq!(cycles.len(), 1, "connected two-node district should have one boundary cycle");
+
+        let cycle = &cycles[0];
+        assert_eq!(cycle.len(), 5, "district {{3,4}} has 5 frontier edges");
+
+        // The boundary should contain edges from both nodes 3 and 4
+        let sources: std::collections::HashSet<usize> = cycle.iter().map(|&(u, _)| u).collect();
+        assert!(sources.contains(&3));
+        assert!(sources.contains(&4));
+
+        // Verify the cycle is a valid rotation of the expected CCW boundary
+        let expected_edges: Vec<(usize, usize)> = vec![
+            (4, 1), (4, 5), (4, 7), (3, 6), (3, 0),
+        ];
+        // Find where the cycle starts relative to expected
+        if let Some(offset) = cycle.iter().position(|e| *e == expected_edges[0]) {
+            for i in 0..5 {
+                assert_eq!(cycle[(offset + i) % 5], expected_edges[i],
+                    "boundary edge {} should match expected CCW order", i);
+            }
+        } else {
+            // If it starts from a different edge, just check it's a valid rotation
+            let cycle_set: std::collections::HashSet<(usize, usize)> = cycle.iter().copied().collect();
+            let expected_set: std::collections::HashSet<(usize, usize)> = expected_edges.iter().copied().collect();
+            assert_eq!(cycle_set, expected_set, "boundary should contain exactly the expected frontier edges");
+        }
+    }
+
+    #[test]
+    fn walk_boundary_empty_frontier() {
+        let graph = make_grid_3x3();
+        // All nodes in part 0 — no frontier edges for part 0 against itself
+        let assignments = [0; 9];
+        let num_undirected = graph.edge_count() / 2;
+        let fel = FrontierEdgeList::new(2, num_undirected);
+
+        let cycles = fel.walk_boundary(0, &graph, &assignments);
+        assert!(cycles.is_empty());
     }
 
     #[test]

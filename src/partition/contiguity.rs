@@ -83,7 +83,7 @@ impl Partition {
         let mut remaining = neighbors.len() - 1;
         let mut queue = VecDeque::from([neighbors[start]]);
         while let Some(u) = queue.pop_front() {
-            for v in self.graph().edges(u).filter(|&v| v != node && self.assignment(v) == prev) {
+            for v in self.graph().edges(u).filter(|&v| self.assignment(v) == prev && v != node) {
                 if !visited[v] {
                     visited[v] = true;
                     if is_neighbor[v] {

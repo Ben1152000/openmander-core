@@ -90,6 +90,14 @@ impl Partition {
         self.part_graph.node_weights_mut().set_row_to_sum_of(0, self.unit_graph.node_weights());
     }
 
+    /// Whether a node is on the frontier of its part: it has a graph
+    /// neighbor in a different part, or it borders the state exterior.
+    #[inline]
+    pub(super) fn is_frontier_node(&self, node: usize) -> bool {
+        self.unit_graph.is_exterior(node)
+            || self.unit_graph.edges(node).any(|v| self.assignment(v) != self.assignment(node))
+    }
+
     /// Get the directed edge index for the edge from node u at local index i.
     /// In CSR format, this is simply offsets[u] + i.
     #[inline]
@@ -117,7 +125,7 @@ impl Partition {
     pub(crate) fn verify_frontier_edges(&self) -> bool {
         use std::collections::HashSet;
 
-        // Collect expected frontier edges from scratch
+        // Collect expected frontier edges from scratch.
         let mut expected: HashSet<(usize, usize)> = HashSet::new(); // (edge_idx, part)
         for u in 0..self.num_nodes() {
             let part_u = self.assignment(u) as usize;
@@ -223,8 +231,7 @@ impl Partition {
 
         // Recompute boundary flags.
         let on_boundary = (0..self.num_nodes()).map(|u| {
-            let part = self.assignment(u);
-            self.unit_graph.edges(u).any(|v| self.assignment(v) != part)
+            self.is_frontier_node(u)
         }).collect::<Vec<_>>();
 
         // Recompute frontiers.

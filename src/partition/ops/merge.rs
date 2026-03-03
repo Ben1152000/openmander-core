@@ -26,7 +26,7 @@ impl Partition {
         for u in 0..self.graph().node_count() {
             if self.assignment(u) != target { continue }
 
-            if self.graph().edges(u).any(|v| self.assignment(v) != target) {
+            if self.is_frontier_node(u) {
                 self.frontiers.insert(u, target as usize);
             } else {
                 self.frontiers.remove(u);

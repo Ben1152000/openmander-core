@@ -11,6 +11,7 @@ pub(crate) struct WeightedGraph {
     edge_weights: Vec<f64>,
     node_weights: WeightMatrix,
     hulls: Vec<Polygon<f64>>,
+    exterior: Vec<bool>,
 }
 
 impl WeightedGraph {
@@ -39,6 +40,7 @@ impl WeightedGraph {
             edge_weights: edge_weights.iter().flatten().copied().collect(),
             node_weights,
             hulls: hulls.to_vec(),
+            exterior: Vec::new(),
         }
     }
 
@@ -68,6 +70,14 @@ impl WeightedGraph {
 
     /// Get the degree (number of neighbors) of a given node.
     #[inline] pub(crate) fn degree(&self, node: usize) -> usize { self.range(node).len() }
+
+    /// Whether a node borders the exterior (state boundary).
+    #[inline] pub(crate) fn is_exterior(&self, node: usize) -> bool {
+        self.exterior.get(node).copied().unwrap_or(false)
+    }
+
+    /// Set the exterior flags for all nodes.
+    #[inline] pub(crate) fn set_exterior(&mut self, exterior: Vec<bool>) { self.exterior = exterior; }
 
     /// Get the starting offset for a node's edges in the CSR arrays.
     #[inline] pub(crate) fn offset(&self, node: usize) -> usize { self.offsets[node] as usize }

@@ -158,18 +158,34 @@ impl MapLayer {
 
         let weights = WeightMatrix::new(self.len(), weights_i64, weights_f64);
 
+        // Filter self-edges out of adjacencies before building the graph.
+        let filtered_adj: Vec<Vec<u32>> = self.adjacencies.iter().enumerate()
+            .map(|(i, nbrs)| nbrs.iter().filter(|&&n| n as usize != i).copied().collect())
+            .collect();
+        let filtered_weights: Vec<Vec<f64>> = self.adjacencies.iter().enumerate()
+            .map(|(i, nbrs)| nbrs.iter().zip(self.edge_lengths[i].iter())
+                .filter(|&(&n, _)| n as usize != i).map(|(_, &w)| w).collect())
+            .collect();
+
+        // Set exterior flags from outer_perimeter_m > 0 in node weights.
+        let exterior: Vec<bool> = (0..self.len())
+            .map(|i| weights.get_as_f64("outer_perimeter_m", i).unwrap_or(0.0) > 0.0)
+            .collect();
+
         // Use empty hulls if not available (hulls are optional)
         // Create a local empty Vec that lives long enough for the function call
         let empty_hulls: Vec<geo::Polygon<f64>> = Vec::new();
         let hulls = self.hulls().unwrap_or(&empty_hulls);
-        
-        self.graph = Arc::new(WeightedGraph::new(
+
+        let mut graph = WeightedGraph::new(
             self.len(),
-            &self.adjacencies,
-            &self.edge_lengths,
+            &filtered_adj,
+            &filtered_weights,
             weights,
             hulls,
-        ));
+        );
+        graph.set_exterior(exterior);
+        self.graph = Arc::new(graph);
     }
 
     /// Get an Arc clone of the graph representation of this layer.

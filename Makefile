@@ -57,6 +57,7 @@ WASM_OUT        := $(WASM_BINDINGS_DIR)/pkg
 
 .PHONY: all venv python-deps python-dev python-wheel python-test python-otool \
         wasm wasm-copy wasm-clean \
+        geograph geograph-test \
         clean clean-all print-vars help prepare-target check-wasm-pack
 
 # ============================================================================
@@ -66,6 +67,16 @@ WASM_OUT        := $(WASM_BINDINGS_DIR)/pkg
 # Build all bindings (Python and WASM)
 all: python-dev wasm-copy
 	@echo "✅ All bindings built successfully!"
+
+# ============================================================================
+# Geograph Crate
+# ============================================================================
+
+geograph:
+	cargo build -p geograph
+
+geograph-test:
+	cargo test -p geograph
 
 # ============================================================================
 # Python Bindings
@@ -177,6 +188,10 @@ help:
 	@echo '  python-otool        Show linked libs for installed .so (macOS)'
 	@echo ''
 	@echo '  Legacy aliases: deps, dev, wheel, test, otool (same as python-*)'
+	@echo ''
+	@echo 'Geograph Crate:'
+	@echo '  geograph           Build the geograph crate'
+	@echo '  geograph-test      Run geograph tests'
 	@echo ''
 	@echo 'WASM Bindings:'
 	@echo '  wasm               Build WASM bindings (MODE=release|dev, WASM_TARGET=web|bundler|nodejs|no-modules)'

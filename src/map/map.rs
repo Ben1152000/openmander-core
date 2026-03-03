@@ -52,4 +52,5 @@ impl Map {
         let ty = layer.ty();
         self.layers[ty as usize] = Some(layer);
     }
+
 }

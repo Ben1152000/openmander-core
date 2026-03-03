@@ -17,14 +17,14 @@ impl Partition {
         self.parts.move_to(node, part as usize);
 
         // Recompute frontier sets for `node` and its neighbors.
-        if self.graph().edges(node).any(|v| self.assignment(v) != part) {
+        if self.is_frontier_node(node) {
             self.frontiers.insert(node, self.assignment(node) as usize);
         } else {
             self.frontiers.remove(node);
         }
 
         for u in self.graph().edges(node).collect::<Vec<_>>() {
-            if self.graph().edges(u).any(|v| self.assignment(v) != self.assignment(u)) {
+            if self.is_frontier_node(u) {
                 self.frontiers.insert(u, self.assignment(u) as usize);
             } else {
                 self.frontiers.remove(u);
@@ -105,7 +105,7 @@ impl Partition {
 
         // Recompute boundary flags and frontier sets only where necessary.
         for &u in &boundary {
-            if self.graph().edges(u).any(|v| self.assignment(v) != self.assignment(u)) {
+            if self.is_frontier_node(u) {
                 self.frontiers.insert(u, self.assignment(u) as usize);
             } else {
                 self.frontiers.remove(u);
@@ -119,8 +119,8 @@ impl Partition {
             let part_u = self.assignment(u);
             let u_offset = self.graph().offset(u);
             for (local_idx, v) in self.graph().edges(u).enumerate() {
-                let part_v = self.assignment(v);
                 let edge_idx = u_offset + local_idx;
+                let part_v = self.assignment(v);
                 if part_u != part_v {
                     edge_updates.push((edge_idx, Some(part_u as usize)));
                 } else {

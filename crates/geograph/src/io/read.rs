@@ -5,6 +5,7 @@ use geo::{Coord, LineString, MultiPolygon, Polygon, Rect};
 use crate::adj::AdjacencyMatrix;
 use crate::dcel::{Dcel, Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};
 use crate::region::Region;
+use crate::rtree::SpatialIndex;
 use crate::unit::UnitId;
 
 use super::{IoError, MAGIC, VERSION};
@@ -143,6 +144,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     };
     let is_exterior = compute_is_exterior(&dcel, &face_to_unit, nu);
     let geometries  = reconstruct_geometries(&dcel, &face_to_unit, nu);
+    let rtree       = SpatialIndex::new(&bounds);
 
     Ok(Region {
         dcel,
@@ -158,6 +160,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         edge_length,
         adjacent,
         touching,
+        rtree,
     })
 }
 

@@ -6,3 +6,4 @@ description = "Self-contained DCEL (Doubly Connected Edge List) for planar graph
 
 [dependencies]
 geo = "0.30"
+rstar = "0.12"

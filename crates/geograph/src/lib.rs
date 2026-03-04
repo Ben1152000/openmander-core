@@ -2,6 +2,7 @@ pub(crate) mod adj;
 pub(crate) mod dcel;
 pub mod io;
 pub mod region;
+pub(crate) mod rtree;
 pub(crate) mod snap;
 pub(crate) mod unit;
 

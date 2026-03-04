@@ -62,6 +62,58 @@ impl AdjacencyMatrix {
     pub fn contains(&self, unit: UnitId, other: UnitId) -> bool {
         self.neighbors(unit).binary_search(&other).is_ok()
     }
+
+    // -----------------------------------------------------------------------
+    // CSR edge indexing
+    // -----------------------------------------------------------------------
+
+    /// Total number of directed edges (entries in the neighbor array).
+    #[inline]
+    pub fn num_directed_edges(&self) -> usize { self.neighbors.len() }
+
+    /// CSR start offset for `unit`'s neighbor list.
+    ///
+    /// The directed edges of `unit` occupy indices
+    /// `offset(unit)..offset(unit) + degree(unit)` in the flat neighbor array.
+    #[inline]
+    pub fn offset(&self, unit: UnitId) -> usize {
+        self.offsets[unit.0 as usize] as usize
+    }
+
+    /// Number of neighbors (degree) of `unit`.
+    #[inline]
+    pub fn degree(&self, unit: UnitId) -> usize {
+        let u = unit.0 as usize;
+        (self.offsets[u + 1] - self.offsets[u]) as usize
+    }
+
+    /// Recover the `(source, target)` pair for a flat directed-edge index.
+    ///
+    /// Returns `None` if `edge_idx` is out of range.
+    pub fn edge_at(&self, edge_idx: usize) -> Option<(UnitId, UnitId)> {
+        if edge_idx >= self.neighbors.len() { return None; }
+        // Binary search offsets to find the source unit.
+        let nu = self.num_units();
+        let mut lo = 0;
+        let mut hi = nu;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if (self.offsets[mid + 1] as usize) <= edge_idx {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        Some((UnitId(lo as u32), self.neighbors[edge_idx]))
+    }
+
+    /// Target unit at the given flat directed-edge index.
+    ///
+    /// This is faster than `edge_at()` when the source unit is already known.
+    #[inline]
+    pub fn target_at(&self, edge_idx: usize) -> UnitId {
+        self.neighbors[edge_idx]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +283,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // CSR edge indexing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn num_directed_edges_matches_total_neighbors() {
+        let m = make(&[&[1, 2], &[0, 2], &[0, 1]]);
+        assert_eq!(m.num_directed_edges(), 6); // K3: 3 units × 2 neighbors each
+    }
+
+    #[test]
+    fn offset_and_degree_are_consistent() {
+        let m = make(&[&[1], &[0, 2], &[1]]);
+        assert_eq!(m.offset(UnitId(0)), 0);
+        assert_eq!(m.degree(UnitId(0)), 1);
+        assert_eq!(m.offset(UnitId(1)), 1);
+        assert_eq!(m.degree(UnitId(1)), 2);
+        assert_eq!(m.offset(UnitId(2)), 3);
+        assert_eq!(m.degree(UnitId(2)), 1);
+    }
+
+    #[test]
+    fn edge_at_recovers_source_and_target() {
+        // Path: 0—1—2
+        let m = make(&[&[1], &[0, 2], &[1]]);
+        // Flat layout: [1, 0, 2, 1]
+        assert_eq!(m.edge_at(0), Some((UnitId(0), UnitId(1))));
+        assert_eq!(m.edge_at(1), Some((UnitId(1), UnitId(0))));
+        assert_eq!(m.edge_at(2), Some((UnitId(1), UnitId(2))));
+        assert_eq!(m.edge_at(3), Some((UnitId(2), UnitId(1))));
+        assert_eq!(m.edge_at(4), None);
+    }
+
+    #[test]
+    fn target_at_matches_neighbors() {
+        let m = make(&[&[1, 2], &[0, 2], &[0, 1]]);
+        for u in 0..3u32 {
+            let uid = UnitId(u);
+            for i in 0..m.degree(uid) {
+                let idx = m.offset(uid) + i;
+                assert_eq!(m.target_at(idx), m.neighbors(uid)[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn edge_at_out_of_range_returns_none() {
+        let m = make(&[&[1], &[0]]);
+        assert_eq!(m.edge_at(2), None);
+        assert_eq!(m.edge_at(100), None);
     }
 
     /// Star graph with 20 leaves exercises the binary-search path through

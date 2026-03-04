@@ -9,6 +9,7 @@ use geo::{Coord, MultiPolygon, Rect};
 
 use crate::adj::AdjacencyMatrix;
 use crate::dcel::Dcel;
+use crate::rtree::SpatialIndex;
 use crate::unit::UnitId;
 
 // ---------------------------------------------------------------------------
@@ -64,6 +65,9 @@ pub struct Region {
 
     /// Queen adjacency matrix (shared point, superset of Rook).
     pub(crate) touching: AdjacencyMatrix,
+
+    /// R-tree spatial index over unit bounding boxes.
+    pub(crate) rtree: SpatialIndex,
 }
 
 impl Region {
@@ -178,6 +182,7 @@ pub(crate) mod test_helpers {
     use geo::{Coord, LineString, MultiPolygon, Polygon, Rect};
 
     use crate::dcel::{Dcel, OUTER_FACE};
+    use crate::rtree::SpatialIndex;
     use crate::unit::UnitId;
 
     use super::Region;
@@ -232,6 +237,12 @@ pub(crate) mod test_helpers {
         let adj      = build_adjacent (&dcel, &face_to_unit, 2);
         let touching = build_touching(&dcel, &face_to_unit, 2);
 
+        let bounds = vec![
+            Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 1.0, y: 1.0 }),
+            Rect::new(Coord { x: 1.0, y: 0.0 }, Coord { x: 2.0, y: 1.0 }),
+        ];
+        let rtree = SpatialIndex::new(&bounds);
+
         let make_poly = |pts: &[(f64, f64)]| -> MultiPolygon<f64> {
             MultiPolygon(vec![Polygon::new(
                 LineString(pts.iter().map(|&(x, y)| Coord { x, y }).collect()),
@@ -254,16 +265,14 @@ pub(crate) mod test_helpers {
                 Coord { x: 0.5, y: 0.5 },
                 Coord { x: 1.5, y: 0.5 },
             ],
-            bounds: vec![
-                Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 1.0, y: 1.0 }),
-                Rect::new(Coord { x: 1.0, y: 0.0 }, Coord { x: 2.0, y: 1.0 }),
-            ],
+            bounds,
             bounds_all: Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 2.0, y: 1.0 }),
             is_exterior: vec![true, true],
             // 7 undirected edges, each with length 1.0
             edge_length: vec![1.0; 7],
             adjacent: adj,
             touching,
+            rtree,
         }
     }
 }

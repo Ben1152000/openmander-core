@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use geo::{Coord, MultiPolygon, Rect};
 
 use crate::dcel::{Dcel, FaceId, HalfEdgeId, VertexId, OUTER_FACE};
+use crate::rtree::SpatialIndex;
 use crate::snap::snap_vertices;
 use crate::unit::UnitId;
 
@@ -534,6 +535,7 @@ impl Region {
         // -----------------------------------------------------------------
         let adjacent = build_adjacent(&dcel, &face_to_unit, nu);
         let touching = build_touching(&dcel, &face_to_unit, nu);
+        let rtree = SpatialIndex::new(&bounds);
 
         let region = Region {
             dcel,
@@ -549,6 +551,7 @@ impl Region {
             edge_length,
             adjacent,
             touching,
+            rtree,
         };
 
         #[cfg(debug_assertions)]

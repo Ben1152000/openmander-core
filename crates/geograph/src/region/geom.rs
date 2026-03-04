@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
-use geo::{Coord, LineString, MultiLineString, MultiPolygon, Polygon, Rect};
+use geo::{ConvexHull, Coord, Contains, LineString, MultiLineString, MultiPolygon, Polygon, Rect};
+use rstar::AABB;
 
 use crate::dcel::{FaceId, HalfEdgeId};
 use crate::unit::UnitId;
@@ -73,6 +74,12 @@ impl Region {
         MultiLineString(lines)
     }
 
+    /// Convex hull of `unit` in lon/lat.
+    #[inline]
+    pub fn convex_hull(&self, unit: UnitId) -> Polygon<f64> {
+        self.geometries[unit.0 as usize].convex_hull()
+    }
+
     // -----------------------------------------------------------------------
     // Subset geometry  (O(k) unless noted)
     // -----------------------------------------------------------------------
@@ -140,6 +147,22 @@ impl Region {
     #[inline]
     pub fn bounds_all(&self) -> Rect<f64> {
         self.bounds_all
+    }
+
+    /// Convex hull of the union of all unit geometries in `units`.
+    ///
+    /// **Performance note:** This currently clones all polygon data and runs
+    /// Graham scan on every vertex — O(V log V) where V is total vertices
+    /// across all input units.  For large subsets this is slow.  A future
+    /// implementation should merge per-unit hulls incrementally (O(k · h)
+    /// where h is the output hull size) instead of recomputing from scratch.
+    pub fn convex_hull_of(&self, units: impl IntoIterator<Item = UnitId>) -> Polygon<f64> {
+        let combined: MultiPolygon<f64> = MultiPolygon(
+            units.into_iter()
+                .flat_map(|u| self.geometries[u.0 as usize].0.iter().cloned())
+                .collect(),
+        );
+        combined.convex_hull()
     }
 
     /// Exterior boundary of the subset as a `MultiLineString`.
@@ -334,6 +357,37 @@ impl Region {
             }
         }
         total
+    }
+
+    // -----------------------------------------------------------------------
+    // Spatial queries
+    // -----------------------------------------------------------------------
+
+    /// Return the `UnitId` of the unit that contains `point` (lon/lat), or
+    /// `None` if the point falls outside all units.
+    ///
+    /// Uses an R-tree for O(log n) candidate lookup, then exact
+    /// point-in-polygon tests on candidates.
+    pub fn unit_at(&self, point: Coord<f64>) -> Option<UnitId> {
+        let geo_point = geo::Point::from(point);
+        for uid in self.rtree.query_point([point.x, point.y]) {
+            if self.geometries[uid.0 as usize].contains(&geo_point) {
+                return Some(uid);
+            }
+        }
+        None
+    }
+
+    /// Return all `UnitId`s whose bounding box intersects `envelope`.
+    ///
+    /// This is a coarse filter — returned units may not actually intersect
+    /// the envelope geometrically.  Use for candidate generation.
+    pub fn units_in_envelope(&self, envelope: Rect<f64>) -> Vec<UnitId> {
+        let aabb = AABB::from_corners(
+            [envelope.min().x, envelope.min().y],
+            [envelope.max().x, envelope.max().y],
+        );
+        self.rtree.query(aabb).collect()
     }
 
     // -----------------------------------------------------------------------
@@ -610,6 +664,33 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // convex_hull / convex_hull_of
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn convex_hull_of_rectangle_is_rectangle() {
+        let r = make_two_unit_region();
+        let hull = r.convex_hull(UnitId(0));
+        // Unit 0 is a rectangle → hull exterior has 5 coords (4 corners + close)
+        assert_eq!(hull.exterior().0.len(), 5);
+    }
+
+    #[test]
+    fn convex_hull_of_both_units_encloses_all() {
+        let r = make_two_unit_region();
+        let hull = r.convex_hull_of(r.unit_ids());
+        // Merged 2×1 rectangle → hull exterior has 5 coords
+        assert_eq!(hull.exterior().0.len(), 5);
+        // Check bounds: hull should span (0,0) to (2,1)
+        let xs: Vec<f64> = hull.exterior().0.iter().map(|c| c.x).collect();
+        let ys: Vec<f64> = hull.exterior().0.iter().map(|c| c.y).collect();
+        assert_eq!(*xs.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(), 0.0);
+        assert_eq!(*xs.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(), 2.0);
+        assert_eq!(*ys.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(), 0.0);
+        assert_eq!(*ys.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap(), 1.0);
+    }
+
+    // -----------------------------------------------------------------------
     // boundary_of
     // -----------------------------------------------------------------------
 
@@ -688,5 +769,52 @@ mod tests {
         let r = make_two_unit_region();
         let mp = r.union_of(r.unit_ids());
         assert!(mp.0[0].interiors().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // unit_at / units_in_envelope
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unit_at_center_of_left_unit() {
+        let r = make_two_unit_region();
+        assert_eq!(r.unit_at(Coord { x: 0.5, y: 0.5 }), Some(UnitId(0)));
+    }
+
+    #[test]
+    fn unit_at_center_of_right_unit() {
+        let r = make_two_unit_region();
+        assert_eq!(r.unit_at(Coord { x: 1.5, y: 0.5 }), Some(UnitId(1)));
+    }
+
+    #[test]
+    fn unit_at_outside_returns_none() {
+        let r = make_two_unit_region();
+        assert_eq!(r.unit_at(Coord { x: 5.0, y: 5.0 }), None);
+    }
+
+    #[test]
+    fn units_in_envelope_covers_both() {
+        let r = make_two_unit_region();
+        let envelope = Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 2.0, y: 1.0 });
+        let mut result = r.units_in_envelope(envelope);
+        result.sort();
+        assert_eq!(result, vec![UnitId(0), UnitId(1)]);
+    }
+
+    #[test]
+    fn units_in_envelope_covers_one() {
+        let r = make_two_unit_region();
+        let envelope = Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 0.5, y: 0.5 });
+        let result = r.units_in_envelope(envelope);
+        assert_eq!(result, vec![UnitId(0)]);
+    }
+
+    #[test]
+    fn units_in_envelope_outside_is_empty() {
+        let r = make_two_unit_region();
+        let envelope = Rect::new(Coord { x: 5.0, y: 5.0 }, Coord { x: 6.0, y: 6.0 });
+        let result = r.units_in_envelope(envelope);
+        assert!(result.is_empty());
     }
 }

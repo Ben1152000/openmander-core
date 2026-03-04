@@ -134,6 +134,10 @@ stored in `Vec`s indexed by `UnitId`:
 - `bounds_all: Rect<f64>` — axis-aligned bounding box of the entire region
   (union of all per-unit bounding boxes).
 
+An R-tree spatial index (`rstar::RTree`) over per-unit bounding boxes is also
+built during construction for fast point-location and envelope queries (see
+§5.14).
+
 Shared-edge lengths are stored on the half-edge pairs:
 `edge_length: Vec<f64>` indexed by `HalfEdgeId / 2` (one entry per undirected
 edge), in metres using the same per-edge `cos(φ_mid)` correction.
@@ -294,6 +298,27 @@ a `MultiPolygon<f64>` representing the merged shape.  O(boundary edges).
 No external polygon boolean operations are needed — the DCEL already encodes
 the planar subdivision, so the boundary walk extracts the merged shape directly.
 
+### 5.14 `unit_at(point)` / `units_in_envelope(envelope)`
+
+An R-tree over per-unit bounding boxes provides fast spatial queries:
+
+- `unit_at(point)`: query the R-tree for candidate units whose bounding box
+  contains the point (O(log n)), then perform exact point-in-polygon tests
+  on candidates.  Returns the first match or `None`.
+- `units_in_envelope(envelope)`: query the R-tree for all units whose bounding
+  box intersects the envelope (O(log n + k)).  This is a coarse filter —
+  returned units may not actually intersect geometrically.
+
+### 5.15 `convex_hull(unit)` / `convex_hull_of(units)`
+
+- `convex_hull(unit)`: delegates to `geo::ConvexHull` on the unit's stored
+  `MultiPolygon`.  O(v log v) where v is the number of vertices.
+- `convex_hull_of(units)`: collects all polygons from the input units and
+  computes the convex hull of the combined geometry.  O(V log V) where V is
+  the total vertex count across all input units.  This is a naive
+  implementation — a future version should merge per-unit hulls incrementally
+  (O(k · h) where h is the output hull size).
+
 ---
 
 ## 6. Public API Summary
@@ -316,7 +341,7 @@ region.neighbors(unit)         -> &[UnitId]          // Rook, sorted
 region.adjacency()             -> &AdjacencyMatrix   // Rook CSR
 region.touching()              -> &AdjacencyMatrix   // Queen CSR
 
-// Single-unit geometry (O(1), pre-cached)
+// Single-unit geometry (O(1), pre-cached unless noted)
 region.area(unit)                     -> f64
 region.perimeter(unit)                -> f64
 region.exterior_boundary_length(unit) -> f64
@@ -324,6 +349,7 @@ region.centroid(unit)                 -> Coord<f64>
 region.bounds(unit)                   -> Rect<f64>
 region.is_exterior(unit)              -> bool
 region.boundary(unit)                 -> MultiLineString<f64>
+region.convex_hull(unit)              -> Polygon<f64>           // O(v log v)
 
 // Region-wide geometry (O(1), pre-cached)
 region.bounds_all()                   -> Rect<f64>
@@ -336,6 +362,11 @@ region.bounds_of(units)                    -> Rect<f64>
 region.boundary_of(units)                  -> MultiLineString<f64>
 region.compactness_of(units)               -> f64
 region.union_of(units)                     -> MultiPolygon<f64>   // O(boundary edges)
+region.convex_hull_of(units)               -> Polygon<f64>        // O(V log V)
+
+// Spatial queries
+region.unit_at(point)                      -> Option<UnitId>      // O(log n)
+region.units_in_envelope(envelope)         -> Vec<UnitId>         // O(log n + k)
 
 // Validation
 region.validate()                          -> Result<(), RegionError>
@@ -391,6 +422,10 @@ impl AdjacencyMatrix {
 | `boundary_of(units)` | O(boundary edges) | half-edge walk |
 | `union_of(units)` | O(boundary edges) | DCEL boundary walk |
 | `compactness_of(units)` | O(k · avg_deg) | via perimeter_of |
+| `convex_hull(unit)` | O(v log v) | v = vertices of unit |
+| `convex_hull_of(units)` | O(V log V) | V = total vertices; naive impl |
+| `unit_at(point)` | O(log n) | R-tree + point-in-polygon |
+| `units_in_envelope(envelope)` | O(log n + k) | R-tree bounding-box filter |
 | `shared_boundary_length` | O(edges of a) | half-edge walk |
 | `is_contiguous` | O(k) | BFS on subgraph |
 | `connected_components` | O(k) | BFS on subgraph |
@@ -512,8 +547,8 @@ k = size of query subset, n = total number of units.
    relative to a per-section reference origin to reduce magnitude and
    improve compressibility if compression is added later.
 
-7. **Convex hull queries.** *(Deferred)* `convex_hull(unit) -> Polygon<f64>`
-   and `convex_hull_of(units) -> Polygon<f64>`.  Useful for Reock compactness
-   scoring.  Deferred because computing exact convex hulls at construction time
-   adds cost and memory; an approximate cached hull may be sufficient and can
-   be added when needed.
+7. **Convex hull queries.** *(Resolved)* `convex_hull(unit)` delegates to
+   `geo::ConvexHull` on the stored `MultiPolygon`.  `convex_hull_of(units)`
+   collects all polygons and computes the hull of the combined geometry.
+   The subset version is O(V log V) where V is the total vertex count —
+   a future improvement should merge per-unit hulls incrementally.

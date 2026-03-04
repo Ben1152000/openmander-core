@@ -57,10 +57,7 @@ impl Region {
 
     /// Returns each connected component of the complement of `units` that is
     /// entirely surrounded by `units` (not adjacent to the exterior).
-    pub fn enclaves(
-        &self,
-        units: impl IntoIterator<Item = UnitId>,
-    ) -> Vec<Vec<UnitId>> {
+    pub fn enclaves(&self, units: impl IntoIterator<Item = UnitId>) -> Vec<Vec<UnitId>> {
         let set: HashSet<UnitId> = units.into_iter().collect();
         // Complement = all real units NOT in `set`.
         let complement: HashSet<UnitId> = self

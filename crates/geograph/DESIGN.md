@@ -85,8 +85,9 @@ stored on `Region`:
 - Walk every half-edge `h` in the DCEL.
 - If `face_to_unit[h.face] != face_to_unit[h.twin.face]`, emit the ordered
   pair `(face_to_unit[h.face], face_to_unit[h.twin.face])`.
-- `UnitId::EXTERIOR` participates normally: a boundary unit will show the
-  exterior as one of its neighbors.
+- Pairs involving `UnitId::EXTERIOR` are filtered out — the adjacency matrices
+  only contain real unit-to-unit edges.  Whether a unit borders the exterior is
+  tracked separately via the `is_exterior` flag (see §3.3).
 - Collect all such pairs, sort, deduplicate, and build CSR.
 
 **Queen adjacency** (shared point — corner touch counts):
@@ -130,6 +131,8 @@ stored in `Vec`s indexed by `UnitId`:
 - `bounds: Vec<Rect<f64>>` — axis-aligned bounding box of each unit in lon/lat.
 - `is_exterior: Vec<bool>` — true if the unit has any half-edge whose twin
   belongs to `UnitId::EXTERIOR` (i.e. the unit touches the region boundary).
+- `bounds_all: Rect<f64>` — axis-aligned bounding box of the entire region
+  (union of all per-unit bounding boxes).
 
 Shared-edge lengths are stored on the half-edge pairs:
 `edge_length: Vec<f64>` indexed by `HalfEdgeId / 2` (one entry per undirected
@@ -168,19 +171,23 @@ Input: a `Vec<MultiPolygon<f64>>` (one per unit, in the order that determines
    - next/prev links are set by sorting outgoing half-edges at each vertex in
      CCW angular order.
 
-3. Face labelling
-   - Walk each half-edge cycle not yet assigned to a face.
-   - Determine whether the cycle is a CCW outer ring (→ bounded face) or a
-     CW hole ring (→ the face of its enclosing unit, or a hole interior).
-   - Assign face_to_unit entries.
+3. Gap detection
+   - Faces are assigned during edge creation based on ring membership.
+   - Walk all cycles on OUTER_FACE.  The cycle with the most negative
+     signed area (largest CW polygon) is the true outer boundary; all
+     others are interior gap faces assigned to UnitId::EXTERIOR.
 
 4. Cache pre-computation
-   - Compute area, perimeter, and edge_length for all units and edges.
+   - Compute area, perimeter, edge_length, centroid, bounds, bounds_all,
+     exterior_boundary_length, and is_exterior for all units and edges.
 
 5. Validation (optional, cfg(debug_assertions))
-   - Every point in the region belongs to exactly one unit.
-   - All half-edges have valid twins.
-   - Unit areas sum to region area.
+   - All half-edges have valid twins (twin of twin is self).
+   - All half-edge next/prev links are consistent.
+   - Every face has at least one half-edge.
+   - Unit areas are non-negative.
+   Also available as `Region::validate()` for explicit checks after
+   deserialisation.
 ```
 
 **Snapping:** vertex snapping is handled by the `snap` module before DCEL
@@ -247,7 +254,7 @@ unvisited seeds.  O(k + internal edges).
 
 ```
 1. Let complement = all units NOT in the query set.
-2. Find connected components of complement using full adjacency matrix.
+2. Find connected components of complement using Rook adjacency.
 3. A component is a hole iff it has no unit adjacent to the outer face
    (i.e., no unit on the region's exterior boundary).
 ```
@@ -263,7 +270,7 @@ O(n) where n = total number of units.
 4π · area(units) / perimeter(units)²
 ```
 
-O(k) via the cached scalar sums.
+O(k · avg_deg) — dominated by `perimeter_of` which does a boundary walk.
 
 ### 5.10 `centroid(unit)` / `bounds(unit)` / `is_exterior(unit)` / `exterior_boundary_length(unit)` / `bounds_all()`
 
@@ -279,14 +286,13 @@ Sum `exterior_boundary_length` over units in the subset.  O(k).
 
 ### 5.13 `union_of(units)`
 
-Compute the geometric union of the `MultiPolygon` geometries for all units in
-the subset.  Returns a `MultiPolygon<f64>` representing the merged shape.
+Walk the DCEL boundary of the subset (same as `boundary_of`), then classify
+each cycle by signed area: positive (CCW) = outer ring, negative (CW) = hole.
+Match holes to their enclosing outer ring using a point-in-ring test.  Returns
+a `MultiPolygon<f64>` representing the merged shape.  O(boundary edges).
 
-This is the only query that requires non-trivial polygon boolean operations and
-does not run in O(k) on precomputed data — cost depends on the polygon
-complexity of the subset.  It is provided for callers that need the full
-polygon (e.g. passing a district shape to an external tool); callers that only
-need the outline should prefer `boundary_of`.
+No external polygon boolean operations are needed — the DCEL already encodes
+the planar subdivision, so the boundary walk extracts the merged shape directly.
 
 ---
 
@@ -329,7 +335,10 @@ region.exterior_boundary_length_of(units)  -> f64
 region.bounds_of(units)                    -> Rect<f64>
 region.boundary_of(units)                  -> MultiLineString<f64>
 region.compactness_of(units)               -> f64
-region.union_of(units)                     -> MultiPolygon<f64>   // O(polygon complexity)
+region.union_of(units)                     -> MultiPolygon<f64>   // O(boundary edges)
+
+// Validation
+region.validate()                          -> Result<(), RegionError>
 
 // Edge metrics
 region.shared_boundary_length(a, b)               -> f64
@@ -348,7 +357,7 @@ region.enclaves(units)               -> Vec<Vec<UnitId>>
 /// A read-only CSR adjacency matrix.
 pub struct AdjacencyMatrix {
     offsets:   Vec<u32>,   // length num_units + 1
-    neighbors: Vec<u32>,   // sorted within each row
+    neighbors: Vec<UnitId>,   // sorted within each row
 }
 
 impl AdjacencyMatrix {
@@ -381,6 +390,7 @@ impl AdjacencyMatrix {
 | `bounds_of(units)` | O(k) | expand cached bounding boxes |
 | `boundary_of(units)` | O(boundary edges) | half-edge walk |
 | `union_of(units)` | O(boundary edges) | DCEL boundary walk |
+| `compactness_of(units)` | O(k · avg_deg) | via perimeter_of |
 | `shared_boundary_length` | O(edges of a) | half-edge walk |
 | `is_contiguous` | O(k) | BFS on subgraph |
 | `connected_components` | O(k) | BFS on subgraph |
@@ -403,8 +413,8 @@ k = size of query subset, n = total number of units.
    (separate from DCEL construction) with a single entry-point function:
 
    ```rust
-   // snap/mod.rs
-   pub fn snap_vertices(
+   // snap.rs (pub(crate) — internal to the geograph crate)
+   pub(crate) fn snap_vertices(
        rings: &mut [Vec<Vec<Coord<f64>>>],  // all polygon rings, mutated in place
        tolerance: f64,
    )
@@ -420,9 +430,9 @@ k = size of query subset, n = total number of units.
    Since a regular unit can already own multiple faces (exclaves), no new
    machinery is needed — `UnitId::EXTERIOR` simply participates in
    `face_to_unit` like any other unit.  It is excluded from district
-   assignment but appears naturally in adjacency queries as a neighbor of
-   boundary units, which correctly models edge cases such as districts
-   bordering a state boundary or an interior body of water.
+   assignment and does not appear in the adjacency matrices (filtered out
+   during construction).  Whether a unit borders the exterior is tracked
+   separately via the `is_exterior` flag.
 
 3. **Queen adjacency at T-junctions.** *(Resolved)* When building the touching
    (Queen) matrix, emit all pairs `(a, b)` for every distinct combination of
@@ -485,6 +495,18 @@ k = size of query subset, n = total number of units.
    [TouchingAdj offsets]  (num_units+1) × u32                        4 B each
    [TouchingAdj neighbors] num_touching_edges × u32                  4 B each
    ```
+
+   **Persisted vs. derived fields:** Only `area` and `perimeter` are stored
+   in the UnitCache section.  The remaining cache fields (`exterior_boundary_length`,
+   `centroid`, `bounds`, `bounds_all`, `is_exterior`) and the `geometries` vector
+   are re-derived from the DCEL on deserialisation.
+
+   **Known limitation:** Geometry reconstruction on deserialisation creates one
+   `Polygon` per DCEL face.  Units with holes will have the hole boundary as a
+   separate outer ring rather than as an interior ring of the enclosing polygon.
+   This only affects `region.geometry(unit)` after a round-trip; all other queries
+   (area, perimeter, boundary, adjacency, etc.) use the DCEL directly and are
+   unaffected.
 
    **Potential future improvement:** store vertex coordinates as deltas
    relative to a per-section reference origin to reduce magnitude and

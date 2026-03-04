@@ -9,15 +9,13 @@ use crate::unit::UnitId;
 use super::Region;
 use super::adj::{build_adjacent, build_touching};
 
-/// Errors that can occur when constructing a `Region`.
+/// Errors that can occur when constructing or validating a `Region`.
 #[derive(Debug)]
 pub enum RegionError {
     /// One or more input geometries are invalid or empty.
     InvalidGeometry(String),
-    /// The vertex snapping step failed.
-    SnapError(String),
-    /// The DCEL construction step failed.
-    TopologyError(String),
+    /// A structural invariant was violated (see `Region::validate()`).
+    ValidationError(String),
 }
 
 /// Metres per degree of latitude (WGS-84 mean).
@@ -537,7 +535,7 @@ impl Region {
         let adjacent = build_adjacent(&dcel, &face_to_unit, nu);
         let touching = build_touching(&dcel, &face_to_unit, nu);
 
-        Ok(Region {
+        let region = Region {
             dcel,
             face_to_unit,
             geometries,
@@ -551,7 +549,14 @@ impl Region {
             edge_length,
             adjacent,
             touching,
-        })
+        };
+
+        #[cfg(debug_assertions)]
+        region.validate().map_err(|e| RegionError::InvalidGeometry(
+            format!("post-construction validation failed: {e:?}")
+        ))?;
+
+        Ok(region)
     }
 
     /// Deserialise a `Region` from a GeoJSON string.
@@ -564,6 +569,17 @@ impl Region {
         // in our dependencies.  This is left as a stub until that dependency
         // is added.
         todo!("from_geojson requires the `geojson` crate dependency")
+    }
+
+    /// Build a `Region` from a shapefile.
+    ///
+    /// Each shape record becomes one unit; `UnitId` is assigned in record
+    /// order.  Only `Polygon` geometry types are supported.
+    pub fn from_shapefile(_path: &std::path::Path, _snap_tol: f64) -> Result<Self, RegionError> {
+        // Shapefile parsing requires the `shapefile` crate which is not
+        // currently in our dependencies.  This is left as a stub until that
+        // dependency is added.
+        todo!("from_shapefile requires the `shapefile` crate dependency")
     }
 }
 

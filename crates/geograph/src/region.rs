@@ -86,6 +86,75 @@ impl Region {
     pub fn geometry(&self, unit: UnitId) -> &MultiPolygon<f64> {
         &self.geometries[unit.0 as usize]
     }
+
+    // -----------------------------------------------------------------------
+    // Validation
+    // -----------------------------------------------------------------------
+
+    /// Check structural invariants of the `Region`.
+    ///
+    /// This is called automatically under `debug_assertions` at the end of
+    /// `Region::new()`.  It can also be called explicitly after
+    /// deserialisation (`io::read`) to verify data integrity.
+    ///
+    /// Checks:
+    /// - Every half-edge's twin-of-twin is itself.
+    /// - Every half-edge's `next.prev` and `prev.next` are itself.
+    /// - Every bounded face has at least one half-edge.
+    /// - Every unit has non-negative area.
+    pub fn validate(&self) -> Result<(), RegionError> {
+        use crate::dcel::HalfEdgeId;
+
+        let nhe = self.dcel.num_half_edges();
+
+        // Twin consistency: twin(twin(h)) == h
+        for h in 0..nhe {
+            let twin = self.dcel.half_edge(HalfEdgeId(h)).twin;
+            let twin_twin = self.dcel.half_edge(twin).twin;
+            if twin_twin != HalfEdgeId(h) {
+                return Err(RegionError::ValidationError(
+                    format!("half-edge {h}: twin(twin) = {} != {h}", twin_twin.0),
+                ));
+            }
+        }
+
+        // Next/prev consistency: next(h).prev == h and prev(h).next == h
+        for h in 0..nhe {
+            let he = self.dcel.half_edge(HalfEdgeId(h));
+            let next_prev = self.dcel.half_edge(he.next).prev;
+            if next_prev != HalfEdgeId(h) {
+                return Err(RegionError::ValidationError(
+                    format!("half-edge {h}: next({}).prev = {} != {h}", he.next.0, next_prev.0),
+                ));
+            }
+            let prev_next = self.dcel.half_edge(he.prev).next;
+            if prev_next != HalfEdgeId(h) {
+                return Err(RegionError::ValidationError(
+                    format!("half-edge {h}: prev({}).next = {} != {h}", he.prev.0, prev_next.0),
+                ));
+            }
+        }
+
+        // Every bounded face (FaceId >= 1) has a half-edge.
+        for f in 1..self.dcel.num_faces() {
+            if self.dcel.face(crate::dcel::FaceId(f)).half_edge.is_none() {
+                return Err(RegionError::ValidationError(
+                    format!("face {f}: bounded face has no half-edge"),
+                ));
+            }
+        }
+
+        // Non-negative areas.
+        for u in 0..self.num_units() {
+            if self.area[u] < 0.0 {
+                return Err(RegionError::ValidationError(
+                    format!("unit {u}: negative area {}", self.area[u]),
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

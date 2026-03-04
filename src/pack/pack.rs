@@ -1,11 +1,47 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
-use crate::{common, map::Map, pack::utils};
+use crate::{common, map::Map};
 
 #[cfg(feature = "download")]
-use crate::pack::download::{cleanup_download_dir, download_data};
+use crate::pack::download::{cleanup_download_dir, download_data, download_big_file};
+
+/// Lightweight existence check for a remote file.
+/// Returns Ok(true) if it exists, Ok(false) if it's 404/410, Err(_) otherwise.
+#[cfg(feature = "download")]
+pub(crate) fn remote_file_exists(url: &str) -> Result<bool> {
+    use reqwest::{blocking::Client, redirect::Policy, StatusCode};
+
+    let client = Client::builder()
+        .user_agent("openmander/0.1 (+https://github.com/Ben1152000/openmander-core)")
+        .redirect(Policy::limited(10))
+        .timeout(Duration::from_secs(10))
+        .build()?;
+
+    // Try HEAD first
+    match client.head(url).send() {
+        Ok(resp) => match resp.status() {
+            StatusCode::OK => return Ok(true),
+            StatusCode::NOT_FOUND | StatusCode::GONE => return Ok(false),
+            // Some servers don’t like HEAD; fall through to range GET.
+            _ => {}
+        },
+        Err(_) => {} // fall through to range GET
+    }
+
+    // Fallback: GET first byte only
+    let resp = client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()?;
+
+    match resp.status() {
+        StatusCode::OK | StatusCode::PARTIAL_CONTENT => Ok(true),
+        StatusCode::NOT_FOUND | StatusCode::GONE => Ok(false),
+        s => Err(anyhow!("unexpected status {} probing {}", s, url)),
+    }
+}
 
 /// Download data files for a state, build the map pack, and write it to a new directory in `path`.
 /// Returns the path to the new pack directory.
@@ -44,7 +80,7 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
 
     let pack_name = format!("{state_code}_2020_pack");
     let pack_url = format!("https://media.githubusercontent.com/media/Ben1152000/openmander-data/master/packs/{state_code}/{pack_name}.zip");
-    if !utils::remote_file_exists(&pack_url)? {
+    if !remote_file_exists(&pack_url)? {
         if verbose > 0 { eprintln!("No prebuilt pack found for {state_code}, building locally..."); }
         return build_pack(&state_code, path, true, verbose)
     }
@@ -53,7 +89,7 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
     let pack_dir = path.join(pack_name);
 
     if verbose > 0 { eprintln!("[download] downloading {pack_url}"); }
-    utils::download_big_file(pack_url, &zip_path, true)?;
+    download_big_file(pack_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     common::extract_zip(&zip_path, &path, true)?;

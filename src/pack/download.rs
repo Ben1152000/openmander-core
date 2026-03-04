@@ -1,9 +1,76 @@
-use std::path::{Path, PathBuf};
+use std::{fs::File, io::{Seek, Write}, path::{Path, PathBuf}};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
+use tempfile::NamedTempFile;
 
-use crate::pack::utils;
 use crate::common;
+
+/// Write-then-rename wrapper for atomic big-file outputs
+struct PendingWrite {
+    target: PathBuf,
+    tmp: Option<(NamedTempFile, bool)>, // (file, need_fsync_dir)
+}
+
+impl PendingWrite {
+    /// Open a file for a big write.
+    fn open(target: &Path, force: bool) -> Result<Self> {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
+        }
+        ensure!(force || !target.exists(), "Refusing to overwrite existing file: {} (use --force)", target.display());
+        let need_fsync_dir = target.parent().is_some();
+        let tmp = NamedTempFile::new_in(target.parent().unwrap_or(Path::new(".")))
+            .context("create temp file")?;
+
+        Ok(Self { target: target.to_path_buf(), tmp: Some((tmp, need_fsync_dir)) })
+    }
+
+    /// Finalize the big write.
+    fn finalize(&mut self) -> Result<()> {
+        let (tmp, need_fsync_dir) = self.tmp.take().expect("not finalized");
+        tmp.as_file().sync_all().ok(); // best-effort fsync file
+        tmp.persist(&self.target)
+            .with_context(|| format!("rename to {}", self.target.display()))?;
+        if need_fsync_dir {
+            if let Some(dir) = self.target.parent() {
+                File::open(dir).and_then(|f| f.sync_all())?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Write for PendingWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tmp.as_mut().unwrap().0.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tmp.as_mut().unwrap().0.flush()
+    }
+}
+
+impl Seek for PendingWrite {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.tmp.as_mut().unwrap().0.as_file_mut().seek(pos)
+    }
+}
+
+/// Download a large file from `file_url` to `out_path`.
+pub(crate) fn download_big_file(file_url: String, out_path: &PathBuf, force: bool) -> Result<()> {
+    // Safe big-file write (tempfile -> atomic rename), no accidental overwrite unless --force
+    let mut sink = PendingWrite::open(&out_path, force)?;
+
+    let mut resp = reqwest::blocking::get(&file_url)
+        .with_context(|| format!("GET {file_url}"))?
+        .error_for_status()
+        .with_context(|| format!("GET {file_url} returned error status"))?;
+
+    std::io::copy(&mut resp, &mut sink).with_context(|| format!("write {}", out_path.display()))?;
+
+    sink.finalize()?;
+    Ok(())
+}
 
 /// Delete the `download/` directory (and all its contents) under `pack_dir`.
 pub(crate) fn cleanup_download_dir(pack_dir: &Path, verbose: u8) -> Result<()> {
@@ -26,7 +93,7 @@ fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> R
     let out_path = out_dir.join(format!("Demographic_Data_Block_{state}"));
 
     if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
-    utils::download_big_file(file_url, &zip_path, true)?;
+    download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     common::extract_zip(&zip_path, &out_path, true)?;
@@ -41,7 +108,7 @@ fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Resu
     let out_path = out_dir.join(format!("Election_Data_Block_{state}"));
 
     if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
-    utils::download_big_file(file_url, &zip_path, true)?;
+    download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     common::extract_zip(&zip_path, &out_path, true)?;
@@ -72,7 +139,7 @@ fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verb
         let out_path = out_dir.join(format!("tl_2020_{fips}_{name}"));
 
         if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
-        utils::download_big_file(file_url, &zip_path, true)?;
+        download_big_file(file_url, &zip_path, true)?;
 
         if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
         common::extract_zip(&zip_path, &out_path, true)?;
@@ -93,7 +160,7 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
     let out_path = out_dir.join(format!("BlockAssign_ST{fips}_{state}"));
 
     if verbose > 0 { eprintln!("[download] downloading {file_url}"); }
-    utils::download_big_file(file_url, &zip_path, true)?;
+    download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
     common::extract_zip(&zip_path, &out_path, true)?;

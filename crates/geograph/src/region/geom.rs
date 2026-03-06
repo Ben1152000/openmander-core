@@ -322,6 +322,93 @@ impl Region {
         MultiPolygon(polys)
     }
 
+    /// Faster variant of [`union_of`] for use when the caller knows which units
+    /// are on the district boundary (frontier).
+    ///
+    /// Instead of scanning all DCEL half-edges, this only examines the faces
+    /// belonging to `frontier_units` — units that share an edge with a
+    /// different district or the region exterior. `is_in_district(u)` must
+    /// return `true` iff unit `u` belongs to the same district; it is never
+    /// called with `UnitId::EXTERIOR`.
+    pub fn union_of_frontier(
+        &self,
+        frontier_units: impl IntoIterator<Item = UnitId>,
+        is_in_district: impl Fn(UnitId) -> bool,
+    ) -> MultiPolygon<f64> {
+        // Collect boundary half-edges by walking only frontier unit faces.
+        let mut boundary: Vec<usize> = Vec::new();
+        for unit in frontier_units {
+            for &face_id in &self.unit_to_faces[unit.0 as usize] {
+                let start = match self.dcel.face(face_id).half_edge {
+                    Some(he) => he,
+                    None => continue,
+                };
+                let mut h = start;
+                loop {
+                    let he = self.dcel.half_edge(h);
+                    let twin_unit = self.face_to_unit[self.dcel.half_edge(he.twin).face.0];
+                    if twin_unit == UnitId::EXTERIOR || !is_in_district(twin_unit) {
+                        boundary.push(h.0);
+                    }
+                    h = he.next;
+                    if h == start { break; }
+                }
+            }
+        }
+
+        let boundary_set: HashSet<usize> = boundary.iter().copied().collect();
+        let mut visited: HashSet<usize> = HashSet::new();
+        let mut cycles: Vec<(Vec<Coord<f64>>, f64)> = Vec::new();
+
+        for &start_h in &boundary {
+            if visited.contains(&start_h) { continue; }
+
+            let mut coords = Vec::new();
+            let mut signed_area = 0.0;
+            let mut cur = HalfEdgeId(start_h);
+            loop {
+                visited.insert(cur.0);
+                let c0 = self.dcel.vertex(self.dcel.half_edge(cur).origin).coords;
+                coords.push(c0);
+
+                let c1 = self.dcel.vertex(self.dcel.dest(cur)).coords;
+                signed_area += c0.x * c1.y - c1.x * c0.y;
+
+                let mut next = self.dcel.half_edge(cur).next;
+                while !boundary_set.contains(&next.0) {
+                    next = self.dcel.half_edge(self.dcel.half_edge(next).twin).next;
+                }
+                cur = next;
+
+                if cur.0 == start_h { break; }
+            }
+            signed_area /= 2.0;
+            if let Some(&first) = coords.first() { coords.push(first); }
+            cycles.push((coords, signed_area));
+        }
+
+        // Same hole-matching logic as union_of.
+        let mut outers: Vec<(Vec<Coord<f64>>, Vec<LineString<f64>>)> = Vec::new();
+        let mut holes: Vec<Vec<Coord<f64>>> = Vec::new();
+        for (coords, area) in cycles {
+            if area > 0.0 { outers.push((coords, Vec::new())); }
+            else          { holes.push(coords); }
+        }
+        for hole in holes {
+            let pt = hole[0];
+            let mut best = 0;
+            for (i, (outer, _)) in outers.iter().enumerate() {
+                if point_in_ring(pt, outer) { best = i; break; }
+            }
+            outers[best].1.push(LineString(hole));
+        }
+        let polys: Vec<Polygon<f64>> = outers
+            .into_iter()
+            .map(|(ring, holes)| Polygon::new(LineString(ring), holes))
+            .collect();
+        MultiPolygon(polys)
+    }
+
     // -----------------------------------------------------------------------
     // Edge metrics
     // -----------------------------------------------------------------------

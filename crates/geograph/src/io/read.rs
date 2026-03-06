@@ -150,6 +150,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     let is_exterior = compute_is_exterior(&dcel, &face_to_unit, nu);
     let geometries  = reconstruct_geometries(&dcel, &face_to_unit, nu);
     let rtree       = SpatialIndex::new(&bounds);
+    let unit_to_faces = crate::region::build::compute_unit_to_faces(&face_to_unit, nu);
 
     Ok(Region {
         dcel,
@@ -166,6 +167,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         adjacent,
         touching,
         rtree,
+        unit_to_faces,
     })
 }
 

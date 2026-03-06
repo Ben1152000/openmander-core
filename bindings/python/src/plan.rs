@@ -253,35 +253,4 @@ impl Plan {
 
         Ok(result)
     }
-
-    /// Get debug info about district boundary extraction.
-    ///
-    /// Returns a list of dicts with debug info for each district:
-    /// [{"district": int, "boundary_edges": int, "vertices": int,
-    ///   "deg1": int, "deg2": int, "deg3_plus": int,
-    ///   "walks": int, "closed": int, "stuck": int, "max_len": int}, ...]
-    pub fn debug_frontier_info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let info = py.allow_threads(|| {
-            self.inner.debug_frontier_info()
-                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-        })?;
-
-        let result = PyList::empty_bound(py);
-        for (district, edges, verts, deg1, deg2, deg3, walks, closed, stuck, max_len) in info {
-            let dict = PyDict::new_bound(py);
-            dict.set_item("district", district)?;
-            dict.set_item("boundary_edges", edges)?;
-            dict.set_item("vertices", verts)?;
-            dict.set_item("deg1", deg1)?;
-            dict.set_item("deg2", deg2)?;
-            dict.set_item("deg3_plus", deg3)?;
-            dict.set_item("walks", walks)?;
-            dict.set_item("closed", closed)?;
-            dict.set_item("stuck", stuck)?;
-            dict.set_item("max_len", max_len)?;
-            result.append(dict)?;
-        }
-
-        Ok(result)
-    }
 }

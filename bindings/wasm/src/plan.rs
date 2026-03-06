@@ -135,7 +135,8 @@ impl WasmPlan {
             let lyr = self.map.layer(ty)
                 .ok_or_else(|| js_err(format!("Layer {:?} is not present in this map/pack.", ty.to_str())))?;
             
-            let assignments = self.inner.get_assignments_vec().map_err(js_err)?;
+            let assignments = self.inner.get_assignments().map_err(js_err)?
+                .into_iter().map(|(_, part)| part).collect::<Vec<_>>();
             
             // Verify assignments length matches layer length
             if assignments.len() != lyr.len() {
@@ -188,64 +189,19 @@ impl WasmPlan {
     /// Districts 1 through num_districts are included. District 0 (unassigned) is excluded.
     #[wasm_bindgen(js_name = "district_geometries_wkb")]
     pub fn district_geometries_wkb(&self) -> Result<Array, JsValue> {
-        web_sys::console::log_1(&"[WASM] ========== district_geometries_wkb START ==========".into());
+        let geometries = self.inner.district_geometries_wkb().map_err(js_err)?;
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // Log frontier debug info first
-            web_sys::console::log_1(&"[WASM] Stitch debug per district:".into());
-            match self.inner.debug_frontier_info() {
-                Ok(info) => {
-                    for (district, edges, verts, deg1, deg2, deg3, walks, closed, stuck, max_len) in info {
-                        web_sys::console::log_1(&format!(
-                            "[WASM]   D{}: {} edges, {} verts (deg1={}, deg2={}, deg3+={})",
-                            district, edges, verts, deg1, deg2, deg3
-                        ).into());
-                        web_sys::console::log_1(&format!(
-                            "[WASM]      walks={}, closed={}, stuck={}, max_len={}",
-                            walks, closed, stuck, max_len
-                        ).into());
-                    }
-                }
-                Err(e) => {
-                    web_sys::console::log_1(&format!("[WASM] Error: {:?}", e).into());
-                }
-            }
-
-            web_sys::console::log_1(&"[WASM] Calling inner.district_geometries_wkb()...".into());
-            let geometries = self.inner.district_geometries_wkb().map_err(js_err)?;
-            web_sys::console::log_1(&format!("[WASM] Got {} district geometries", geometries.len()).into());
-
-            let arr = Array::new();
-            for (district, wkb) in &geometries {
-                // Log first few bytes of WKB to verify format
-                let preview: Vec<u8> = wkb.iter().take(20).copied().collect();
-                web_sys::console::log_1(&format!(
-                    "[WASM] District {}: {} bytes, first 20 bytes: {:?}",
-                    district, wkb.len(), preview
-                ).into());
-
-                let obj = Object::new();
-                Reflect::set(&obj, &JsValue::from_str("district"), &JsValue::from_f64(*district as f64))
-                    .map_err(|_| js_err("failed to set district"))?;
-                Reflect::set(&obj, &JsValue::from_str("wkb"), &Uint8Array::from(wkb.as_slice()))
-                    .map_err(|_| js_err("failed to set wkb"))?;
-                arr.push(&obj);
-            }
-
-            web_sys::console::log_1(&"[WASM] ========== district_geometries_wkb END ==========".into());
-            Ok(arr)
-        }));
-
-        match result {
-            Ok(Ok(val)) => Ok(val),
-            Ok(Err(e)) => {
-                web_sys::console::log_1(&format!("[WASM] ERROR: {:?}", e).into());
-                Err(e)
-            },
-            Err(_) => {
-                web_sys::console::log_1(&"[WASM] PANIC occurred!".into());
-                Err(js_err("Panic occurred while computing district geometries."))
-            },
+        let arr = Array::new();
+        for (district, wkb) in &geometries {
+            let obj = Object::new();
+            Reflect::set(&obj, &JsValue::from_str("district"), &JsValue::from_f64(*district as f64))
+                .map_err(|_| js_err("failed to set district"))?;
+            Reflect::set(&obj, &JsValue::from_str("wkb"), &Uint8Array::from(wkb.as_slice()))
+                .map_err(|_| js_err("failed to set wkb"))?;
+            arr.push(&obj);
         }
+
+        Ok(arr)
     }
+
 }

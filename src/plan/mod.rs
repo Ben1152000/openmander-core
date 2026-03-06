@@ -1,4 +1,3 @@
-mod boundary;
 mod io;
 mod plan;
 

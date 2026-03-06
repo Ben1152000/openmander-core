@@ -1,7 +1,6 @@
 pub(crate) mod adj;
-mod build;
+pub(crate) mod build;
 mod geom;
-mod svg;
 mod topo;
 
 pub use build::RegionError;
@@ -9,7 +8,7 @@ pub use build::RegionError;
 use geo::{Coord, MultiPolygon, Rect};
 
 use crate::adj::AdjacencyMatrix;
-use crate::dcel::Dcel;
+use crate::dcel::{Dcel, FaceId};
 use crate::rtree::SpatialIndex;
 use crate::unit::UnitId;
 
@@ -69,6 +68,10 @@ pub struct Region {
 
     /// R-tree spatial index over unit bounding boxes.
     pub(crate) rtree: SpatialIndex,
+
+    /// Maps each unit to the DCEL faces it owns.
+    /// Indexed by `UnitId.0`; most units have exactly one face.
+    pub(crate) unit_to_faces: Vec<Vec<FaceId>>,
 }
 
 impl Region {
@@ -262,6 +265,8 @@ pub(crate) mod test_helpers {
             )])
         };
 
+        let unit_to_faces = crate::region::build::compute_unit_to_faces(&face_to_unit, 2);
+
         Region {
             dcel,
             face_to_unit,
@@ -284,6 +289,7 @@ pub(crate) mod test_helpers {
             adjacent: adj,
             touching,
             rtree,
+            unit_to_faces,
         }
     }
 }

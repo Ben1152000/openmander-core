@@ -12,7 +12,9 @@ use crate::partition::Partition;
 ///
 /// In the simplest form, this represents:
 ///
-///     total_cost = sum_i weights[i] * metric_i(plan)
+/// ```text
+/// total_cost = sum_i weights[i] * metric_i(plan)
+/// ```
 ///
 /// The actual metric implementations are handled elsewhere; this type
 /// just stores configuration and provides evaluation entry-points.

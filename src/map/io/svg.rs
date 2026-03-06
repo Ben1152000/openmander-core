@@ -4,7 +4,7 @@ use anyhow::{Context, Ok, Result, anyhow};
 use geo::Coord;
 use polars::prelude::{ChunkAgg, DataType};
 
-use crate::{io::svg::Hsl, map::MapLayer};
+use crate::{map::MapLayer};
 
 impl MapLayer {
     /// Small wrapper with defaults.
@@ -138,106 +138,6 @@ impl MapLayer {
         writer.write_footer()?;
         writer.flush()?;
 
-        Ok(())
-    }
-
-    /// Write an SVG file visualizing the planar embedding (CCW adjacency order).
-    ///
-    /// Each directed half-edge is drawn as a colored ray from the source node
-    /// toward the target, with color cycling through the rainbow based on its
-    /// position in the source's CCW-sorted adjacency list.  Position 0 is red,
-    /// progressing through orange → yellow → green → cyan → blue → violet.
-    pub fn to_svg_embedding(&self, path: &Path) -> Result<()> {
-        let mut writer = crate::io::svg::SvgWriter::new(path)?;
-        self.write_embedding_svg(&mut writer)?;
-        writer.flush()?;
-        Ok(())
-    }
-
-    /// Generate an SVG string visualizing the planar embedding.
-    pub fn to_svg_embedding_string(&self) -> Result<String> {
-        let mut writer = crate::io::svg::SvgStringWriter::new();
-        self.write_embedding_svg(&mut writer)?;
-        writer.into_string()
-    }
-
-    /// Shared implementation for embedding SVG rendering.
-    fn write_embedding_svg(&self, writer: &mut impl Write) -> Result<()> {
-        let geoms = self.geoms.as_ref()
-            .ok_or_else(|| anyhow!("[to_svg_embedding] No geometries available to draw."))?;
-
-        let bounds = geoms.bounds()
-            .ok_or_else(|| anyhow!("[to_svg_embedding] Could not determine bounds; nothing to draw."))?;
-
-        let centroids = self.centroids();
-
-        let margin = 10.0_f64;
-        let width = 1200.0_f64;
-        let scale = (width - 2.0 * margin) / bounds.width();
-        let height = bounds.height() * scale + 2.0 * margin;
-
-        let project = move |coord: &Coord<f64>| -> (f64, f64) {
-            let x = margin + (coord.x - bounds.min().x) * scale;
-            let y = margin + (bounds.max().y - coord.y) * scale;
-            (x, y)
-        };
-
-        crate::io::svg::write_svg_header(writer, width, height, margin, scale, &bounds)?;
-        crate::io::svg::write_svg_styles(writer)?;
-
-        // Draw polygons with light fill
-        crate::io::svg::draw_polygons(writer, geoms.shapes(), &project)?;
-
-        // Draw directed half-edges colored by CCW angular position (rainbow).
-        // Edges point toward neighbor centroids.
-        let mut directed_edges: Vec<(Coord<f64>, Coord<f64>, Hsl)> = Vec::new();
-        for (i, neighbors) in self.adjacencies.iter().enumerate() {
-            let deg = neighbors.len();
-            if deg == 0 { continue; }
-
-            let ci_x = centroids[i].x();
-            let ci_y = centroids[i].y();
-
-            // Compute (neighbor, target_point, angle) for each neighbor
-            let mut edges_with_angle: Vec<(u32, f64, f64, f64)> = neighbors.iter()
-                .filter(|&&j| j as usize != i) // skip any leftover self-edges
-                .map(|&j| {
-                    let tx = centroids[j as usize].x();
-                    let ty = centroids[j as usize].y();
-                    let angle = (ty - ci_y).atan2(tx - ci_x);
-                    (j, tx, ty, angle)
-                })
-                .collect();
-
-            // Sort by angle (ascending = CCW from -π)
-            edges_with_angle.sort_by(|a, b| {
-                let qa = (a.3 * 1e6).round() as i64;
-                let qb = (b.3 * 1e6).round() as i64;
-                (qa, a.0).cmp(&(qb, b.0))
-            });
-
-            let total = edges_with_angle.len();
-            for (k, &(_j, tx, ty, _)) in edges_with_angle.iter().enumerate() {
-                let hue = (k as f64 / total as f64) * 360.0;
-                let color = Hsl { h: hue, s: 0.85, l: 0.5 };
-
-                let dx = tx - ci_x;
-                let dy = ty - ci_y;
-                let from = Coord { x: ci_x + 0.10 * dx, y: ci_y + 0.10 * dy };
-                let to   = Coord { x: ci_x + 0.90 * dx, y: ci_y + 0.90 * dy };
-
-                directed_edges.push((from, to, color));
-            }
-        }
-        crate::io::svg::draw_directed_edges(writer, &directed_edges, &project)?;
-
-        // Draw small dots at each centroid
-        let centroid_coords: Vec<Coord<f64>> = centroids.iter()
-            .map(|p| Coord { x: p.x(), y: p.y() })
-            .collect();
-        crate::io::svg::draw_nodes(writer, &centroid_coords, 1.5, &project)?;
-
-        crate::io::svg::write_svg_footer(writer)?;
         Ok(())
     }
 

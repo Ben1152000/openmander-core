@@ -599,6 +599,7 @@ impl Region {
         let adjacent = build_adjacent(&dcel, &face_to_unit, &edge_length, num_units);
         let touching = build_touching(&dcel, &face_to_unit, num_units);
         let rtree = SpatialIndex::new(&bounds);
+        let unit_to_faces = compute_unit_to_faces(&face_to_unit, num_units);
 
         let region = Region {
             dcel,
@@ -615,6 +616,7 @@ impl Region {
             adjacent,
             touching,
             rtree,
+            unit_to_faces,
         };
 
         #[cfg(debug_assertions)]
@@ -717,6 +719,18 @@ fn signed_area_deg(dcel: &Dcel<Coord<f64>>, cycle: &[HalfEdgeId]) -> f64 {
         area += c0.x * c1.y - c1.x * c0.y;
     }
     area / 2.0
+}
+
+/// Build a `unit_to_faces` index from `face_to_unit`.
+/// Shared with `io/read.rs` for deserialization.
+pub(crate) fn compute_unit_to_faces(face_to_unit: &[UnitId], num_units: usize) -> Vec<Vec<FaceId>> {
+    let mut unit_to_faces: Vec<Vec<FaceId>> = vec![Vec::new(); num_units];
+    for (f, &unit) in face_to_unit.iter().enumerate() {
+        if unit != UnitId::EXTERIOR {
+            unit_to_faces[unit.0 as usize].push(FaceId(f));
+        }
+    }
+    unit_to_faces
 }
 
 // ---------------------------------------------------------------------------

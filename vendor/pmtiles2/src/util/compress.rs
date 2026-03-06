@@ -9,11 +9,7 @@ use async_compression::futures::{
         BrotliEncoder as AsyncBrotliEncoder, GzipEncoder as AsyncGzipEncoder,
     },
 };
-#[cfg(all(feature = "async", not(target_arch = "wasm32")))]
-use async_compression::futures::{
-    bufread::ZstdDecoder as AsyncZstdDecoder,
-    write::ZstdEncoder as AsyncZstdEncoder,
-};
+// Async ZStd removed: async-compression is built without the zstd feature.
 use brotli::{CompressorWriter as BrotliEncoder, Decompressor as BrotliDecoder};
 use flate2::{read::GzDecoder, write::GzEncoder};
 #[cfg(feature = "async")]
@@ -117,19 +113,10 @@ pub fn compress_async<'a>(
         Compression::None => Ok(Box::new(writer)),
         Compression::GZip => Ok(Box::new(AsyncGzipEncoder::new(writer))),
         Compression::Brotli => Ok(Box::new(AsyncBrotliEncoder::new(writer))),
-        Compression::ZStd => {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                Ok(Box::new(AsyncZstdEncoder::new(writer)))
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                Err(Error::new(
-                    ErrorKind::Unsupported,
-                    "ZStd compression is not supported on WASM targets",
-                ))
-            }
-        },
+        Compression::ZStd => Err(Error::new(
+            ErrorKind::Unsupported,
+            "Async ZStd compression is not supported (async-compression built without zstd feature)",
+        )),
     }
 }
 
@@ -236,21 +223,10 @@ pub fn decompress_async<'a>(
         Compression::Brotli => Ok(Box::new(AsyncBrotliDecoder::new(BufReader::new(
             compressed_data,
         )))),
-        Compression::ZStd => {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                Ok(Box::new(AsyncZstdDecoder::new(BufReader::new(
-                    compressed_data,
-                ))))
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                Err(Error::new(
-                    ErrorKind::Unsupported,
-                    "ZStd decompression is not supported on WASM targets",
-                ))
-            }
-        },
+        Compression::ZStd => Err(Error::new(
+            ErrorKind::Unsupported,
+            "Async ZStd decompression is not supported (async-compression built without zstd feature)",
+        )),
     }
 }
 

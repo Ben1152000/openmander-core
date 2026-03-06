@@ -2,7 +2,7 @@ use std::{collections::{HashMap, HashSet}, sync::Arc};
 
 use anyhow::{ensure, Ok, Result};
 
-use crate::{Metric, Objective, io::wkb::multipolygon_to_wkb, map::{GeoId, Map}, partition::Partition};
+use crate::{Metric, Objective, graph::WeightMatrix, io::wkb::multipolygon_to_wkb, map::{GeoId, Map}, partition::Partition};
 
 /// A districting plan, assigning blocks to districts.
 #[derive(Clone, Debug)]
@@ -16,9 +16,14 @@ impl Plan {
     /// Create a new empty plan with a set number of districts.
     pub fn new(map: impl Into<Arc<Map>>, num_districts: u32) -> Result<Self> {
         let map: Arc<Map> = map.into();
+        let base = map.base()?;
+        let unit_graph = base.get_unit_graph();
+        let unit_weights = base.get_unit_weights()
+            .unwrap_or_else(|| Arc::new(WeightMatrix::empty(base.len())));
         let partition = Partition::new(
             num_districts as usize + 1,
-            map.base()?.get_graph_ref(),
+            unit_graph,
+            unit_weights,
             map.region()?.get_graph_ref(),
         );
 
@@ -194,12 +199,12 @@ impl Plan {
         let shapes = base_layer.shapes()
             .ok_or_else(|| anyhow::anyhow!("No shapes"))?;
         let adjacencies = base_layer.adjacencies();
-        let graph = base_layer.get_graph_ref();
+        let unit_graph = base_layer.get_unit_graph();
         let num_blocks = shapes.len();
 
-        // Build state-border filter from outer_perimeter_m
+        // Build state-border filter from exterior flag
         let is_state_border: Vec<bool> = (0..num_blocks)
-            .map(|i| graph.node_weights().get_as_f64("outer_perimeter_m", i).unwrap_or(0.0) > 0.0)
+            .map(|i| unit_graph.is_exterior(i))
             .collect();
 
         let assignments = self.partition.assignments();
@@ -257,7 +262,7 @@ impl Plan {
     /// - value = (district, num_inter_district_edges, is_exterior, is_state_border)
     pub fn get_frontier_edge_blocks(&self) -> Result<HashMap<usize, (u32, usize, bool, bool)>> {
         let base_layer = self.map.base()?;
-        let graph = base_layer.get_graph_ref();
+        let unit_graph = base_layer.get_unit_graph();
 
         let mut result = HashMap::new();
 
@@ -276,7 +281,7 @@ impl Plan {
             for (block, inter) in block_edges {
                 result.insert(
                     block,
-                    (district, inter, graph.is_exterior(block), graph.is_exterior(block))
+                    (district, inter, unit_graph.is_exterior(block), unit_graph.is_exterior(block))
                 );
             }
         }

@@ -169,6 +169,16 @@ impl MapLayer {
             }
         }
 
+        // region (optional — geom/{layer_name}.region)
+        if let Some(region_ref) = &self.region {
+            let region_file = format!("geom/{layer_name}.region");
+            let mut region_bytes: Vec<u8> = Vec::new();
+            geograph::io::write(region_ref.as_ref(), &mut region_bytes)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+            sink.put(&region_file, &region_bytes)?;
+            hashes.insert(region_file, FileHash { sha256: common::sha256_bytes(&region_bytes) });
+        }
+
         Ok(())
     }
 }
@@ -258,6 +268,16 @@ impl Map {
                     sink.put(&hull_file, &hull_bytes)?;
                     file_hashes.insert(hull_file.clone(), FileHash { sha256: common::sha256_bytes(&hull_bytes) });
                 }
+            }
+
+            // Write region file (if exists)
+            if let Some(region_ref) = &layer.region {
+                let region_file = format!("geom/{layer_name}.region");
+                let mut region_bytes: Vec<u8> = Vec::new();
+                geograph::io::write(region_ref.as_ref(), &mut region_bytes)
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+                sink.put(&region_file, &region_bytes)?;
+                file_hashes.insert(region_file, FileHash { sha256: common::sha256_bytes(&region_bytes) });
             }
         }
         

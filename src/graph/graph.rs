@@ -71,6 +71,16 @@ impl WeightedGraph {
     /// Get the degree (number of neighbors) of a given node.
     #[inline] pub(crate) fn degree(&self, node: usize) -> usize { self.range(node).len() }
 
+    /// Raw slice of neighbor indices for the given node.
+    #[inline] pub(crate) fn neighbors_raw(&self, node: usize) -> &[u32] {
+        &self.edges[self.range(node)]
+    }
+
+    /// Raw slice of edge weights for the given node.
+    #[inline] pub(crate) fn edge_weights_for(&self, node: usize) -> &[f64] {
+        &self.edge_weights[self.range(node)]
+    }
+
     /// Whether a node borders the exterior (state boundary).
     #[inline] pub(crate) fn is_exterior(&self, node: usize) -> bool {
         self.exterior.get(node).copied().unwrap_or(false)

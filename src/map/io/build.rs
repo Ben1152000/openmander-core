@@ -541,6 +541,23 @@ impl Map {
             layer.construct_graph()
         }
 
+        // Build Region for every layer that has geometries.
+        if verbose > 0 { eprintln!("[build_pack] building Region objects"); }
+        for layer in map.layers_iter_mut() {
+            if let Some(shapes) = layer.shapes().cloned() {
+                let ty = layer.ty();
+                if verbose > 0 { eprintln!("[build_pack] building Region for {:?}", ty); }
+                match geograph::Region::new(shapes, None) {
+                    std::result::Result::Ok(region) => {
+                        layer.set_region(region);
+                    }
+                    Err(e) => {
+                        eprintln!("[build_pack] Warning: Region construction failed for {:?}: {:?}", ty, e);
+                    }
+                }
+            }
+        }
+
         Ok(map)
     }
 }

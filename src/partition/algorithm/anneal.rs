@@ -101,9 +101,9 @@ impl Partition {
                 else { self.cut_subgraph_within_part(node) };
 
             // Compute cost of move, randomly accept based on metropolis filter
-            let node_weight = self.graph().node_weights().get_as_f64(series, node).unwrap()
+            let node_weight = self.unit_weights().get_as_f64(series, node).unwrap()
                 + bundle.iter()
-                    .map(|&u| self.graph().node_weights().get_as_f64(series, u).unwrap())
+                    .map(|&u| self.unit_weights().get_as_f64(series, u).unwrap())
                     .sum::<f64>();
             let src_weight = self.part_weights().get_as_f64(series, src as usize).unwrap();
             let dest_weight = self.part_weights().get_as_f64(series, dest as usize).unwrap();

@@ -9,7 +9,7 @@ impl Partition {
     /// Returns (part, part_weight).
     fn part_with_min_weight(&self, series: &str) -> (u32, f64) {
         assert!(self.num_parts() > 1, "cannot find min part with only one part");
-        assert!(self.graph().node_weights().contains(series),
+        assert!(self.unit_weights().contains(series),
             "series '{}' not found in node weights", series);
 
         (1..self.num_parts())
@@ -66,7 +66,7 @@ impl Partition {
             if !(self.part_is_empty(dest) || self.node_borders_part(node, dest)) { continue }
 
             if self.check_node_contiguity(node, dest) {
-                let delta = self.graph().node_weights().get_as_f64(series, node).unwrap();
+                let delta = self.unit_weights().get_as_f64(series, node).unwrap();
                 self.move_node(node, dest, false);
                 remaining -= delta;
             } else {
@@ -75,7 +75,7 @@ impl Partition {
                 subgraph.push(node);
 
                 let delta = subgraph.iter()
-                    .map(|&u| self.graph().node_weights().get_as_f64(series, u).unwrap())
+                    .map(|&u| self.unit_weights().get_as_f64(series, u).unwrap())
                     .sum::<f64>();
                 self.move_subgraph(&subgraph, dest, false);
                 remaining -= delta;
@@ -92,7 +92,7 @@ impl Partition {
     /// `max_iter` is the maximum number of equalization passes to attempt.
     pub(crate) fn equalize(&mut self, series: &str, tolerance: f64, max_iter: usize) {
         assert_ne!(self.num_parts(), 1, "cannot equalize with only one part");
-        assert!(self.graph().node_weights().contains(series),
+        assert!(self.unit_weights().contains(series),
             "series '{}' not found in node weights", series);
 
         let mut rng = rand::rng();

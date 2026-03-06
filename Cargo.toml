@@ -48,6 +48,7 @@ mvt-reader = { version = "2.2", optional = true }
 geo-types = { version = "0.7", optional = true }
 # Compression for PMTiles and WKB (gzip) - always available, compiles fine for WASM
 flate2 = "1"
+geograph = { path = "crates/geograph" }
 # WKB (Well-Known Binary) for hull storage - using custom minimal implementation
 # No external WKB crate needed, we implement a minimal WKB encoder/decoder for Polygon
 

@@ -175,6 +175,16 @@ pub(crate) fn read_layer_from_pack_source_with_formats(
         }
     }
 
+    // region (optional — geom/{layer_name}.region)
+    let region_file = format!("geom/{layer_name}.region");
+    if src.has(&region_file) {
+        let region_bytes = src.get(&region_file)?;
+        match geograph::io::read(&mut region_bytes.as_ref()) {
+            Ok(region) => layer.set_region(region),
+            Err(e) => eprintln!("[pack] Warning: failed to deserialize region for {layer_name}: {e:?}"),
+        }
+    }
+
     Ok(())
 }
 

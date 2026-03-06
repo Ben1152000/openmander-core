@@ -117,15 +117,13 @@ impl Partition {
 
                     // --- Compute delta, reusing anneal_balance logic ---
                     let node_weight = self
-                        .graph()
-                        .node_weights()
+                        .unit_weights()
                         .get_as_f64(series, node)
                         .unwrap()
                         + bundle
                             .iter()
                             .map(|&u| {
-                                self.graph()
-                                    .node_weights()
+                                self.unit_weights()
                                     .get_as_f64(series, u)
                                     .unwrap()
                             })

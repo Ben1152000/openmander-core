@@ -1234,7 +1234,9 @@ dependencies = [
 name = "geograph"
 version = "0.1.3"
 dependencies = [
+ "ahash",
  "geo",
+ "rstar",
 ]
 
 [[package]]
@@ -2229,6 +2231,7 @@ dependencies = [
  "geo-types",
  "geoarrow-array",
  "geoarrow-schema",
+ "geograph",
  "geoparquet",
  "hex",
  "mvt",

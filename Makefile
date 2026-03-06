@@ -57,7 +57,7 @@ WASM_OUT        := $(WASM_BINDINGS_DIR)/pkg
 
 .PHONY: all venv python-deps python-dev python-wheel python-test python-otool \
         wasm wasm-copy wasm-clean \
-        geograph geograph-test \
+        test openmander-test geograph geograph-test \
         clean clean-all print-vars help prepare-target check-wasm-pack
 
 # ============================================================================
@@ -69,8 +69,16 @@ all: python-dev wasm-copy
 	@echo "✅ All bindings built successfully!"
 
 # ============================================================================
-# Geograph Crate
+# Rust Tests
 # ============================================================================
+
+# Run all Rust tests across the workspace
+test:
+	cargo test --all-features --workspace
+
+# Per-crate test targets
+openmander-test:
+	cargo test --all-features -p openmander
 
 geograph:
 	cargo build -p geograph
@@ -122,7 +130,6 @@ python-otool:
 deps: python-deps
 dev: python-dev
 wheel: python-wheel
-test: python-test
 otool: python-otool
 
 # ============================================================================
@@ -187,11 +194,15 @@ help:
 	@echo '  python-test        Run pytest from $(BINDINGS_DIR)'
 	@echo '  python-otool        Show linked libs for installed .so (macOS)'
 	@echo ''
-	@echo '  Legacy aliases: deps, dev, wheel, test, otool (same as python-*)'
+	@echo '  Legacy aliases: deps, dev, wheel, otool (same as python-*)'
+	@echo ''
+	@echo 'Rust Tests:'
+	@echo '  test               Run all Rust tests (workspace-wide)'
+	@echo '  openmander-test    Run tests for the openmander crate'
+	@echo '  geograph-test      Run tests for the geograph crate'
 	@echo ''
 	@echo 'Geograph Crate:'
 	@echo '  geograph           Build the geograph crate'
-	@echo '  geograph-test      Run geograph tests'
 	@echo ''
 	@echo 'WASM Bindings:'
 	@echo '  wasm               Build WASM bindings (MODE=release|dev, WASM_TARGET=web|bundler|nodejs|no-modules)'

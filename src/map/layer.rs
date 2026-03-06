@@ -3,7 +3,9 @@ use std::{collections::HashMap, fmt, sync::Arc};
 use geo::{MultiPolygon, Point, Polygon, Rect};
 use polars::{frame::DataFrame, prelude::DataType};
 
-use crate::{geom::Geometries, graph::{WeightedGraph, WeightMatrix}, map::{GeoId, GeoType, ParentRefs}};
+use geograph::Region;
+
+use crate::{geom::Geometries, graph::{UnitGraph, WeightedGraph, WeightMatrix}, map::{GeoId, GeoType, ParentRefs}};
 
 /// A single planar partition Layer of the map, containing entities and their relationships.
 #[derive(Clone)]
@@ -18,6 +20,8 @@ pub struct MapLayer {
     pub(super) geoms: Option<Geometries>,         // Per-level geometry store, indexed by entities
     pub(super) hulls: Option<Vec<Polygon<f64>>>,  // Approximate hulls for each entity (todo: remove option)
     pub(super) graph: Arc<WeightedGraph>,         // Graph representation of layer used for partitioning
+    pub(super) unit_weights: Option<Arc<WeightMatrix>>, // Demographic/election weights (extracted from graph)
+    pub(super) region: Option<Arc<Region>>,       // Planar map for block layer (None for aggregated layers)
 }
 
 impl MapLayer {
@@ -33,6 +37,8 @@ impl MapLayer {
             geoms: None,
             hulls: None,
             graph: Arc::default(),
+            unit_weights: None,
+            region: None,
         }
     }
 
@@ -157,6 +163,7 @@ impl MapLayer {
             }).collect();
 
         let weights = WeightMatrix::new(self.len(), weights_i64, weights_f64);
+        self.unit_weights = Some(Arc::new(weights.clone()));
 
         // Filter self-edges out of adjacencies before building the graph.
         let filtered_adj: Vec<Vec<u32>> = self.adjacencies.iter().enumerate()
@@ -190,6 +197,28 @@ impl MapLayer {
 
     /// Get an Arc clone of the graph representation of this layer.
     #[inline] pub(crate) fn get_graph_ref(&self) -> Arc<WeightedGraph> { self.graph.clone() }
+
+    /// Get the unit graph for this layer.
+    /// Uses Region if available, otherwise falls back to legacy WeightedGraph.
+    pub(crate) fn get_unit_graph(&self) -> UnitGraph {
+        if let Some(region) = &self.region {
+            UnitGraph::Region(region.clone())
+        } else {
+            UnitGraph::Legacy(self.graph.clone())
+        }
+    }
+
+    /// Get an Arc clone of the unit weights for this layer.
+    #[inline] pub(crate) fn get_unit_weights(&self) -> Option<Arc<WeightMatrix>> { self.unit_weights.clone() }
+
+    /// Get a reference to the Region, if present (block layer only).
+    #[inline] pub(crate) fn region(&self) -> Option<&Region> { self.region.as_deref() }
+
+    /// Get an Arc clone of the Region, if present.
+    #[inline] pub(crate) fn get_region_ref(&self) -> Option<Arc<Region>> { self.region.clone() }
+
+    /// Set the Region for this layer.
+    pub(crate) fn set_region(&mut self, region: Region) { self.region = Some(Arc::new(region)); }
 }
 
 impl fmt::Debug for MapLayer {

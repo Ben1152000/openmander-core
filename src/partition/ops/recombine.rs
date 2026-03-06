@@ -122,7 +122,7 @@ impl Partition {
     fn balanced_cut(&self, tree: &SpanningTree, series: &str) -> Option<usize> {
         // 1) Pull node weights for the order (release the &self borrow quickly).
         let weights = tree.order.iter()
-            .map(|&u| self.graph().node_weights().get_as_f64(series, u).unwrap())
+            .map(|&u| self.unit_weights().get_as_f64(series, u).unwrap())
             .collect::<Vec<_>>();
 
         // 2) Prefix sums over preorder.

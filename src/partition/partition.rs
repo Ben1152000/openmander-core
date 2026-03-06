@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    graph::{WeightedGraph, WeightMatrix},
+    graph::{UnitGraph, WeightedGraph, WeightMatrix},
     partition::{FrontierEdgeList, MultiSet, PartitionSet},
 };
 
@@ -12,19 +12,24 @@ pub(crate) struct Partition {
     pub(super) frontiers: MultiSet,          // Nodes on the boundary of each part
     pub(super) frontier_edges: FrontierEdgeList, // Half-edges on the boundary of each part
     pub(super) part_graph: WeightedGraph,    // Graph structure for parts (including aggregated weights)
-    unit_graph: Arc<WeightedGraph>,          // Reference to graph of basic units (census block)
+    unit_graph: UnitGraph,                   // Graph topology for basic units (census block)
+    unit_weights: Arc<WeightMatrix>,         // Demographic/election weights for basic units
     region_graph: Arc<WeightedGraph>,        // Reference to full region graph (state)
 }
 
 impl Partition {
-    /// Construct an empty partition from a weighted graph reference and number of parts.
-    pub(crate) fn new(num_parts: usize, unit_graph: impl Into<Arc<WeightedGraph>>, region_graph: impl Into<Arc<WeightedGraph>>) -> Self {
+    /// Construct an empty partition from a unit graph, unit weights, and number of parts.
+    pub(crate) fn new(
+        num_parts: usize,
+        unit_graph: UnitGraph,
+        unit_weights: Arc<WeightMatrix>,
+        region_graph: impl Into<Arc<WeightedGraph>>,
+    ) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
-        let unit_graph: Arc<WeightedGraph> = unit_graph.into();
         let region_graph: Arc<WeightedGraph> = region_graph.into();
 
-        let mut part_weights = unit_graph.node_weights().copy_of_size(num_parts);
-        part_weights.set_row_to_sum_of(0, unit_graph.node_weights());
+        let mut part_weights = unit_weights.copy_of_size(num_parts);
+        part_weights.set_row_to_sum_of(0, &unit_weights);
 
         // Instantiate graph with a zero-length edge between each part (to be updated later).
         let part_graph = WeightedGraph::new(
@@ -43,7 +48,8 @@ impl Partition {
             frontiers: MultiSet::new(num_parts, unit_graph.node_count()),
             frontier_edges: FrontierEdgeList::new(num_parts, num_directed_edges / 2),
             part_graph,
-            unit_graph: unit_graph,
+            unit_graph,
+            unit_weights,
             region_graph,
         }
     }
@@ -55,10 +61,13 @@ impl Partition {
     pub(crate) fn num_nodes(&self) -> usize { self.unit_graph.node_count() }
 
     /// Get the list of weight series available in the map's node weights.
-    pub(crate) fn series(&self) -> HashSet<String> { self.unit_graph.node_weights().series() }
+    pub(crate) fn series(&self) -> HashSet<String> { self.unit_weights.series() }
 
-    /// Get a reference to the underlying graph.
-    pub(super) fn graph(&self) -> &WeightedGraph { &self.unit_graph }
+    /// Get a reference to the underlying unit graph.
+    pub(super) fn graph(&self) -> &UnitGraph { &self.unit_graph }
+
+    /// Get a reference to the unit weights.
+    pub(super) fn unit_weights(&self) -> &WeightMatrix { &self.unit_weights }
 
     /// Get the part assignment of a given node.
     pub(crate) fn assignment(&self, node: usize) -> u32 { self.parts.find(node) as u32 }
@@ -87,7 +96,7 @@ impl Partition {
         self.frontier_edges.clear();
 
         self.part_graph.node_weights_mut().clear_all_rows();
-        self.part_graph.node_weights_mut().set_row_to_sum_of(0, self.unit_graph.node_weights());
+        self.part_graph.node_weights_mut().set_row_to_sum_of(0, &self.unit_weights);
     }
 
     /// Whether a node is on the frontier of its part: it has a graph
@@ -257,9 +266,9 @@ impl Partition {
         }
 
         // Recompute per-part totals.
-        let mut part_weights = WeightMatrix::copy_of_size(self.unit_graph.node_weights(), self.num_parts() as usize);
+        let mut part_weights = WeightMatrix::copy_of_size(&self.unit_weights, self.num_parts() as usize);
         for (node, &part) in self.assignments().iter().enumerate() {
-            part_weights.add_row_from(part as usize, self.unit_graph.node_weights(), node);
+            part_weights.add_row_from(part as usize, &self.unit_weights, node);
         }
 
         // Recompute edge weights between parts.
@@ -322,12 +331,12 @@ impl Partition {
         // Update node weights between part totals.
         self.part_graph.node_weights_mut().subtract_row_from(
             prev as usize,
-            self.unit_graph.node_weights(),
+            &self.unit_weights,
             node,
         );
         self.part_graph.node_weights_mut().add_row_from(
             next as usize,
-            self.unit_graph.node_weights(),
+            &self.unit_weights,
             node,
         );
 
@@ -348,7 +357,7 @@ impl Partition {
         }
 
         // Account for exterior edge weights
-        let exterior = self.unit_graph.node_weights()
+        let exterior = self.unit_weights
             .get_as_f64("outer_perimeter_m", node)
             .unwrap_or(0.0);
         if prev != 0 {
@@ -366,12 +375,12 @@ impl Partition {
         // Add/subtract node weights from part totals.
         self.part_graph.node_weights_mut().subtract_rows_from(
             prev as usize,
-            self.unit_graph.node_weights(),
+            &self.unit_weights,
             subgraph,
         );
         self.part_graph.node_weights_mut().add_rows_from(
             next as usize,
-            self.unit_graph.node_weights(),
+            &self.unit_weights,
             subgraph,
         );
 
@@ -394,7 +403,7 @@ impl Partition {
             }
 
             // Account for exterior edge weights
-            let exterior = self.unit_graph.node_weights()
+            let exterior = self.unit_weights
                 .get_as_f64("outer_perimeter_m", node)
                 .unwrap_or(0.0);
             if prev != 0 {

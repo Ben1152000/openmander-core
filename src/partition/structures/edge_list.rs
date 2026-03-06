@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::graph::WeightedGraph;
+use crate::graph::UnitGraph;
 
 /// A per-part bucketed set for directed half-edges, with O(1) insert/remove/find.
 ///
@@ -150,7 +150,7 @@ impl FrontierEdgeList {
     pub(crate) fn walk_boundary(
         &self,
         part: usize,
-        graph: &WeightedGraph,
+        graph: &UnitGraph,
         assignments: &[usize],
     ) -> Vec<Vec<(usize, usize)>> {
         let edge_indices = self.get(part);
@@ -226,7 +226,7 @@ impl FrontierEdgeList {
         u: usize,
         v: usize,
         part: usize,
-        graph: &WeightedGraph,
+        graph: &UnitGraph,
         assignments: &[usize],
     ) -> (usize, usize) {
         let mut cur = u;
@@ -402,8 +402,9 @@ mod tests {
     /// CCW adjacency order is by atan2(dy, dx) from node centroid to
     /// the shared-boundary point (here identical to neighbor centroid
     /// for a regular grid).
-    fn make_grid_3x3() -> WeightedGraph {
-        use crate::graph::WeightMatrix;
+    fn make_grid_3x3() -> UnitGraph {
+        use crate::graph::{WeightedGraph, WeightMatrix};
+        use std::sync::Arc;
         // For a regular grid, CCW order from east going counter-clockwise:
         //   east(0), north(π/2), west(π), south(-π/2)
         // Sorted by atan2: south(-π/2), east(0), north(π/2), west(π)
@@ -421,7 +422,7 @@ mod tests {
             /* 8 (2,2) */ vec![7, 5],            // west=7(π), south=5(-π/2) → sorted: 5(-π/2), 7(π)
         ];
         let weights: Vec<Vec<f64>> = adj.iter().map(|a| vec![1.0; a.len()]).collect();
-        WeightedGraph::new(9, &adj, &weights, WeightMatrix::empty(9), &[])
+        UnitGraph::Legacy(Arc::new(WeightedGraph::new(9, &adj, &weights, WeightMatrix::empty(9), &[])))
     }
 
     #[test]

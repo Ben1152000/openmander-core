@@ -27,7 +27,7 @@ fn two_squares() -> Region {
         MultiPolygon(vec![rect_poly(0.0, 0.0, 1.0, 1.0)]),
         MultiPolygon(vec![rect_poly(1.0, 0.0, 2.0, 1.0)]),
     ];
-    Region::new(geoms, 1e-7).expect("two-square construction failed")
+    Region::new(geoms, None).expect("two-square construction failed")
 }
 
 /// Three squares in an L-shape:
@@ -42,7 +42,7 @@ fn l_shape() -> Region {
         MultiPolygon(vec![rect_poly(1.0, 0.0, 2.0, 1.0)]),
         MultiPolygon(vec![rect_poly(0.0, 1.0, 1.0, 2.0)]),
     ];
-    Region::new(geoms, 1e-7).expect("L-shape construction failed")
+    Region::new(geoms, None).expect("L-shape construction failed")
 }
 
 /// 3×3 grid of squares:
@@ -63,7 +63,7 @@ fn three_by_three() -> Region {
             geoms.push(MultiPolygon(vec![rect_poly(x0, y0, x0 + 1.0, y0 + 1.0)]));
         }
     }
-    Region::new(geoms, 1e-7).expect("3x3 grid construction failed")
+    Region::new(geoms, None).expect("3x3 grid construction failed")
 }
 
 // ---------------------------------------------------------------------------

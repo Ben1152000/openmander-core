@@ -23,7 +23,7 @@ fn three_squares() -> Region {
         MultiPolygon(vec![rect_poly(1.0, 0.0, 2.0, 1.0)]),
         MultiPolygon(vec![rect_poly(0.0, 1.0, 1.0, 2.0)]),
     ];
-    Region::new(geoms, 1e-7).expect("construction failed")
+    Region::new(geoms, None).expect("construction failed")
 }
 
 fn round_trip(r: &Region) -> Region {

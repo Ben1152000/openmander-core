@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 use geo::{Coord, MultiPolygon, Rect};
 
@@ -26,23 +26,27 @@ impl Region {
     /// Build a `Region` from a vector of `MultiPolygon` geometries (one per
     /// unit, in the order that determines `UnitId` assignment).
     ///
-    /// `snap_tol` is the vertex snapping tolerance in degrees (see DESIGN.md
-    /// §8, question 1).  A value of `1e-7` is appropriate for most inputs.
-    pub fn new(geometries: Vec<MultiPolygon<f64>>, snap_tol: f64) -> Result<Self, RegionError> {
+    /// `snap_tol`: if `Some(tol)`, near-coincident shared-boundary vertices are
+    /// snapped to a canonical position before DCEL construction (useful for
+    /// data with small floating-point artefacts).  Pass `None` for
+    /// topologically clean data such as TIGER/Line GeoParquet (the shared
+    /// boundary coordinates are already exactly equal, so snapping is a no-op
+    /// and skipping it avoids the O(E) overhead).
+    pub fn new(geometries: Vec<MultiPolygon<f64>>, snap_tol: Option<f64>) -> Result<Self, RegionError> {
         if geometries.is_empty() {
             return Err(RegionError::InvalidGeometry("no geometries provided".into()));
         }
 
-        let nu = geometries.len();
+        let num_units = geometries.len();
 
         // -----------------------------------------------------------------
-        // 1. Extract rings and snap vertices
+        // 1. Extract rings and (optionally) snap vertices
         // -----------------------------------------------------------------
         // rings[unit] = vec of rings (outer + holes), each ring = vec of coords.
         // Convention: outer rings are CCW, hole rings are CW (GeoJSON / geo crate).
-        let mut rings: Vec<Vec<Vec<Coord<f64>>>> = Vec::with_capacity(nu);
+        let mut rings: Vec<Vec<Vec<Coord<f64>>>> = Vec::with_capacity(num_units);
         // ring_info[unit][ring_idx] = (polygon_idx, is_outer)
-        let mut ring_info: Vec<Vec<(usize, bool)>> = Vec::with_capacity(nu);
+        let mut ring_info: Vec<Vec<(usize, bool)>> = Vec::with_capacity(num_units);
 
         for mp in &geometries {
             let mut unit_rings = Vec::new();
@@ -65,7 +69,24 @@ impl Region {
             ring_info.push(unit_info);
         }
 
-        snap_vertices(&mut rings, snap_tol);
+        // Normalize winding order: exterior rings → CCW (positive signed area),
+        // hole rings → CW (negative signed area).  TIGER/Shapefile data and some
+        // GeoParquet exports use ESRI convention (CW exterior), which inverts the
+        // face assignments and produces incorrect face cycles.
+        for (u, unit_rings) in rings.iter_mut().enumerate() {
+            for (ri, ring) in unit_rings.iter_mut().enumerate() {
+                let sa = ring_signed_area(ring);
+                let is_outer = ring_info[u][ri].1;
+                let needs_reverse = if is_outer { sa < 0.0 } else { sa > 0.0 };
+                if needs_reverse {
+                    ring.reverse();
+                }
+            }
+        }
+
+        if let Some(tol) = snap_tol {
+            snap_vertices(&mut rings, tol);
+        }
 
         // -----------------------------------------------------------------
         // 2. Build DCEL
@@ -73,9 +94,9 @@ impl Region {
         let mut dcel: Dcel<Coord<f64>> = Dcel::new();
 
         // 2a. Deduplicate vertices by exact coordinate (post-snap).
-        let mut vertex_map: HashMap<CoordKey, VertexId> = HashMap::new();
+        let mut vertex_map: AHashMap<CoordKey, VertexId> = AHashMap::new();
         // ring_vids[unit][ring_idx][pos] = VertexId
-        let mut ring_vids: Vec<Vec<Vec<VertexId>>> = Vec::with_capacity(nu);
+        let mut ring_vids: Vec<Vec<Vec<VertexId>>> = Vec::with_capacity(num_units);
 
         for unit_rings in &rings {
             let mut unit_vids = Vec::with_capacity(unit_rings.len());
@@ -106,7 +127,7 @@ impl Region {
         //     OUTER_FACE edges if unmatched).
 
         // ring_face[unit][ring_idx] = FaceId (only meaningful for outer rings)
-        let mut ring_face: Vec<Vec<Option<FaceId>>> = Vec::with_capacity(nu);
+        let mut ring_face: Vec<Vec<Option<FaceId>>> = Vec::with_capacity(num_units);
         let mut face_to_unit_vec: Vec<UnitId> = vec![UnitId::EXTERIOR]; // slot 0 = OUTER_FACE
 
         for (u, infos) in ring_info.iter().enumerate() {
@@ -132,8 +153,8 @@ impl Region {
         //     We only insert edges from outer rings.  When matching, the twin's
         //     face comes from the table; unmatched outer edges get OUTER_FACE.
 
-        // Map (origin_vid, dest_vid) → FaceId for outer ring edges.
-        let mut edge_face: HashMap<(VertexId, VertexId), FaceId> = HashMap::new();
+        // Map packed_edge(origin, dest) → FaceId for outer ring edges.
+        let mut edge_face: AHashMap<u64, FaceId> = AHashMap::new();
 
         for (u, unit_rings) in ring_vids.iter().enumerate() {
             for (ri, vids) in unit_rings.iter().enumerate() {
@@ -149,7 +170,7 @@ impl Region {
                     let a = vids[i];
                     let b = vids[(i + 1) % n];
                     if a == b { continue; } // degenerate edge
-                    edge_face.insert((a, b), face);
+                    edge_face.insert(pack_edge(a, b), face);
                 }
             }
         }
@@ -161,7 +182,7 @@ impl Region {
         // boundary edges that border a hole.
         //
         // hole_edges: (a, b) → (unit_idx, ring_idx)  [for reference only]
-        let mut hole_edge_face: HashMap<(VertexId, VertexId), FaceId> = HashMap::new();
+        let mut hole_edge_face: AHashMap<u64, FaceId> = AHashMap::new();
 
         for (u, unit_rings) in ring_vids.iter().enumerate() {
             for (ri, vids) in unit_rings.iter().enumerate() {
@@ -177,7 +198,7 @@ impl Region {
                     // interior.  Check if the reverse edge exists as an outer
                     // ring edge — if so, the hole interior is that outer ring's
                     // unit.
-                    if edge_face.contains_key(&(b, a)) {
+                    if edge_face.contains_key(&pack_edge(b, a)) {
                         // The reverse of this hole edge is an outer ring edge
                         // with face `face`.  The hole interior edge (a→b) has
                         // the hole's face on its left.  But we also know this
@@ -197,7 +218,7 @@ impl Region {
                             .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
                             .and_then(|(ri2, _)| ring_face[u][ri2])
                             .unwrap_or(OUTER_FACE);
-                        hole_edge_face.insert((a, b), outer_face);
+                        hole_edge_face.insert(pack_edge(a, b), outer_face);
                     } else {
                         // No matching outer ring edge — this hole borders EXTERIOR.
                         // The face to the left of the hole edge is some gap face.
@@ -209,7 +230,7 @@ impl Region {
                             .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
                             .and_then(|(ri2, _)| ring_face[u][ri2])
                             .unwrap_or(OUTER_FACE);
-                        hole_edge_face.insert((a, b), outer_face);
+                        hole_edge_face.insert(pack_edge(a, b), outer_face);
                     }
                 }
             }
@@ -221,7 +242,7 @@ impl Region {
         //
         //     Collect all unique undirected edges from the edge tables.
 
-        let mut seen_edges: HashMap<(VertexId, VertexId), HalfEdgeId> = HashMap::new();
+        let mut seen_edges: AHashMap<u64, HalfEdgeId> = AHashMap::new();
 
         // Process outer ring edges.
         for (u, unit_rings) in ring_vids.iter().enumerate() {
@@ -236,7 +257,7 @@ impl Region {
                     if a == b { continue; }
 
                     // Skip if this directed edge or its reverse already created.
-                    if seen_edges.contains_key(&(a, b)) || seen_edges.contains_key(&(b, a)) {
+                    if seen_edges.contains_key(&pack_edge(a, b)) || seen_edges.contains_key(&pack_edge(b, a)) {
                         continue;
                     }
 
@@ -244,15 +265,15 @@ impl Region {
                     let face_ab = if is_outer {
                         ring_face[u][ri].unwrap()
                     } else {
-                        *hole_edge_face.get(&(a, b)).unwrap_or(&OUTER_FACE)
+                        *hole_edge_face.get(&pack_edge(a, b)).unwrap_or(&OUTER_FACE)
                     };
 
-                    let face_ba = edge_face.get(&(b, a)).copied()
-                        .or_else(|| hole_edge_face.get(&(b, a)).copied())
+                    let face_ba = edge_face.get(&pack_edge(b, a)).copied()
+                        .or_else(|| hole_edge_face.get(&pack_edge(b, a)).copied())
                         .unwrap_or(OUTER_FACE);
 
                     let (he_ab, _he_ba) = dcel.add_edge(a, b, face_ab, face_ba);
-                    seen_edges.insert((a, b), he_ab);
+                    seen_edges.insert(pack_edge(a, b), he_ab);
                 }
             }
         }
@@ -267,18 +288,60 @@ impl Region {
                     let a = vids[i];
                     let b = vids[(i + 1) % n];
                     if a == b { continue; }
-                    if seen_edges.contains_key(&(a, b)) || seen_edges.contains_key(&(b, a)) {
+                    if seen_edges.contains_key(&pack_edge(a, b)) || seen_edges.contains_key(&pack_edge(b, a)) {
                         continue;
                     }
 
-                    let face_ab = hole_edge_face.get(&(a, b)).copied()
+                    let face_ab = hole_edge_face.get(&pack_edge(a, b)).copied()
                         .unwrap_or(OUTER_FACE);
-                    let face_ba = edge_face.get(&(b, a)).copied()
-                        .or_else(|| hole_edge_face.get(&(b, a)).copied())
+                    let face_ba = edge_face.get(&pack_edge(b, a)).copied()
+                        .or_else(|| hole_edge_face.get(&pack_edge(b, a)).copied())
                         .unwrap_or(OUTER_FACE);
 
                     let (he_ab, _he_ba) = dcel.add_edge(a, b, face_ab, face_ba);
-                    seen_edges.insert((a, b), he_ab);
+                    seen_edges.insert(pack_edge(a, b), he_ab);
+                }
+            }
+        }
+
+        // 2e-pre: Assign face.half_edge for every outer-ring face to an outer-ring
+        // half-edge BEFORE step 2f has a chance to assign a hole-ring half-edge.
+        //
+        // For a donut unit (outer ring + hole ring), the face has TWO disconnected
+        // cycles: the CCW outer ring and the CW hole ring.  step 2f picks the first
+        // half-edge by index, which can be a hole-ring edge if the enclave unit
+        // (whose outer ring creates the hole twins) has a lower unit index.  This
+        // pass guarantees face.half_edge always points into the outer ring cycle.
+        for (u, unit_rings) in ring_vids.iter().enumerate() {
+            for (ri, vids) in unit_rings.iter().enumerate() {
+                let face = match ring_face[u][ri] {
+                    Some(f) => f,
+                    None => continue, // hole rings have no dedicated face
+                };
+                if dcel.face(face).half_edge.is_some() { continue; }
+                let n = vids.len();
+                if n < 2 { continue; }
+                let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
+                'find_outer: for i in 0..edge_count {
+                    let a = vids[i];
+                    let b = vids[(i + 1) % n];
+                    if a == b { continue; }
+                    // Try the forward direction (outer ring processed this unit first).
+                    if let Some(&he) = seen_edges.get(&pack_edge(a, b)) {
+                        if dcel.half_edge(he).face == face {
+                            dcel.face_mut(face).half_edge = Some(he);
+                            break 'find_outer;
+                        }
+                    }
+                    // Try the reverse direction (another unit processed b→a first;
+                    // the twin a→b belongs to this face).
+                    if let Some(&he_ba) = seen_edges.get(&pack_edge(b, a)) {
+                        let he = dcel.half_edge(he_ba).twin;
+                        if dcel.half_edge(he).face == face {
+                            dcel.face_mut(face).half_edge = Some(he);
+                            break 'find_outer;
+                        }
+                    }
                 }
             }
         }
@@ -293,17 +356,17 @@ impl Region {
         //     This correctly links all face cycles (both interior and outer).
 
         // Collect outgoing half-edges per vertex.
-        let nv = dcel.num_vertices();
-        let nhe = dcel.num_half_edges();
-        let mut outgoing: Vec<Vec<HalfEdgeId>> = vec![Vec::new(); nv];
+        let num_vertices = dcel.num_vertices();
+        let num_half_edges = dcel.num_half_edges();
+        let mut outgoing: Vec<Vec<HalfEdgeId>> = vec![Vec::new(); num_vertices];
 
-        for h in 0..nhe {
+        for h in 0..num_half_edges {
             let origin = dcel.half_edge(HalfEdgeId(h)).origin.0;
             outgoing[origin].push(HalfEdgeId(h));
         }
 
         // Sort outgoing half-edges CCW at each vertex by angle to destination.
-        for v in 0..nv {
+        for v in 0..num_vertices {
             let vc = dcel.vertex(VertexId(v)).coords;
             outgoing[v].sort_by(|&a, &b| {
                 let da = dcel.vertex(dcel.dest(a)).coords;
@@ -315,7 +378,7 @@ impl Region {
         }
 
         // Apply rotation rule: h_i.twin.next = h_{(i-1) mod k}
-        for v in 0..nv {
+        for v in 0..num_vertices {
             let k = outgoing[v].len();
             if k == 0 { continue; }
             for i in 0..k {
@@ -327,7 +390,7 @@ impl Region {
         }
 
         // 2f. Set face.half_edge pointers.
-        for h in 0..nhe {
+        for h in 0..num_half_edges {
             let face = dcel.half_edge(HalfEdgeId(h)).face;
             if dcel.face(face).half_edge.is_none() {
                 dcel.face_mut(face).half_edge = Some(HalfEdgeId(h));
@@ -345,10 +408,10 @@ impl Region {
         //     signed area (largest CW polygon) is the true outer boundary;
         //     all others become new EXTERIOR-assigned faces.
 
-        let mut visited_he = vec![false; nhe];
+        let mut visited_he = vec![false; num_half_edges];
         let mut outer_cycles: Vec<(Vec<HalfEdgeId>, f64)> = Vec::new();
 
-        for h in 0..nhe {
+        for h in 0..num_half_edges {
             if visited_he[h] { continue; }
             if dcel.half_edge(HalfEdgeId(h)).face != OUTER_FACE { continue; }
 
@@ -394,7 +457,7 @@ impl Region {
         // -----------------------------------------------------------------
 
         // 4a. Edge lengths (one per undirected edge, indexed by he.0 / 2).
-        let n_edges = nhe / 2;
+        let n_edges = num_half_edges / 2;
         let mut edge_length = vec![0.0f64; n_edges];
         for e in 0..n_edges {
             let he = dcel.half_edge(HalfEdgeId(e * 2));
@@ -404,7 +467,7 @@ impl Region {
         }
 
         // 4b. Per-unit area (shoelace with cos(φ_mid) correction).
-        let mut area = vec![0.0f64; nu];
+        let mut area = vec![0.0f64; num_units];
         for f in 0..dcel.num_faces() {
             let unit = face_to_unit[f];
             if unit == UnitId::EXTERIOR { continue; }
@@ -425,7 +488,7 @@ impl Region {
         }
 
         // 4c. Per-unit perimeter (sum of edge lengths for all boundary edges).
-        let mut perimeter = vec![0.0f64; nu];
+        let mut perimeter = vec![0.0f64; num_units];
         for f in 0..dcel.num_faces() {
             let unit = face_to_unit[f];
             if unit == UnitId::EXTERIOR { continue; }
@@ -443,8 +506,8 @@ impl Region {
         }
 
         // 4d. Exterior boundary length.
-        let mut exterior_boundary_length = vec![0.0f64; nu];
-        for h in 0..nhe {
+        let mut exterior_boundary_length = vec![0.0f64; num_units];
+        for h in 0..num_half_edges {
             let he = dcel.half_edge(HalfEdgeId(h));
             let unit = face_to_unit[he.face.0];
             if unit == UnitId::EXTERIOR { continue; }
@@ -454,10 +517,10 @@ impl Region {
         }
 
         // 4e. Centroid (vertex-average of each unit's half-edge origins).
-        let mut sum_x = vec![0.0f64; nu];
-        let mut sum_y = vec![0.0f64; nu];
-        let mut count = vec![0u32; nu];
-        for h in 0..nhe {
+        let mut sum_x = vec![0.0f64; num_units];
+        let mut sum_y = vec![0.0f64; num_units];
+        let mut count = vec![0u32; num_units];
+        for h in 0..num_half_edges {
             let he = dcel.half_edge(HalfEdgeId(h));
             let unit = face_to_unit[he.face.0];
             if unit == UnitId::EXTERIOR { continue; }
@@ -467,7 +530,7 @@ impl Region {
             sum_y[u] += c.y;
             count[u] += 1;
         }
-        let centroid: Vec<Coord<f64>> = (0..nu).map(|u| {
+        let centroid: Vec<Coord<f64>> = (0..num_units).map(|u| {
             if count[u] == 0 {
                 Coord { x: 0.0, y: 0.0 }
             } else {
@@ -480,11 +543,11 @@ impl Region {
 
         // 4f. Bounds (axis-aligned bounding box per unit).
         let inf = f64::INFINITY;
-        let mut min_x = vec![ inf; nu];
-        let mut min_y = vec![ inf; nu];
-        let mut max_x = vec![-inf; nu];
-        let mut max_y = vec![-inf; nu];
-        for h in 0..nhe {
+        let mut min_x = vec![ inf; num_units];
+        let mut min_y = vec![ inf; num_units];
+        let mut max_x = vec![-inf; num_units];
+        let mut max_y = vec![-inf; num_units];
+        for h in 0..num_half_edges {
             let he = dcel.half_edge(HalfEdgeId(h));
             let unit = face_to_unit[he.face.0];
             if unit == UnitId::EXTERIOR { continue; }
@@ -495,7 +558,7 @@ impl Region {
             if c.x > max_x[u] { max_x[u] = c.x; }
             if c.y > max_y[u] { max_y[u] = c.y; }
         }
-        let bounds: Vec<Rect<f64>> = (0..nu).map(|u| {
+        let bounds: Vec<Rect<f64>> = (0..num_units).map(|u| {
             let (mnx, mny) = if min_x[u].is_finite() { (min_x[u], min_y[u]) } else { (0.0, 0.0) };
             let (mxx, mxy) = if max_x[u].is_finite() { (max_x[u], max_y[u]) } else { (0.0, 0.0) };
             Rect::new(Coord { x: mnx, y: mny }, Coord { x: mxx, y: mxy })
@@ -520,8 +583,8 @@ impl Region {
         };
 
         // 4h. is_exterior flag.
-        let mut is_exterior = vec![false; nu];
-        for h in 0..nhe {
+        let mut is_exterior = vec![false; num_units];
+        for h in 0..num_half_edges {
             let he = dcel.half_edge(HalfEdgeId(h));
             let unit = face_to_unit[he.face.0];
             if unit == UnitId::EXTERIOR { continue; }
@@ -533,8 +596,8 @@ impl Region {
         // -----------------------------------------------------------------
         // 5. Build adjacency matrices
         // -----------------------------------------------------------------
-        let adjacent = build_adjacent(&dcel, &face_to_unit, nu);
-        let touching = build_touching(&dcel, &face_to_unit, nu);
+        let adjacent = build_adjacent(&dcel, &face_to_unit, &edge_length, num_units);
+        let touching = build_touching(&dcel, &face_to_unit, num_units);
         let rtree = SpatialIndex::new(&bounds);
 
         let region = Region {
@@ -622,6 +685,28 @@ fn edge_length_m(c0: Coord<f64>, c1: Coord<f64>) -> f64 {
     (dlat * dlat + dx * dx).sqrt() * M_PER_DEG
 }
 
+/// Pack two `VertexId`s into a single `u64` for use as a HashMap key.
+/// Requires vertex count < 2^32 (guaranteed for any realistic dataset).
+#[inline]
+fn pack_edge(a: VertexId, b: VertexId) -> u64 {
+    (a.0 as u64) << 32 | b.0 as u64
+}
+
+/// Signed area of a coordinate ring (shoelace, degrees²).
+/// Positive = CCW, Negative = CW.
+fn ring_signed_area(coords: &[Coord<f64>]) -> f64 {
+    let n = coords.len();
+    if n < 3 { return 0.0; }
+    let edge_count = if coords[0] == coords[n - 1] { n - 1 } else { n };
+    let mut area = 0.0f64;
+    for i in 0..edge_count {
+        let a = coords[i];
+        let b = coords[(i + 1) % n];
+        area += a.x * b.y - b.x * a.y;
+    }
+    area / 2.0
+}
+
 /// Signed area of a face cycle in degrees² (no metric correction).
 /// Negative for CW cycles, positive for CCW.
 fn signed_area_deg(dcel: &Dcel<Coord<f64>>, cycle: &[HalfEdgeId]) -> f64 {
@@ -672,51 +757,51 @@ mod tests {
 
     #[test]
     fn new_two_squares_succeeds() {
-        Region::new(two_squares(), 1e-7).expect("construction should succeed");
+        Region::new(two_squares(), None).expect("construction should succeed");
     }
 
     #[test]
     fn new_returns_correct_unit_count() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         assert_eq!(r.num_units(), 2);
     }
 
     #[test]
     fn new_units_are_adjacent() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         assert!(r.are_adjacent(UnitId(0), UnitId(1)));
     }
 
     #[test]
     fn new_units_not_self_adjacent() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         assert!(!r.are_adjacent(UnitId(0), UnitId(0)));
     }
 
     #[test]
     fn new_both_units_are_exterior() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         assert!(r.is_exterior(UnitId(0)));
         assert!(r.is_exterior(UnitId(1)));
     }
 
     #[test]
     fn new_area_is_positive() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         assert!(r.area(UnitId(0)) > 0.0);
         assert!(r.area(UnitId(1)) > 0.0);
     }
 
     #[test]
     fn new_perimeter_is_positive() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         assert!(r.perimeter(UnitId(0)) > 0.0);
         assert!(r.perimeter(UnitId(1)) > 0.0);
     }
 
     #[test]
     fn new_bounds_are_correct() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         let b0 = r.bounds(UnitId(0));
         assert!((b0.min().x - 0.0).abs() < 1e-9);
         assert!((b0.min().y - 0.0).abs() < 1e-9);
@@ -726,7 +811,7 @@ mod tests {
 
     #[test]
     fn new_centroid_is_inside_bounds() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         for uid in r.unit_ids() {
             let c = r.centroid(uid);
             let b = r.bounds(uid);
@@ -737,13 +822,13 @@ mod tests {
 
     #[test]
     fn new_shared_boundary_positive() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         assert!(r.shared_boundary_length(UnitId(0), UnitId(1)) > 0.0);
     }
 
     #[test]
     fn new_queen_is_superset_of_rook() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         let rook = r.adjacency();
         let queen = r.touching();
         for uid in r.unit_ids() {
@@ -755,7 +840,7 @@ mod tests {
 
     #[test]
     fn new_exterior_boundary_positive() {
-        let r = Region::new(two_squares(), 1e-7).unwrap();
+        let r = Region::new(two_squares(), None).unwrap();
         assert!(r.exterior_boundary_length(UnitId(0)) > 0.0);
         assert!(r.exterior_boundary_length(UnitId(1)) > 0.0);
     }
@@ -771,7 +856,7 @@ mod tests {
             MultiPolygon(vec![rect_poly(1.0, 0.0, 2.0, 1.0)]),
             MultiPolygon(vec![rect_poly(0.0, 1.0, 1.0, 2.0)]),
         ];
-        let r = Region::new(geoms, 1e-7).unwrap();
+        let r = Region::new(geoms, None).unwrap();
         assert_eq!(r.num_units(), 3);
         // u0 adjacent to u1 (right) and u2 (above)
         assert!(r.are_adjacent(UnitId(0), UnitId(1)));
@@ -788,7 +873,7 @@ mod tests {
 
     #[test]
     fn new_empty_returns_error() {
-        match Region::new(vec![], 1e-7) {
+        match Region::new(vec![], None) {
             Err(RegionError::InvalidGeometry(_)) => {}
             other => panic!("expected InvalidGeometry, got {:?}", other.err()),
         }

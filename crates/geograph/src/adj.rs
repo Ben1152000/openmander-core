@@ -10,6 +10,10 @@ pub struct AdjacencyMatrix {
     offsets: Vec<u32>,
     /// Flattened neighbor lists; sorted within each row.
     neighbors: Vec<UnitId>,
+    /// Optional per-edge weights, aligned to `neighbors`.
+    /// When present, `weights[i]` is the weight of the directed edge
+    /// at position `i` in the flattened neighbor array.
+    weights: Option<Vec<f64>>,
 }
 
 impl AdjacencyMatrix {
@@ -42,7 +46,55 @@ impl AdjacencyMatrix {
         for &(_, v) in &pairs {
             neighbors.push(v);
         }
-        Self { offsets, neighbors }
+        Self { offsets, neighbors, weights: None }
+    }
+
+    /// Build a CSR adjacency matrix from a list of directed `(row, col, weight)`
+    /// triples.
+    ///
+    /// `num_units` sets the number of rows.  Triples where either unit equals
+    /// `UnitId::EXTERIOR` are silently dropped.  Duplicate `(row, col)` pairs
+    /// have their weights **summed**.  The resulting CSR rows are sorted by
+    /// column (neighbor `UnitId`).
+    pub(crate) fn from_directed_pairs_weighted(
+        num_units: usize,
+        mut triples: Vec<(UnitId, UnitId, f64)>,
+    ) -> Self {
+        // Drop any triple involving EXTERIOR.
+        triples.retain(|&(u, v, _)| u != UnitId::EXTERIOR && v != UnitId::EXTERIOR);
+        // Sort by (row, col) so we can merge duplicates.
+        triples.sort_unstable_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+
+        // Merge duplicates: sum weights for identical (row, col).
+        let mut merged: Vec<(UnitId, UnitId, f64)> = Vec::with_capacity(triples.len());
+        for (u, v, w) in triples {
+            if let Some(last) = merged.last_mut() {
+                if last.0 == u && last.1 == v {
+                    last.2 += w;
+                    continue;
+                }
+            }
+            merged.push((u, v, w));
+        }
+
+        let mut offsets = vec![0u32; num_units + 1];
+        let mut neighbors: Vec<UnitId> = Vec::with_capacity(merged.len());
+        let mut weights: Vec<f64> = Vec::with_capacity(merged.len());
+
+        // Count neighbors per row.
+        for &(u, _, _) in &merged {
+            offsets[u.0 as usize + 1] += 1;
+        }
+        // Prefix-sum.
+        for i in 1..=num_units {
+            offsets[i] += offsets[i - 1];
+        }
+        // Fill neighbor and weight lists (already sorted by (row, col)).
+        for &(_, v, w) in &merged {
+            neighbors.push(v);
+            weights.push(w);
+        }
+        Self { offsets, neighbors, weights: Some(weights) }
     }
 
     /// Number of units covered by this matrix.
@@ -114,6 +166,37 @@ impl AdjacencyMatrix {
     pub fn target_at(&self, edge_idx: usize) -> UnitId {
         self.neighbors[edge_idx]
     }
+
+    // -----------------------------------------------------------------------
+    // Edge weights
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` if this matrix has per-edge weights.
+    #[inline]
+    pub fn has_weights(&self) -> bool { self.weights.is_some() }
+
+    /// Weight at the given flat directed-edge index.
+    ///
+    /// Returns `0.0` if no weights are stored.
+    #[inline]
+    pub fn weight_at(&self, edge_idx: usize) -> f64 {
+        self.weights.as_ref().map_or(0.0, |w| w[edge_idx])
+    }
+
+    /// Slice of weights for `unit`'s neighbors, aligned to `neighbors(unit)`.
+    ///
+    /// Returns an empty slice if no weights are stored.
+    #[inline]
+    pub fn weights_of(&self, unit: UnitId) -> &[f64] {
+        match &self.weights {
+            Some(w) => {
+                let start = self.offsets[unit.0 as usize] as usize;
+                let end   = self.offsets[unit.0 as usize + 1] as usize;
+                &w[start..end]
+            }
+            None => &[],
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +223,7 @@ mod tests {
             neighbors.extend(list.iter().map(|&x| UnitId(x)));
             offsets.push(neighbors.len() as u32);
         }
-        AdjacencyMatrix { offsets, neighbors }
+        AdjacencyMatrix { offsets, neighbors, weights: None }
     }
 
     // -----------------------------------------------------------------------
@@ -335,6 +418,76 @@ mod tests {
         let m = make(&[&[1], &[0]]);
         assert_eq!(m.edge_at(2), None);
         assert_eq!(m.edge_at(100), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // from_directed_pairs_weighted
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn weighted_basic_construction() {
+        let triples = vec![
+            (UnitId(0), UnitId(1), 2.5),
+            (UnitId(1), UnitId(0), 2.5),
+        ];
+        let m = AdjacencyMatrix::from_directed_pairs_weighted(2, triples);
+        assert_eq!(m.num_units(), 2);
+        assert!(m.has_weights());
+        assert_eq!(m.neighbors(UnitId(0)), &[UnitId(1)]);
+        assert_eq!(m.weight_at(0), 2.5);
+        assert_eq!(m.weights_of(UnitId(0)), &[2.5]);
+    }
+
+    #[test]
+    fn weighted_sums_duplicates() {
+        let triples = vec![
+            (UnitId(0), UnitId(1), 1.0),
+            (UnitId(0), UnitId(1), 3.0),
+            (UnitId(1), UnitId(0), 4.0),
+        ];
+        let m = AdjacencyMatrix::from_directed_pairs_weighted(2, triples);
+        assert_eq!(m.weights_of(UnitId(0)), &[4.0]); // 1.0 + 3.0
+        assert_eq!(m.weights_of(UnitId(1)), &[4.0]);
+    }
+
+    #[test]
+    fn weighted_drops_exterior() {
+        let triples = vec![
+            (UnitId(0), UnitId::EXTERIOR, 1.0),
+            (UnitId::EXTERIOR, UnitId(0), 1.0),
+            (UnitId(0), UnitId(1), 5.0),
+            (UnitId(1), UnitId(0), 5.0),
+        ];
+        let m = AdjacencyMatrix::from_directed_pairs_weighted(2, triples);
+        assert_eq!(m.num_directed_edges(), 2);
+        assert_eq!(m.weight_at(0), 5.0);
+    }
+
+    #[test]
+    fn weighted_aligned_with_neighbors() {
+        // Path: 0—1—2
+        let triples = vec![
+            (UnitId(0), UnitId(1), 1.0),
+            (UnitId(1), UnitId(0), 1.0),
+            (UnitId(1), UnitId(2), 2.0),
+            (UnitId(2), UnitId(1), 2.0),
+        ];
+        let m = AdjacencyMatrix::from_directed_pairs_weighted(3, triples);
+        // Node 1's neighbors sorted: [0, 2]
+        assert_eq!(m.neighbors(UnitId(1)), &[UnitId(0), UnitId(2)]);
+        assert_eq!(m.weights_of(UnitId(1)), &[1.0, 2.0]);
+    }
+
+    // -----------------------------------------------------------------------
+    // weight accessors on unweighted matrix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unweighted_has_no_weights() {
+        let m = make(&[&[1], &[0]]);
+        assert!(!m.has_weights());
+        assert_eq!(m.weight_at(0), 0.0);
+        assert!(m.weights_of(UnitId(0)).is_empty());
     }
 
     /// Star graph with 20 leaves exercises the binary-search path through

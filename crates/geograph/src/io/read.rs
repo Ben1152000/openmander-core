@@ -121,11 +121,16 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     }
 
     // ---- Adjacency CSR ----
-    let adjacent = read_csr(reader, nu)?;
+    // Read CSR as unweighted, then rebuild Rook adjacency with edge weights
+    // from the DCEL edge lengths.
+    let _adjacent_unweighted = read_csr(reader, nu)?;
     let touching = read_csr(reader, nu)?;
 
     // ---- Rebuild DCEL ----
     let dcel = Dcel { vertices, half_edges, faces };
+
+    // ---- Rebuild Rook adjacency with edge weights from DCEL ----
+    let adjacent = crate::region::adj::build_adjacent(&dcel, &face_to_unit, &edge_length, nu);
 
     // ---- Derive remaining cache fields ----
     let exterior_boundary_length =

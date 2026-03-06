@@ -1,6 +1,7 @@
-mod adj;
+pub(crate) mod adj;
 mod build;
 mod geom;
+mod svg;
 mod topo;
 
 pub use build::RegionError;
@@ -89,6 +90,15 @@ impl Region {
     #[inline]
     pub fn geometry(&self, unit: UnitId) -> &MultiPolygon<f64> {
         &self.geometries[unit.0 as usize]
+    }
+
+    /// Edge weight (shared boundary length in m) at a CSR edge index in the
+    /// Rook adjacency matrix.
+    ///
+    /// Returns `0.0` if the adjacency matrix has no weights.
+    #[inline]
+    pub fn edge_weight_at(&self, csr_idx: usize) -> f64 {
+        self.adjacent.weight_at(csr_idx)
     }
 
     // -----------------------------------------------------------------------
@@ -234,7 +244,9 @@ pub(crate) mod test_helpers {
             UnitId(1),        // FaceId(2) = right
         ];
 
-        let adj      = build_adjacent (&dcel, &face_to_unit, 2);
+        // 7 undirected edges, each with length 1.0
+        let edge_length = vec![1.0; 7];
+        let adj      = build_adjacent (&dcel, &face_to_unit, &edge_length, 2);
         let touching = build_touching(&dcel, &face_to_unit, 2);
 
         let bounds = vec![
@@ -268,8 +280,7 @@ pub(crate) mod test_helpers {
             bounds,
             bounds_all: Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 2.0, y: 1.0 }),
             is_exterior: vec![true, true],
-            // 7 undirected edges, each with length 1.0
-            edge_length: vec![1.0; 7],
+            edge_length,
             adjacent: adj,
             touching,
             rtree,

@@ -45,9 +45,7 @@ impl SpatialIndex {
                 bbox,
             })
             .collect();
-        Self {
-            tree: RTree::bulk_load(entries),
-        }
+        Self { tree: RTree::bulk_load(entries) }
     }
 
     /// Return all `UnitId`s whose bounding box intersects `envelope`.

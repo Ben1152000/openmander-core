@@ -33,7 +33,7 @@ fn l_shape() -> Region {
         MultiPolygon(vec![rect_poly(1.0, 0.0, 2.0, 1.0)]),
         MultiPolygon(vec![rect_poly(0.0, 1.0, 1.0, 2.0)]),
     ];
-    Region::new(geoms, 1e-7).expect("L-shape construction failed")
+    Region::new(geoms, None).expect("L-shape construction failed")
 }
 
 #[test]

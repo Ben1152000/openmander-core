@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use geo::Coord;
 
 /// Snap near-coincident vertices along shared polygon edges to a canonical
@@ -96,7 +98,12 @@ pub(crate) fn snap_vertices(rings: &mut [Vec<Vec<Coord<f64>>>], tolerance: f64) 
     }
 
     // -----------------------------------------------------------------------
-    // Step 4 — Find near-coincident edge pairs from different units
+    // Step 4 — Find near-coincident edge pairs using spatial hash  O(E·k)
+    //
+    // For each directed edge e1 = (i→j) from unit A, we look up vertices k
+    // near e1.i that belong to a different unit B.  For each such k we check
+    // whether unit B has an outgoing edge (k→l) with l ≈ e1.j (same-direction
+    // match) or an incoming edge (m→k) with m ≈ e1.j (reversed match).
     // -----------------------------------------------------------------------
     let tol_sq = tolerance * tolerance;
 
@@ -106,27 +113,70 @@ pub(crate) fn snap_vertices(rings: &mut [Vec<Vec<Coord<f64>>>], tolerance: f64) 
         dx * dx + dy * dy <= tol_sq
     };
 
-    // O(E²) brute force — acceptable for per-region preprocessing.
-    for ei in 0..edges.len() {
-        for ej in (ei + 1)..edges.len() {
-            let e1 = &edges[ei];
-            let e2 = &edges[ej];
-            if e1.unit == e2.unit { continue; }
-
-            let p1 = coords[e1.i];
-            let p2 = coords[e1.j];
-            let q1 = coords[e2.i];
-            let q2 = coords[e2.j];
-
-            // Same-direction match: p1≈q1 and p2≈q2
-            if near(p1, q1) && near(p2, q2) {
-                union(&mut parent, &mut rank, e1.i, e2.i);
-                union(&mut parent, &mut rank, e1.j, e2.j);
+    // 4a. Map each flat vertex index to its owning unit.
+    let mut vertex_unit: Vec<usize> = vec![0usize; n];
+    for (u, unit_rings) in rings.iter().enumerate() {
+        for (r, ring) in unit_rings.iter().enumerate() {
+            for pos in 0..ring.len() {
+                vertex_unit[flat_idxs[u][r][pos]] = u;
             }
-            // Reversed match: p1≈q2 and p2≈q1
-            else if near(p1, q2) && near(p2, q1) {
-                union(&mut parent, &mut rank, e1.i, e2.j);
-                union(&mut parent, &mut rank, e1.j, e2.i);
+        }
+    }
+
+    // 4b. Spatial hash: grid cell → list of flat vertex indices.
+    //     Cell size = tolerance so each vertex only needs 3×3 neighbour check.
+    let inv_tol = 1.0 / tolerance;
+    let cell_of = |c: Coord<f64>| -> (i64, i64) {
+        ((c.x * inv_tol).floor() as i64, (c.y * inv_tol).floor() as i64)
+    };
+
+    let mut vertex_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for vi in 0..n {
+        vertex_grid.entry(cell_of(coords[vi])).or_default().push(vi);
+    }
+
+    // 4c. Edge adjacency lookups: vertex → outgoing / incoming edge indices.
+    let mut edges_from: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut edges_to:   Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (ei, e) in edges.iter().enumerate() {
+        edges_from[e.i].push(ei);
+        edges_to[e.j].push(ei);
+    }
+
+    // 4d. For each edge, find cross-unit matches via the spatial hash.
+    for ei in 0..edges.len() {
+        let (e1_unit, e1_i, e1_j) = (edges[ei].unit, edges[ei].i, edges[ei].j);
+        let p_i = coords[e1_i];
+        let p_j = coords[e1_j];
+        let (cx, cy) = cell_of(p_i);
+
+        for dx in -1i64..=1 {
+            for dy in -1i64..=1 {
+                let Some(candidates) = vertex_grid.get(&(cx + dx, cy + dy)) else { continue };
+                for &k in candidates {
+                    if vertex_unit[k] == e1_unit { continue; }
+                    if !near(p_i, coords[k]) { continue; }
+
+                    // Same-direction match: e1.i ≈ k (start), e1.j ≈ l (end)
+                    let from_k: Vec<usize> = edges_from[k].clone();
+                    for ej in from_k {
+                        let l = edges[ej].j;
+                        if near(p_j, coords[l]) {
+                            union(&mut parent, &mut rank, e1_i, k);
+                            union(&mut parent, &mut rank, e1_j, l);
+                        }
+                    }
+
+                    // Reversed match: e1.i ≈ k (end), e1.j ≈ m (start)
+                    let to_k: Vec<usize> = edges_to[k].clone();
+                    for ej in to_k {
+                        let m = edges[ej].i;
+                        if near(p_j, coords[m]) {
+                            union(&mut parent, &mut rank, e1_i, k);
+                            union(&mut parent, &mut rank, e1_j, m);
+                        }
+                    }
+                }
             }
         }
     }

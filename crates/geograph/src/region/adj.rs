@@ -31,20 +31,25 @@ impl Region {
 // ---------------------------------------------------------------------------
 
 /// Walk every half-edge; when the two faces on either side belong to different
-/// non-EXTERIOR units, emit both directed pairs.
-pub(crate) fn build_adjacent(dcel: &Dcel<Coord<f64>>, face_to_unit: &[UnitId], num_units: usize) -> AdjacencyMatrix {
-    let mut pairs = Vec::<(UnitId, UnitId)>::new();
+/// non-EXTERIOR units, emit both directed pairs with edge lengths as weights.
+pub(crate) fn build_adjacent(
+    dcel: &Dcel<Coord<f64>>,
+    face_to_unit: &[UnitId],
+    edge_length: &[f64],
+    num_units: usize,
+) -> AdjacencyMatrix {
+    let mut triples = Vec::<(UnitId, UnitId, f64)>::new();
 
     for h in 0..dcel.num_half_edges() {
         let he = dcel.half_edge(HalfEdgeId(h));
         let unit  = face_to_unit[he.face.0];
         let other = face_to_unit[dcel.half_edge(he.twin).face.0];
         if unit != other {
-            pairs.push((unit, other));
+            triples.push((unit, other, edge_length[h / 2]));
         }
     }
 
-    AdjacencyMatrix::from_directed_pairs(num_units, pairs)
+    AdjacencyMatrix::from_directed_pairs_weighted(num_units, triples)
 }
 
 /// Start from Rook pairs, then add all unit-pairs that share a vertex star.
@@ -163,6 +168,34 @@ mod tests {
             for &nb in rook.neighbors(uid) {
                 assert!(queen.contains(uid, nb),
                     "Rook edge ({uid},{nb}) missing from Queen matrix");
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // edge weights
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rook_adjacency_has_weights() {
+        let r = make_two_unit_region();
+        assert!(r.adjacency().has_weights());
+    }
+
+    #[test]
+    fn edge_weight_at_matches_shared_boundary_length() {
+        let r = make_two_unit_region();
+        // For each pair of Rook-adjacent units, the CSR weight should
+        // equal the shared_boundary_length computed from the DCEL.
+        for uid in r.unit_ids() {
+            let offset = r.adjacency().offset(uid);
+            for (i, &nb) in r.neighbors(uid).iter().enumerate() {
+                let csr_weight = r.edge_weight_at(offset + i);
+                let dcel_weight = r.shared_boundary_length(uid, nb);
+                assert!(
+                    (csr_weight - dcel_weight).abs() < 1e-9,
+                    "weight mismatch for ({uid},{nb}): csr={csr_weight} dcel={dcel_weight}"
+                );
             }
         }
     }

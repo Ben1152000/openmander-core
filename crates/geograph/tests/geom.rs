@@ -23,7 +23,7 @@ fn two_squares() -> Region {
         MultiPolygon(vec![rect_poly(0.0, 0.0, 1.0, 1.0)]),
         MultiPolygon(vec![rect_poly(1.0, 0.0, 2.0, 1.0)]),
     ];
-    Region::new(geoms, 1e-7).expect("two-square construction failed")
+    Region::new(geoms, None).expect("two-square construction failed")
 }
 
 /// Four squares in a 2×2 grid:
@@ -41,7 +41,7 @@ fn four_squares() -> Region {
         MultiPolygon(vec![rect_poly(0.0, 1.0, 1.0, 2.0)]),
         MultiPolygon(vec![rect_poly(1.0, 1.0, 2.0, 2.0)]),
     ];
-    Region::new(geoms, 1e-7).expect("four-square construction failed")
+    Region::new(geoms, None).expect("four-square construction failed")
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn exterior_boundary_length_is_zero_for_interior_unit() {
             geoms.push(MultiPolygon(vec![rect_poly(x0, y0, x0 + 1.0, y0 + 1.0)]));
         }
     }
-    let r = Region::new(geoms, 1e-7).expect("3x3 grid construction failed");
+    let r = Region::new(geoms, None).expect("3x3 grid construction failed");
     // Unit 4 is at (1,1) — the centre cell.
     let centre = UnitId(4);
     assert!(
@@ -190,7 +190,7 @@ fn compactness_of_circle_approximation_near_one() {
     coords.push(coords[0]); // close the ring
     let poly = Polygon::new(LineString(coords), vec![]);
     let geoms = vec![MultiPolygon(vec![poly])];
-    let r = Region::new(geoms, 1e-7).expect("circle construction failed");
+    let r = Region::new(geoms, None).expect("circle construction failed");
     let c = r.compactness_of([UnitId(0)]);
     assert!(
         c > 0.95,
@@ -242,7 +242,7 @@ fn shared_boundary_length_is_zero_for_non_adjacent_units() {
         MultiPolygon(vec![rect_poly(1.0, 0.0, 2.0, 1.0)]),
         MultiPolygon(vec![rect_poly(0.0, 1.0, 1.0, 2.0)]),
     ];
-    let r = Region::new(geoms, 1e-7).expect("L-shape construction failed");
+    let r = Region::new(geoms, None).expect("L-shape construction failed");
     assert!(
         r.shared_boundary_length(UnitId(1), UnitId(2)) < 1e-6,
         "corner-touching units should have zero shared boundary"

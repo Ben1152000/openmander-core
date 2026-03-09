@@ -23,7 +23,6 @@ pub(crate) mod svg;
 pub(crate) mod shp;
 pub(crate) mod csr;
 pub(crate) mod wkb;
-pub(crate) mod pack;
 
 #[cfg(feature = "parquet")]
 pub(crate) mod parquet;

@@ -5,14 +5,10 @@ use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
 use geo::MultiPolygon;
 use sha2::{Digest, Sha256};
 
-use crate::{map::{
-    GeoType,
-    Map,
-    MapLayer,
-    ParentRefs,
-    pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats},
-    util,
-}};
+use crate::{
+    map::{GeoType, Map, MapLayer, ParentRefs, util},
+    map::pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats},
+};
 
 /// Computes the SHA-256 hash of the given bytes and returns it as a hex string.
 fn sha256_bytes(bytes: &[u8]) -> String {
@@ -199,12 +195,12 @@ impl MapLayer {
 }
 
 impl Map {
-    /// Old API: write pack to disk directory (uses default format).
+    /// Write pack to disk directory using the default format.
     pub fn write_to_pack(&self, path: &Path) -> Result<()> {
         self.write_to_pack_with_format(path, PackFormat::default())
     }
 
-    /// Write pack to disk directory with specified format.
+    /// Write pack to disk directory with the specified format.
     pub fn write_to_pack_with_format(&self, path: &Path, format: PackFormat) -> Result<()> {
         for dir in ["adj", "data", "geom", "hull"] {
             util::ensure_dir_exists(&path.join(dir))?;
@@ -216,12 +212,12 @@ impl Map {
         Ok(())
     }
 
-    /// New API: write pack into any sink (memory, disk, etc.) with default format.
+    /// Write pack into any [`PackSink`] using the default format.
     pub fn write_to_pack_sink(&self, sink: &mut dyn PackSink, pack_root_for_manifest: &Path) -> Result<()> {
         self.write_to_pack_sink_with_format(sink, pack_root_for_manifest, PackFormat::default())
     }
 
-    /// New API: write pack into any sink (memory, disk, etc.) with specified format.
+    /// Write pack into any [`PackSink`] with the specified format.
     pub fn write_to_pack_sink_with_format(&self, sink: &mut dyn PackSink, pack_root_for_manifest: &Path, format: PackFormat) -> Result<()> {
         let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();

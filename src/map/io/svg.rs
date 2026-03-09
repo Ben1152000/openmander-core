@@ -1,143 +1,63 @@
 use std::{io::Write, path::Path};
 
-use anyhow::{Context, Ok, Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use geo::Coord;
 use polars::prelude::{ChunkAgg, DataType};
 
-use crate::{map::MapLayer};
+use crate::{io::svg::Viewport, map::MapLayer};
 
 impl MapLayer {
-    /// Small wrapper with defaults.
+    /// Write the layer as an SVG file.
+    /// If `series` is `Some(col)`, polygons are colored by that numeric column.
     pub fn to_svg(&self, path: &Path, series: Option<&str>) -> Result<()> {
-        self.to_svg_with_size(path, 1200, 10, series)
+        let mut writer = crate::io::svg::SvgWriter::new(path)?;
+        self.render_svg(&mut writer, 1200, 10, series)?;
+        writer.flush()?;
+        Ok(())
     }
 
-    /// Generate SVG as a string (for browser/WASM use).
+    /// Return the layer as an SVG string (for browser/WASM use).
+    /// If `series` is `Some(col)`, polygons are colored by that numeric column.
     pub fn to_svg_string(&self, series: Option<&str>) -> Result<String> {
-        self.to_svg_string_with_size(1200, 10, series)
-    }
-
-    fn to_svg_string_with_size(&self, width: i32, margin: i32, series: Option<&str>) -> Result<String> {
-        let geoms = self.geoms.as_ref()
-            .ok_or_else(|| anyhow!("[to_svg_string] No geometries available to draw."))?;
-
-        let bounds = geoms.bounds()
-            .ok_or_else(|| anyhow!("[to_svg_string] Could not determine bounds; nothing to draw."))?;
-
-        let centroids = self.centroids();
-
-        let margin = margin as f64;
-        let width = width as f64;
-        let scale = (width - 2.0 * margin) / bounds.width();
-        let height = bounds.height() * scale + 2.0 * margin;
-
-        // --- Map lon/lat -> SVG coords (preserve aspect, Y down) ---
-        let project = move |coord: &Coord<f64>| -> (f64, f64) {
-            let x = margin + (coord.x - bounds.min().x) * scale;
-            let y = margin + (bounds.max().y - coord.y) * scale; // invert vertically
-            (x, y)
-        };
-
-        // --- Write SVG to string ---
         let mut writer = crate::io::svg::SvgStringWriter::new();
-        writer.write_header(width, height, margin, scale, &bounds)?;
-        writer.write_styles()?;
-
-        // Compute colors if necessary.
-        if let Some(series) = series {
-            crate::io::svg::draw_polygons_with_fill(
-                &mut writer,
-                geoms.shapes(),
-                &self.compute_fill_colors(series)?,
-                &project,
-            )?;
-        } else {
-            crate::io::svg::draw_polygons(&mut writer, geoms.shapes(), &project)?;
-        }
-
-        // Draw adjacency lines between centroids
-        let edges = self.adjacencies.iter().enumerate()
-            .flat_map(|(i, neighbors)| {
-                neighbors.iter()
-                    .filter_map(move |&j| ((j as usize) > i).then_some((i, j as usize))) // avoid duplicate edges
-            })
-            .map(|(i, j)| (&centroids[i], &centroids[j]))
-            .collect::<Vec<_>>();
-        crate::io::svg::draw_edges(&mut writer, &edges, &project)?;
-
-        writer.write_footer()?;
+        self.render_svg(&mut writer, 1200, 10, series)?;
         writer.into_string()
     }
 
-    /// Display the layer as an SVG file, including polygons and adjacency lines between centroids.
-    /// If `series` is Some(col), polygons are colored by that numeric column.
-    fn to_svg_with_size(&self, path: &Path, width: i32, margin: i32, series: Option<&str>) -> Result<()> {
+    fn render_svg(&self, writer: &mut impl Write, width: i32, margin: i32, series: Option<&str>) -> Result<()> {
         let geoms = self.geoms.as_ref()
             .ok_or_else(|| anyhow!("[to_svg] No geometries available to draw."))?;
-
         let bounds = geoms.bounds()
             .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?;
 
         let centroids = self.centroids();
+        let vp = Viewport::new(bounds, width as f64, margin as f64);
+        let project = move |coord: &Coord<f64>| vp.project(coord);
 
-        let margin = margin as f64;
-        let width = width as f64;
-        let scale = (width - 2.0 * margin) / bounds.width();
-        let height = bounds.height() * scale + 2.0 * margin;
+        crate::io::svg::write_svg_header(writer, &vp)?;
+        crate::io::svg::write_svg_styles(writer)?;
 
-        // --- Map lon/lat -> SVG coords (preserve aspect, Y down) ---
-        let project = move |coord: &Coord<f64>| -> (f64, f64) {
-            let x = margin + (coord.x - bounds.min().x) * scale;
-            let y = margin + (bounds.max().y - coord.y) * scale; // invert vertically
-            (x, y)
-        };
-
-        // --- Write SVG ---
-        let mut writer = crate::io::svg::SvgWriter::new(path)?;
-        writer.write_header(width, height, margin, scale, &bounds)?;
-        writer.write_styles()?;
-
-        // Compute colors if necessary.
         if let Some(series) = series {
             crate::io::svg::draw_polygons_with_fill(
-                &mut writer,
+                writer,
                 geoms.shapes(),
                 &self.compute_fill_colors(series)?,
                 &project,
             )?;
         } else {
-            crate::io::svg::draw_polygons(&mut writer, geoms.shapes(), &project)?;
+            crate::io::svg::draw_polygons(writer, geoms.shapes(), &project)?;
         }
 
-        // Draw adjacency lines between centroids
         let edges = self.adjacencies.iter().enumerate()
             .flat_map(|(i, neighbors)| {
                 neighbors.iter()
-                    .filter_map(move |&j| ((j as usize) > i).then_some((i, j as usize))) // avoid duplicate edges
+                    .filter_map(move |&j| ((j as usize) > i).then_some((i, j as usize)))
             })
             .map(|(i, j)| (&centroids[i], &centroids[j]))
             .collect::<Vec<_>>();
-        crate::io::svg::draw_edges(&mut writer, &edges, &project)?;
+        crate::io::svg::draw_edges(writer, &edges, &project)?;
 
-        // // --- Draw a circle at each centroid (nodes), on top of edges ---
-        // // Radius is in screen pixels; tweak as desired.
-        // let node_radius = 50_f64;
-        // for point in &centroids {
-        //     let (x, y) = project(&point.coord().unwrap());
-        //     writeln!(
-        //         &mut writer,
-        //         r##"<circle cx="{:.3}" cy="{:.3}" r="{:.3}"
-        //             fill="#f4f4f4"
-        //             stroke="#000000"
-        //             stroke-width="2"
-        //         />"##,
-        //         x, y, node_radius
-        //     )?;
-        // }
-
-        writer.write_footer()?;
-        writer.flush()?;
-
+        crate::io::svg::write_svg_footer(writer)?;
         Ok(())
     }
 
@@ -147,7 +67,6 @@ impl MapLayer {
         let column = self.unit_data.column(series)
             .with_context(|| format!("[to_svg] missing column {:?}", series))?;
 
-        // Cast to f64 if necessary
         let column = if column.dtype() != &DataType::Float64 {
             column.cast(&DataType::Float64)?
         } else {
@@ -176,7 +95,6 @@ impl MapLayer {
 
         let mut colors = Vec::with_capacity(values.len());
         for v_opt in values.into_iter() {
-            // Nulls → t = 0.0 (lowest color)
             let t = v_opt
                 .map(|v| ((v - min_val) / range).clamp(0.0, 1.0))
                 .unwrap_or(0.0);

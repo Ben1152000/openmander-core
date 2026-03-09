@@ -3,7 +3,34 @@
 use std::io::Write;
 
 use anyhow::{Ok, Result};
-use geo::{Coord, CoordsIter, LineString, MultiPolygon, Point};
+use geo::{Coord, CoordsIter, LineString, MultiPolygon, Point, Rect};
+
+/// Precomputed mapping from geographic bounds to SVG canvas coordinates.
+#[derive(Clone, Copy)]
+pub(crate) struct Viewport {
+    pub width: f64,
+    pub height: f64,
+    pub scale: f64,
+    pub margin: f64,
+    pub bounds: Rect<f64>,
+}
+
+impl Viewport {
+    /// Compute a viewport from geographic bounds, a canvas width, and a margin (all in pixels).
+    pub(crate) fn new(bounds: Rect<f64>, width: f64, margin: f64) -> Self {
+        let scale = (width - 2.0 * margin) / bounds.width();
+        let height = bounds.height() * scale + 2.0 * margin;
+        Self { width, height, scale, margin, bounds }
+    }
+
+    /// Project a geographic coordinate to SVG canvas coordinates (x right, y down).
+    #[inline]
+    pub(crate) fn project(&self, coord: &Coord<f64>) -> (f64, f64) {
+        let x = self.margin + (coord.x - self.bounds.min().x) * self.scale;
+        let y = self.margin + (self.bounds.max().y - coord.y) * self.scale;
+        (x, y)
+    }
+}
 
 /// Projection function: lon/lat -> SVG coords (x,y)
 pub(crate) type Projection = dyn Fn(&Coord<f64>) -> (f64, f64);
@@ -99,9 +126,9 @@ fn multipolygon_to_path(shape: &MultiPolygon<f64>, project: &Projection) -> Stri
     let mut out = String::new();
 
     for polygon in &shape.0 {
-        out.push_str(&ring_to_path2(polygon.exterior(), project));
+        out.push_str(&linestring_to_path(polygon.exterior(), project));
         for interior in polygon.interiors() {
-            out.push_str(&ring_to_path2(interior, project));
+            out.push_str(&linestring_to_path(interior, project));
         }
     }
 
@@ -109,7 +136,7 @@ fn multipolygon_to_path(shape: &MultiPolygon<f64>, project: &Projection) -> Stri
 }
 
 /// Build a compact SVG path string for a LineString (ring).
-fn ring_to_path2(ring: &LineString<f64>, project: &Projection) -> String {
+fn linestring_to_path(ring: &LineString<f64>, project: &Projection) -> String {
     let mut out = String::new();
 
     let mut coords = ring.coords_iter()

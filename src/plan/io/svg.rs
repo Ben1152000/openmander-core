@@ -3,7 +3,7 @@ use std::{collections::{HashMap, HashSet}, io::Write, path::Path};
 use anyhow::{anyhow, Result};
 use geo::Coord;
 
-use crate::{io::svg::{Projection, SegmentSet}, plan::Plan};
+use crate::{io::svg::{Projection, SegmentSet, Viewport}, plan::Plan};
 
 impl Plan {
     /// Small wrapper with defaults.
@@ -16,24 +16,14 @@ impl Plan {
         let bounds = self.map().base()?.bounds()
             .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?;
 
-        let margin = margin as f64;
-        let width = width as f64;
-        let scale = (width - 2.0 * margin) / bounds.width();
-        let height = bounds.height() * scale + 2.0 * margin;
-
-        // lon/lat -> SVG coords (Y down)
-        let project = move |coord: &Coord<f64>| -> (f64, f64) {
-            let x = margin + (coord.x - bounds.min().x) * scale;
-            let y = margin + (bounds.max().y - coord.y) * scale;
-            (x, y)
-        };
+        let vp = Viewport::new(bounds, width as f64, margin as f64);
 
         // --- Precompute state outer boundary as a segment set ---
         // Build a set of undirected segments for the *outer* state boundary (all exteriors).
         let state_outline = {
             let outline = self.map().region()?.union()
                 .ok_or_else(|| anyhow!("[to_svg] No state geoms available"))?;
-            
+
             let mut ptmap: HashMap<crate::io::svg::QuantizedPoint, Coord<f64>> = HashMap::new();
             let mut set = crate::io::svg::SegmentSet::default();
 
@@ -46,8 +36,10 @@ impl Plan {
 
         // --- Write SVG ---
         let mut writer = crate::io::svg::SvgWriter::new(path)?;
-        writer.write_header(width, height, margin, scale, &bounds)?;
+        writer.write_header(&vp)?;
         writer.write_styles()?;
+
+        let project = move |coord: &Coord<f64>| vp.project(coord);
 
         // Draw each district as a single dissolved path (holes supported via even-odd fill).
         for part in 1..=self.num_districts() as usize {

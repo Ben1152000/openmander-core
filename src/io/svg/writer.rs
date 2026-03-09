@@ -4,6 +4,8 @@ use std::{fs::File, io::{BufWriter, Write}, path::Path};
 
 use anyhow::{Context, Result};
 
+use super::Viewport;
+
 pub(crate) struct SvgWriter {
     writer: BufWriter<File>
 }
@@ -59,8 +61,8 @@ impl SvgWriter {
     }
 
     /// Write the SVG header, including the XML declaration and opening <svg> tag.
-    pub(crate) fn write_header(&mut self, width: f64, height: f64, margin: f64, scale: f64, bounds: &geo::Rect) -> Result<()> {
-        write_svg_header(self, width, height, margin, scale, bounds)
+    pub(crate) fn write_header(&mut self, vp: &Viewport) -> Result<()> {
+        write_svg_header(self, vp)
     }
     
     /// Write SVG styles for map features.
@@ -74,27 +76,12 @@ impl SvgWriter {
     }
 }
 
-impl SvgStringWriter {
-    /// Write the SVG header, including the XML declaration and opening <svg> tag.
-    pub(crate) fn write_header(&mut self, width: f64, height: f64, margin: f64, scale: f64, bounds: &geo::Rect) -> Result<()> {
-        write_svg_header(self, width, height, margin, scale, bounds)
-    }
-    
-    /// Write SVG styles for map features.
-    pub(crate) fn write_styles(&mut self) -> Result<()> {
-        write_svg_styles(self)
-    }
-
-    /// Write the closing </svg> tag.
-    pub(crate) fn write_footer(&mut self) -> Result<()> {
-        write_svg_footer(self)
-    }
-}
 
 /// Write SVG header to any writer (standalone function).
-pub(crate) fn write_svg_header<W: Write>(writer: &mut W, width: f64, height: f64, margin: f64, scale: f64, bounds: &geo::Rect) -> Result<()> {
+pub(crate) fn write_svg_header<W: Write>(writer: &mut W, vp: &Viewport) -> Result<()> {
+    let Viewport { width, height, margin, scale, bounds } = vp;
     writeln!(writer, r##"<?xml version="1.0" encoding="UTF-8" standalone="no"?>"##)?;
-    writeln!(writer, r##"<svg xmlns="http://www.w3.org/2000/svg" 
+    writeln!(writer, r##"<svg xmlns="http://www.w3.org/2000/svg"
         width="{width}" height="{height}"
         viewBox="0 0 {width} {height}"
         data-lon-min="{lon_min}" data-lon-max="{lon_max}"

@@ -40,6 +40,7 @@ pub(crate) fn read_csv_bytes(bytes: &[u8]) -> Result<DataFrame> {
 }
 
 /// Reads a pipe-delimited `.txt` file with a header row into a Polars DataFrame.
+#[cfg(feature = "download")]
 pub(crate) fn read_pipe_delimited_txt(path: &Path) -> Result<DataFrame> {
     let file = File::open(path)
         .with_context(|| format!("[io::csv::read] Failed to open pipe-delimited file: {}", path.display()))?;

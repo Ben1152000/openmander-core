@@ -20,10 +20,12 @@ impl GeoId {
     #[inline] pub fn id(&self) -> &str { &self.id }
 
     /// Syntactic sugar for creating a new GeoId of type Block.
+    #[cfg(feature = "download")]
     #[inline] pub(super) fn new_block(id: &str) -> Self { Self::new(GeoType::Block, id) }
 
     /// Returns a new `GeoId` corresponding to the higher-level `GeoType`
     /// by truncating this GeoId's string to the correct prefix length.
+    #[cfg(feature = "download")]
     #[inline] pub(super) fn to_parent(&self, parent_ty: GeoType) -> GeoId {
         let n = self.id.len().min(parent_ty.id_len());
         GeoId { ty: parent_ty, id: self.id[..n].into() }

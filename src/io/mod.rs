@@ -36,6 +36,7 @@ pub(crate) mod wkb {
     pub(crate) use write::*;
 }
 
+#[cfg(feature = "download")]
 pub(crate) mod shp;
 pub(crate) mod csr;
 

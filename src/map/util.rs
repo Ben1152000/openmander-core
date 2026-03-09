@@ -1,7 +1,6 @@
-use std::{fs::{File, create_dir_all}, path::Path};
+use std::{fs::create_dir_all, path::Path};
 
-use anyhow::{Context, Result, anyhow, ensure};
-use zip::ZipArchive;
+use anyhow::{Context, Result, ensure};
 
 /// Create the directory if it doesn’t exist; error if a non-directory exists there.
 pub(crate) fn ensure_dir_exists(path: &Path) -> Result<()> {
@@ -23,8 +22,12 @@ pub(crate) fn require_dir_exists(path: &Path) -> Result<()> {
 
 /// Extracts the given `.zip` file to the target directory.
 /// If `delete_after` is `true`, removes the `.zip` file after a successful extraction.
+#[cfg(feature = "download")]
 pub(crate) fn extract_zip(zip_path: &Path, dest_dir: &Path, delete_after: bool) -> Result<()> {
-    let file = File::open(zip_path)
+    use anyhow::anyhow;
+    use zip::ZipArchive;
+
+    let file = std::fs::File::open(zip_path)
         .map_err(|e| anyhow!("failed to open {:?}: {}", zip_path, e))?;
     let mut archive = ZipArchive::new(file)
         .map_err(|e| anyhow!("failed to read zip archive {:?}: {}", zip_path, e))?;
@@ -42,6 +45,7 @@ pub(crate) fn extract_zip(zip_path: &Path, dest_dir: &Path, delete_after: bool) 
 }
 
 /// Two-letter postal code → full state name
+#[cfg(feature = "download")]
 pub(crate) fn state_abbr_to_name(state: &str) -> Option<&'static str> {
     match state {
         "AL" => Some("Alabama"),
@@ -101,6 +105,7 @@ pub(crate) fn state_abbr_to_name(state: &str) -> Option<&'static str> {
 }
 
 /// Two-letter postal code → FIPS code
+#[cfg(feature = "download")]
 pub(crate) fn state_abbr_to_fips(state: &str) -> Option<&'static str> {
     match state {
         "AL" => Some("01"),

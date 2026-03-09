@@ -30,6 +30,7 @@ impl Map {
     }
 
     /// Get a mutable reference to a specific map layer by geographic type.
+    #[cfg(feature = "download")]
     #[inline]
     pub(super) fn layer_mut(&mut self, ty: GeoType) -> Option<&mut MapLayer> {
         self.layers[ty as usize].as_mut()

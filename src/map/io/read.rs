@@ -175,11 +175,22 @@ fn read_layer_from_pack_source_with_formats(
         }
     }
 
-    // region (optional — geom/{layer_name}.region)
-    let region_file = format!("geom/{layer_name}.region");
+    // region (optional — geom/{layer_name}.region.gz or legacy .region)
+    let region_file = if src.has(&format!("geom/{layer_name}.region.gz")) {
+        format!("geom/{layer_name}.region.gz")
+    } else {
+        format!("geom/{layer_name}.region")
+    };
     if src.has(&region_file) {
         let region_bytes = src.get(&region_file)?;
-        match geograph::io::read(&mut region_bytes.as_ref()) {
+        // Auto-detect: gzip magic = [1f 8b], raw geograph magic = b"OMRP"
+        let result = if region_bytes.starts_with(&[0x1f, 0x8b]) {
+            let mut gz = flate2::read::GzDecoder::new(region_bytes.as_ref());
+            geograph::io::read(&mut gz)
+        } else {
+            geograph::io::read(&mut region_bytes.as_ref())
+        };
+        match result {
             Ok(region) => layer.set_region(region),
             Err(e) => eprintln!("[pack] Warning: failed to deserialize region for {layer_name}: {e:?}"),
         }

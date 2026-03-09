@@ -182,10 +182,14 @@ impl MapLayer {
 
         // region (optional — geom/{layer_name}.region)
         if let Some(region_ref) = &self.region {
-            let region_file = format!("geom/{layer_name}.region");
+            let region_file = format!("geom/{layer_name}.region.gz");
             let mut region_bytes: Vec<u8> = Vec::new();
-            geograph::io::write(region_ref.as_ref(), &mut region_bytes)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+            {
+                let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
+                geograph::io::write(region_ref.as_ref(), &mut gz)
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+                gz.finish().context("Failed to finish gzip encoding for region")?;
+            }
             sink.put(&region_file, &region_bytes)?;
             hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
         }
@@ -284,10 +288,14 @@ impl Map {
 
             // Write region file (if exists)
             if let Some(region_ref) = &layer.region {
-                let region_file = format!("geom/{layer_name}.region");
+                let region_file = format!("geom/{layer_name}.region.gz");
                 let mut region_bytes: Vec<u8> = Vec::new();
-                geograph::io::write(region_ref.as_ref(), &mut region_bytes)
-                    .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+                {
+                    let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
+                    geograph::io::write(region_ref.as_ref(), &mut gz)
+                        .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+                    gz.finish().context("Failed to finish gzip encoding for region")?;
+                }
                 sink.put(&region_file, &region_bytes)?;
                 file_hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
             }

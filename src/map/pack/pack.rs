@@ -1,7 +1,12 @@
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 
+#[cfg(feature = "download")]
+use std::time::Duration;
+#[cfg(feature = "download")]
+use anyhow::{Context, anyhow};
+#[cfg(feature = "download")]
 use crate::map::{Map, util};
 
 #[cfg(feature = "download")]

@@ -4,7 +4,11 @@ use anyhow::{Context, Ok, Result, anyhow, bail, ensure};
 use polars::{frame::DataFrame, prelude::*, series::Series};
 use shapefile::dbase::{FieldValue, Record};
 
-use crate::{ParentRefs, common, geom::Geometries, map::{GeoId, GeoType, Map, MapLayer}};
+use crate::{
+    ParentRefs,
+    geom::Geometries,
+    map::{GeoId, GeoType, Map, MapLayer, util},
+};
 
 impl MapLayer {
     /// Loads layer geometries and data from a given .shp file path.
@@ -392,7 +396,7 @@ impl Map {
     /// Build a map pack from the download files in `input_dir`
     #[cfg(feature = "download")]
     pub(crate) fn build_pack(input_dir: &Path, state_code: &str, fips: &str, has_vtd: bool, verbose: u8) -> Result<Self> {
-        common::require_dir_exists(input_dir)?;
+        util::require_dir_exists(input_dir)?;
 
         let mut map = Self::default();
 

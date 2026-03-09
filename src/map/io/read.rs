@@ -2,12 +2,16 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::{common, map::Map, pack::{DiskPack, PackSource, PackFormat, PackFormats, Manifest}};
+use crate::{map::{
+    Map,
+    pack::{DiskPack, PackSource, PackFormat, PackFormats, Manifest},
+    util,
+}};
 
 impl Map {
     /// Old API: read a map from a pack directory at `path`.
     pub fn read_from_pack(path: &Path) -> Result<Self> {
-        common::require_dir_exists(path)?;
+        util::require_dir_exists(path)?;
         let src = DiskPack::new(path);
         
         // Try to read format from manifest first

@@ -2,10 +2,10 @@ use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::{common, map::Map};
+use crate::map::{Map, util};
 
 #[cfg(feature = "download")]
-use crate::pack::download::{cleanup_download_dir, download_data, download_big_file};
+use super::download::{cleanup_download_dir, download_data, download_big_file};
 
 /// Lightweight existence check for a remote file.
 /// Returns Ok(true) if it exists, Ok(false) if it's 404/410, Err(_) otherwise.
@@ -48,15 +48,15 @@ pub(crate) fn remote_file_exists(url: &str) -> Result<bool> {
 #[cfg(feature = "download")]
 pub fn build_pack(state_code: &str, path: &PathBuf, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
     let state_code = state_code.to_ascii_uppercase();
-    common::require_dir_exists(&path)?;
+    util::require_dir_exists(&path)?;
 
     let pack_dir = path.join(format!("{state_code}_2020_pack"));
-    common::ensure_dir_exists(&pack_dir)?;
+    util::ensure_dir_exists(&pack_dir)?;
 
     let download_dir = download_data(&state_code, &pack_dir, has_vtd, verbose)?;
     if verbose > 0 { eprintln!("Downloaded files for {} into {}", state_code, pack_dir.display()); }
 
-    let fips = common::state_abbr_to_fips(&state_code)
+    let fips = util::state_abbr_to_fips(&state_code)
         .with_context(|| format!("Unknown state/territory postal code: {state_code}"))?;
 
     let map = Map::build_pack(&download_dir, &state_code, fips, has_vtd, verbose)?;
@@ -76,7 +76,7 @@ pub fn build_pack(state_code: &str, path: &PathBuf, has_vtd: bool, verbose: u8) 
 #[cfg(feature = "download")]
 pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<PathBuf> {
     let state_code = state_code.to_ascii_uppercase();
-    common::require_dir_exists(&path)?;
+    util::require_dir_exists(&path)?;
 
     let pack_name = format!("{state_code}_2020_pack");
     let pack_url = format!("https://media.githubusercontent.com/media/Ben1152000/openmander-data/master/packs/{state_code}/{pack_name}.zip");
@@ -92,7 +92,7 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
     download_big_file(pack_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
-    common::extract_zip(&zip_path, &path, true)?;
+    util::extract_zip(&zip_path, &path, true)?;
 
     if verbose > 0 { eprintln!("Downloaded pack to {}", pack_dir.display()); }
 

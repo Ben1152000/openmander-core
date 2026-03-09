@@ -7,7 +7,7 @@ use polars::frame::DataFrame;
 use crate::{
     geom::Geometries,
     map::{GeoId, GeoType, Map, MapLayer, ParentRefs},
-    pack::{PackSource, PackFormat, PackFormats},
+    map::pack::{PackSource, PackFormat, PackFormats},
 };
 
 /// Extract parent refs from the data DataFrame, returning (data, parents).

@@ -5,7 +5,14 @@ use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
 use geo::MultiPolygon;
 use sha2::{Digest, Sha256};
 
-use crate::{common, map::{GeoType, Map, MapLayer, ParentRefs}, pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats}};
+use crate::{map::{
+    GeoType,
+    Map,
+    MapLayer,
+    ParentRefs,
+    pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats},
+    util,
+}};
 
 /// Computes the SHA-256 hash of the given bytes and returns it as a hex string.
 fn sha256_bytes(bytes: &[u8]) -> String {
@@ -200,7 +207,7 @@ impl Map {
     /// Write pack to disk directory with specified format.
     pub fn write_to_pack_with_format(&self, path: &Path, format: PackFormat) -> Result<()> {
         for dir in ["adj", "data", "geom", "hull"] {
-            common::ensure_dir_exists(&path.join(dir))?;
+            util::ensure_dir_exists(&path.join(dir))?;
         }
 
         let mut sink = DiskPack::new(path);

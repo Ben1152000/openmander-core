@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::map::GeoType;
-use crate::pack::{PackFormat, PackSource};
+use super::{PackFormat, PackSource};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct FileHash {

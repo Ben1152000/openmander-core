@@ -15,28 +15,35 @@ mod wasm_console {
     }
 }
 
-mod common;
 mod geom;
 mod graph;
 mod io;
 mod map;
 mod objective;
-mod pack;
 mod partition;
 mod plan;
 
 #[doc(inline)]
-pub use map::{GeoId, GeoType, Map, MapLayer, ParentRefs};
+pub use map::{
+    GeoId,
+    GeoType,
+    Map,
+    MapLayer,
+    ParentRefs,
+    PackSource,
+    PackSink,
+    DiskPack,
+    MemPack,
+    PackFormat,
+    validate_pack,
+};
+
+#[doc(inline)]
+#[cfg(feature = "download")]
+pub use map::{build_pack, download_pack};
 
 #[doc(inline)]
 pub use plan::{Plan};
 
 #[doc(inline)]
 pub use objective::{Metric, Objective};
-
-#[doc(inline)]
-#[cfg(feature = "download")]
-pub use pack::{build_pack, download_pack};
-
-#[doc(inline)]
-pub use pack::{PackSource, PackSink, DiskPack, MemPack, PackFormat, validate_pack};

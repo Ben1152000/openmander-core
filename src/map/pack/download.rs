@@ -3,7 +3,7 @@ use std::{fs::File, io::{Seek, Write}, path::{Path, PathBuf}};
 use anyhow::{Context, Result, ensure};
 use tempfile::NamedTempFile;
 
-use crate::common;
+use crate::map::util;
 
 /// Write-then-rename wrapper for atomic big-file outputs
 struct PendingWrite {
@@ -96,7 +96,7 @@ fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> R
     download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
-    common::extract_zip(&zip_path, &out_path, true)?;
+    util::extract_zip(&zip_path, &out_path, true)?;
 
     Ok(())
 }
@@ -111,7 +111,7 @@ fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Resu
     download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
-    common::extract_zip(&zip_path, &out_path, true)?;
+    util::extract_zip(&zip_path, &out_path, true)?;
 
     Ok(())
 }
@@ -119,9 +119,9 @@ fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Resu
 /// Download geometry data from US Census TIGER 2020 PL directory
 /// Example URL: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
 fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verbose: u8) -> Result<()> {
-    let fips = common::state_abbr_to_fips(&state)
+    let fips = util::state_abbr_to_fips(&state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
-    let name = common::state_abbr_to_name(&state)
+    let name = util::state_abbr_to_name(&state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?
         .to_ascii_uppercase().replace(' ', "_");
 
@@ -142,7 +142,7 @@ fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verb
         download_big_file(file_url, &zip_path, true)?;
 
         if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
-        common::extract_zip(&zip_path, &out_path, true)?;
+        util::extract_zip(&zip_path, &out_path, true)?;
     }
 
     Ok(())
@@ -151,7 +151,7 @@ fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verb
 /// Download block-level crosswalks from the US Census website
 /// Example URL: "NE" -> "https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST31_NE.zip"
 fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
-    let fips = common::state_abbr_to_fips(&state)
+    let fips = util::state_abbr_to_fips(&state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
 
     let file_url = format!("https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST{fips}_{state}.zip");
@@ -163,7 +163,7 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
     download_big_file(file_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
-    common::extract_zip(&zip_path, &out_path, true)?;
+    util::extract_zip(&zip_path, &out_path, true)?;
 
     Ok(())
 }
@@ -171,10 +171,10 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
 /// Download all map files for the given state into the `download/` directory under `pack_dir`.
 /// Returns the path to the `download/` directory.
 pub(crate) fn download_data(state: &str, pack_dir: &PathBuf, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
-    common::require_dir_exists(&pack_dir)?;
+    util::require_dir_exists(&pack_dir)?;
 
     let download_dir = pack_dir.join("download");
-    common::ensure_dir_exists(&download_dir)?;
+    util::ensure_dir_exists(&download_dir)?;
 
     if verbose > 0 { eprintln!("[download] state={state} -> dir {}", download_dir.display()); }
 

@@ -614,7 +614,7 @@ impl<R: AsyncRead + AsyncSeekExt + Send + Unpin> PMTiles<R> {
     /// ```
     pub async fn from_async_reader_partially(
         input: R,
-        tiles_filter_range: (impl RangeBounds<u64> + Sync + Send),
+        tiles_filter_range: impl RangeBounds<u64> + Sync + Send,
     ) -> Result<Self> {
         Self::from_async_reader_impl(input, tiles_filter_range).await
     }

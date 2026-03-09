@@ -3,8 +3,16 @@ use std::{collections::BTreeMap, path::Path};
 use anyhow::{Context, Result};
 use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
 use geo::MultiPolygon;
+use sha2::{Digest, Sha256};
 
 use crate::{common, map::{GeoType, Map, MapLayer, ParentRefs}, pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats}};
+
+/// Computes the SHA-256 hash of the given bytes and returns it as a hex string.
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
 
 /// Get the recommended PMTiles zoom range for a given layer type.
 fn pmtiles_zoom_range_for_layer(ty: GeoType) -> (u8, u8) {
@@ -91,7 +99,7 @@ impl MapLayer {
         hashes.insert(
             data_file.clone(),
             FileHash {
-                sha256: common::sha256_bytes(&data_bytes),
+                sha256: sha256_bytes(&data_bytes),
             },
         );
 
@@ -102,7 +110,7 @@ impl MapLayer {
             hashes.insert(
                 adj_file.clone(),
                 FileHash {
-                    sha256: common::sha256_bytes(&adj_bytes),
+                    sha256: sha256_bytes(&adj_bytes),
                 },
             );
         }
@@ -126,7 +134,7 @@ impl MapLayer {
                 hashes.insert(
                     hull_file.clone(),
                     FileHash {
-                        sha256: common::sha256_bytes(&hull_bytes),
+                        sha256: sha256_bytes(&hull_bytes),
                     },
                 );
             }
@@ -163,7 +171,7 @@ impl MapLayer {
                 hashes.insert(
                     geom_file.clone(),
                     FileHash {
-                        sha256: common::sha256_bytes(&geom_bytes),
+                        sha256: sha256_bytes(&geom_bytes),
                     },
                 );
             }
@@ -176,7 +184,7 @@ impl MapLayer {
             geograph::io::write(region_ref.as_ref(), &mut region_bytes)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
             sink.put(&region_file, &region_bytes)?;
-            hashes.insert(region_file, FileHash { sha256: common::sha256_bytes(&region_bytes) });
+            hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
         }
 
         Ok(())
@@ -191,8 +199,9 @@ impl Map {
 
     /// Write pack to disk directory with specified format.
     pub fn write_to_pack_with_format(&self, path: &Path, format: PackFormat) -> Result<()> {
-        let dirs = ["adj", "data", "geom", "hull"];
-        common::ensure_dirs(path, &dirs)?;
+        for dir in ["adj", "data", "geom", "hull"] {
+            common::ensure_dir_exists(&path.join(dir))?;
+        }
 
         let mut sink = DiskPack::new(path);
         self.write_to_pack_sink_with_format(&mut sink, path, format)?;
@@ -252,13 +261,13 @@ impl Map {
             // Write data file
             let data_bytes = crate::io::csv::write_csv_bytes(&mut layer.pack_data()?)?;
             sink.put(&data_file, &data_bytes)?;
-            file_hashes.insert(data_file.clone(), FileHash { sha256: common::sha256_bytes(&data_bytes) });
+            file_hashes.insert(data_file.clone(), FileHash { sha256: sha256_bytes(&data_bytes) });
             
             // Write adjacency file (skip for state layer)
             if layer.ty() != GeoType::State {
                 let adj_bytes = crate::io::csr::write_weighted_csr_bytes(&layer.adjacencies, &layer.edge_lengths)?;
                 sink.put(&adj_file, &adj_bytes)?;
-                file_hashes.insert(adj_file.clone(), FileHash { sha256: common::sha256_bytes(&adj_bytes) });
+                file_hashes.insert(adj_file.clone(), FileHash { sha256: sha256_bytes(&adj_bytes) });
             }
             
             // Write hull file (if exists)
@@ -266,7 +275,7 @@ impl Map {
                 if !hulls.is_empty() {
                     let hull_bytes = crate::io::wkb::write_hulls_to_wkb_bytes(hulls, true)?;
                     sink.put(&hull_file, &hull_bytes)?;
-                    file_hashes.insert(hull_file.clone(), FileHash { sha256: common::sha256_bytes(&hull_bytes) });
+                    file_hashes.insert(hull_file.clone(), FileHash { sha256: sha256_bytes(&hull_bytes) });
                 }
             }
 
@@ -277,7 +286,7 @@ impl Map {
                 geograph::io::write(region_ref.as_ref(), &mut region_bytes)
                     .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
                 sink.put(&region_file, &region_bytes)?;
-                file_hashes.insert(region_file, FileHash { sha256: common::sha256_bytes(&region_bytes) });
+                file_hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
             }
         }
         
@@ -302,7 +311,7 @@ impl Map {
                     )?;
                     sink.put(&layer_geom_file, &layer_geom_bytes)?;
                     file_hashes.insert(layer_geom_file, FileHash {
-                        sha256: common::sha256_bytes(&layer_geom_bytes),
+                        sha256: sha256_bytes(&layer_geom_bytes),
                     });
 
                     let idx = geo_id_vecs.len();
@@ -324,7 +333,7 @@ impl Map {
             let geom_file = "geom/geometries.pmtiles";
             let geom_bytes = crate::io::pmtiles::write_multilayer_pmtiles_bytes(pmtiles_layers)?;
             sink.put(geom_file, &geom_bytes)?;
-            file_hashes.insert(geom_file.to_string(), FileHash { sha256: common::sha256_bytes(&geom_bytes) });
+            file_hashes.insert(geom_file.to_string(), FileHash { sha256: sha256_bytes(&geom_bytes) });
         }
         
         // Create manifest

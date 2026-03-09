@@ -5,8 +5,6 @@ use std::io::Write;
 use anyhow::{Ok, Result};
 use geo::{Coord, CoordsIter, LineString, MultiPolygon, Point};
 
-use crate::io::svg::Hsl;
-
 /// Projection function: lon/lat -> SVG coords (x,y)
 pub(crate) type Projection = dyn Fn(&Coord<f64>) -> (f64, f64);
 
@@ -34,27 +32,8 @@ pub(crate) fn draw_edges(
     Ok(())
 }
 
-/// Draw directed half-edges as colored line segments for visualizing the
-/// planar embedding.  Each entry is `(from, to, color)` where the line
-/// runs from `from` to `to` with the given HSL color.
-pub(crate) fn draw_directed_edges(
-    writer: &mut impl Write,
-    edges: &[(Coord<f64>, Coord<f64>, Hsl)],
-    project: &impl Fn(&Coord<f64>) -> (f64, f64),
-) -> Result<()> {
-    for (from, to, color) in edges {
-        let (x1, y1) = project(from);
-        let (x2, y2) = project(to);
-        writeln!(
-            writer,
-            r##"<line x1="{x1:.3}" y1="{y1:.3}" x2="{x2:.3}" y2="{y2:.3}" stroke="{color}" stroke-width="0.8" stroke-opacity="0.85"/>"##,
-        )?;
-    }
-    Ok(())
-}
-
 /// Draw small circles at each centroid.
-pub(crate) fn draw_nodes(
+pub(crate) fn _draw_nodes(
     writer: &mut impl Write,
     points: &[Coord<f64>],
     radius: f64,

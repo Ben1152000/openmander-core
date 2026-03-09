@@ -214,9 +214,6 @@ impl MapLayer {
     /// Get a reference to the Region, if present (block layer only).
     #[inline] pub(crate) fn region(&self) -> Option<&Region> { self.region.as_deref() }
 
-    /// Get an Arc clone of the Region, if present.
-    #[inline] pub(crate) fn get_region_ref(&self) -> Option<Arc<Region>> { self.region.clone() }
-
     /// Set the Region for this layer.
     pub(crate) fn set_region(&mut self, region: Region) { self.region = Some(Arc::new(region)); }
 }

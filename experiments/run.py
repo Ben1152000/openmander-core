@@ -85,7 +85,7 @@ def main(
     
     Args:
         config: Path to JSON config file (default: ./config.json)
-        base_path: Base path for packs (default: ../../packs/)
+        base_path: Base path for packs (default: ../packs/)
         log_file: Path to log file for annealing output (default: None = stdout)
         artifacts_path: Path to artifacts directory (default: ./artifacts)
     """
@@ -148,7 +148,7 @@ def main(
     # Setup paths
     if base_path is None:
         # From demo/run.py: demo -> python -> bindings -> openmander-core -> workspace_root
-        base_path = Path(__file__).parent.parent.parent / 'packs'
+        base_path = Path(__file__).parent.parent / 'packs'
     else:
         base_path = Path(base_path)
     

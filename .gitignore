@@ -1,6 +1,7 @@
 # Rust workspace
 /target/
 **/*.rs.bk
+packs/*
 
 # IDE
 .vscode/

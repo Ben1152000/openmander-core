@@ -15,7 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 OPENMANDER_ROOT = SCRIPT_DIR.parent.parent
 
 # Build paths relative to the root
-BASE_PATH = OPENMANDER_ROOT / "openmander-core" / "experiments" / "packs"
+BASE_PATH = OPENMANDER_ROOT / "openmander-core" / "packs"
 SVG_PATH  = OPENMANDER_ROOT / "openmander-core" / "experiments" / "images"
 
 STATES = {

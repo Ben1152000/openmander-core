@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-Build a map pack from source data and convert it to PMTiles (webpack) format.
+Build a state pack, convert it to PMTiles (webpack) format, and copy it to the app.
 
-Downloads census data if needed, builds the parquet pack, then converts
-to PMTiles for web display.
+Downloads census data if needed, builds the parquet pack, converts to PMTiles,
+then copies the webpack into openmander-app/public/packs/.
 
 Usage:
-    python create_webpack.py [state_code] [--no-vtd] [--verbose]
+    python build_pack.py [state_code] [--no-vtd] [--verbose] [--no-copy]
 
 Example:
-    python create_webpack.py IL
-    python create_webpack.py HI --no-vtd --verbose
+    python build_pack.py IL
+    python build_pack.py HI --no-vtd --verbose
+    python build_pack.py TX --no-copy  # skip copying to app
+    python build_pack.py IL --rebuild  # rebuild even if pack already exists
 """
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -34,16 +37,23 @@ def main():
     state_code = args[0].upper() if args else "IL"
     has_vtd = "--no-vtd" not in flags
     verbose = 1 if "--verbose" in flags else 0
+    copy_to_app = "--no-copy" not in flags
+    rebuild = "--rebuild" in flags
 
-    print(f"Creating webpack for {state_code}")
+    print(f"Building pack for {state_code}")
     print("=" * 60)
 
-    experiments_dir = Path(__file__).parent
-    packs_dir = experiments_dir / "packs"
+    # Paths relative to this script
+    core_dir = Path(__file__).parent.parent
+    packs_dir = core_dir / "packs"
     packs_dir.mkdir(parents=True, exist_ok=True)
     original_pack_dir = packs_dir / f"{state_code}_2020_pack"
 
-    # Step 1: Build the initial pack if it doesn't exist
+    # Step 1: Build the initial pack if it doesn't exist (or --rebuild)
+    if rebuild and original_pack_dir.exists():
+        print(f"\n[Step 1] Removing existing pack for rebuild...")
+        shutil.rmtree(original_pack_dir)
+
     if not original_pack_dir.exists():
         print(f"\n[Step 1] Pack not found at {original_pack_dir}")
         print(f"  Downloading data and building pack for {state_code}...")
@@ -84,14 +94,33 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
+    # Step 3: Copy webpack to openmander-app
+    if copy_to_app:
+        app_packs_dir = core_dir.parent / "openmander-app" / "public" / "packs"
+        app_pack_dest = app_packs_dir / f"{state_code}_2020_webpack"
+        print(f"\n[Step 3] Copying webpack to app...")
+        print(f"  Destination: {app_pack_dest}")
+
+        if not app_packs_dir.exists():
+            print(f"  Warning: App packs directory not found at {app_packs_dir}")
+            print(f"  Skipping copy. Run with the openmander-app repo present.")
+        else:
+            if app_pack_dest.exists():
+                shutil.rmtree(app_pack_dest)
+            shutil.copytree(pmtiles_pack_dir, app_pack_dest)
+            print(f"  Copied to {app_pack_dest}")
+    else:
+        print(f"\n[Step 3] Skipping copy to app (--no-copy)")
+
     print("\n" + "=" * 60)
     print(f"Done! Webpack written to: {pmtiles_pack_dir}")
+    if copy_to_app and app_packs_dir.exists():
+        print(f"      Also copied to:   {app_pack_dest}")
     print(f"\nThe webpack ({state_code}_2020_webpack) contains:")
     print(f"  - CSV data files (for WASM compatibility)")
     print(f"  - PMTiles geometry files (for efficient web display)")
     print(f"  - WKB hull files (for convex hull operations)")
     print(f"  - CSR adjacency files (for graph operations)")
-
 
 
 if __name__ == "__main__":

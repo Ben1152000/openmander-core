@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
-use geo::MultiPolygon;
-use rstar::AABB;
+use geo::{MultiPolygon, Rect};
 use serde_json::{json, Map, Value};
 
 use crate::map::MapLayer;
@@ -17,25 +16,27 @@ impl MapLayer {
     /// bounds: Optional bounding box [min_lon, min_lat, max_lon, max_lat] to filter features.
     /// Only features that intersect the bounds will be included. If None, all features are included.
     pub fn to_geojson_with_bounds(&self, bounds: Option<[f64; 4]>) -> Result<Value> {
-        let geoms = self.geoms.as_ref()
+        let region = self.region.as_ref()
             .ok_or_else(|| anyhow!("[to_geojson_with_bounds] No geometries available"))?;
 
         // Determine which indices to include based on bounds
         let indices: Vec<usize> = if let Some([min_lon, min_lat, max_lon, max_lat]) = bounds {
-            // Use R-tree to efficiently find features intersecting the bounds
-            let envelope = AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
-            geoms.query_indices(&envelope)
+            // Use Region spatial index to efficiently find features intersecting the bounds
+            let envelope = Rect::new(
+                geo::Coord { x: min_lon, y: min_lat },
+                geo::Coord { x: max_lon, y: max_lat },
+            );
+            region.units_in_envelope(envelope).into_iter().map(|u| u.0 as usize).collect()
         } else {
             // Include all features
-            (0..geoms.len()).collect()
+            (0..self.len()).collect()
         };
 
         let mut features = Vec::new();
         features.reserve(indices.len().min(10000)); // Cap initial capacity
 
         for idx in indices {
-            let mp = geoms.shapes().get(idx)
-                .ok_or_else(|| anyhow!("[to_geojson_with_bounds] Index {} out of bounds", idx))?;
+            let mp = region.geometry(geograph::UnitId(idx as u32));
             let mut properties = Map::new();
 
             // Add geo_id
@@ -119,37 +120,11 @@ impl MapLayer {
     /// assignments: index -> district_id mapping
     /// bounds: Optional bounding box [min_lon, min_lat, max_lon, max_lat] to filter features.
     pub fn to_geojson_with_districts_and_bounds(&self, assignments: &[u32], bounds: Option<[f64; 4]>) -> Result<Value> {
-        let geoms = self.geoms.as_ref()
+        let region = self.region.as_ref()
             .ok_or_else(|| anyhow!("[to_geojson_with_districts] No geometries available"))?;
 
-        let shapes = geoms.shapes();
-        let num_shapes = shapes.len();
         let num_entities = self.geo_ids.len();
-        
-        // Verify that geometries match the number of entities
-        // For PMTiles, some entities (e.g., water blocks) may not have geometries,
-        // so we allow fewer geometries than entities, but pad with empty MultiPolygons
-        if num_shapes > num_entities {
-            return Err(anyhow!(
-                "[to_geojson_with_districts] Geometry count ({}) exceeds entity count ({})",
-                num_shapes,
-                num_entities
-            ));
-        }
-        
-        // If we have fewer geometries than entities, we need to pad with empty geometries
-        // This can happen with PMTiles if some features are missing (e.g., water blocks)
-        // The PMTiles reader should have already created a properly indexed vector,
-        // but we still need to pad if the max feature ID is less than num_entities
-        let padded_shapes = if num_shapes < num_entities {
-            use geo::MultiPolygon;
-            let mut padded = shapes.clone();
-            padded.resize_with(num_entities, || MultiPolygon::new(vec![]));
-            padded
-        } else {
-            shapes.clone()
-        };
-        
+
         // Verify that assignments length matches
         if assignments.len() != num_entities {
             return Err(anyhow!(
@@ -161,9 +136,12 @@ impl MapLayer {
 
         // Determine which indices to include based on bounds
         let indices: Vec<usize> = if let Some([min_lon, min_lat, max_lon, max_lat]) = bounds {
-            // Use R-tree to efficiently find features intersecting the bounds
-            let envelope = AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
-            geoms.query_indices(&envelope)
+            // Use Region spatial index to efficiently find features intersecting the bounds
+            let envelope = Rect::new(
+                geo::Coord { x: min_lon, y: min_lat },
+                geo::Coord { x: max_lon, y: max_lat },
+            );
+            region.units_in_envelope(envelope).into_iter().map(|u| u.0 as usize).collect()
         } else {
             // Include all features
             (0..num_entities).collect()
@@ -173,8 +151,7 @@ impl MapLayer {
         features.reserve(indices.len().min(10000)); // Cap initial capacity
 
         for idx in indices {
-            let mp = padded_shapes.get(idx)
-                .ok_or_else(|| anyhow!("[to_geojson_with_districts_and_bounds] Index {} out of bounds", idx))?;
+            let mp = region.geometry(geograph::UnitId(idx as u32));
             
             // Skip features with empty geometries (e.g., water blocks without geometry)
             if mp.0.is_empty() {

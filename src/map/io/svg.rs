@@ -25,10 +25,13 @@ impl MapLayer {
     }
 
     fn render_svg(&self, writer: &mut impl Write, width: i32, margin: i32, series: Option<&str>) -> Result<()> {
-        let geoms = self.geoms.as_ref()
+        let region = self.region.as_ref()
             .ok_or_else(|| anyhow!("[to_svg] No geometries available to draw."))?;
-        let bounds = geoms.bounds()
-            .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?;
+        let bounds = region.bounds_all();
+
+        let shapes: Vec<geo::MultiPolygon<f64>> = region.unit_ids()
+            .map(|u| region.geometry(u).clone())
+            .collect();
 
         let centroids = self.centroids();
         let vp = Viewport::new(bounds, width as f64, margin as f64);
@@ -40,12 +43,12 @@ impl MapLayer {
         if let Some(series) = series {
             crate::io::svg::draw_polygons_with_fill(
                 writer,
-                geoms.shapes(),
+                &shapes,
                 &self.compute_fill_colors(series)?,
                 &project,
             )?;
         } else {
-            crate::io::svg::draw_polygons(writer, geoms.shapes(), &project)?;
+            crate::io::svg::draw_polygons(writer, &shapes, &project)?;
         }
 
         let edges = self.adjacencies.iter().enumerate()

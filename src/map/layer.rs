@@ -1,11 +1,11 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
-use geo::{MultiPolygon, Point, Polygon, Rect};
+use geo::{MultiPolygon, Point, Polygon};
 use polars::{frame::DataFrame, prelude::DataType};
 
 use geograph::Region;
 
-use crate::{geom::Geometries, graph::{UnitGraph, WeightedGraph, WeightMatrix}, map::{GeoId, GeoType, ParentRefs}};
+use crate::{graph::{UnitGraph, WeightedGraph, WeightMatrix}, map::{GeoId, GeoType, ParentRefs}};
 
 /// A single planar partition Layer of the map, containing entities and their relationships.
 #[derive(Clone)]
@@ -17,7 +17,6 @@ pub struct MapLayer {
     pub(super) unit_data: DataFrame,              // Entity data (incl. name, centroid, geographic data, election data)
     pub(super) adjacencies: Vec<Vec<u32>>,        // Adjacency list of contiguous indices
     pub(super) edge_lengths: Vec<Vec<f64>>,       // Shared perimeter lengths for adjacencies
-    pub(super) geoms: Option<Geometries>,         // Per-level geometry store, indexed by entities
     pub(super) hulls: Option<Vec<Polygon<f64>>>,  // Approximate hulls for each entity (todo: remove option)
     pub(super) graph: Arc<WeightedGraph>,         // Graph representation of layer used for partitioning
     pub(super) unit_weights: Option<Arc<WeightMatrix>>, // Demographic/election weights (extracted from graph)
@@ -34,7 +33,6 @@ impl MapLayer {
             unit_data: DataFrame::default(),
             adjacencies: Vec::new(),
             edge_lengths: Vec::new(),
-            geoms: None,
             hulls: None,
             graph: Arc::default(),
             unit_weights: None,
@@ -62,11 +60,6 @@ impl MapLayer {
         self.edge_lengths = edge_lengths;
         self.hulls = hulls;
         Ok(())
-    }
-
-    /// Set geometries (used by IO operations).
-    pub(crate) fn set_geometries(&mut self, geoms: Option<Geometries>) {
-        self.geoms = geoms;
     }
 
     /// Get the number of entities in this layer.
@@ -99,15 +92,12 @@ impl MapLayer {
     /// Get the approximate convex hulls of all MultiPolygons in this layer, if geometries are present.
     #[inline] pub fn hulls(&self) -> Option<&Vec<Polygon<f64>>> { self.hulls.as_ref() }
 
-    /// Get a reference to the shapes for this layer, if available.
-    #[inline] pub fn shapes(&self) -> Option<&Vec<MultiPolygon<f64>>> { Some(self.geoms.as_ref()?.shapes()) }
-
-    /// Get the bounding rectangle of all geometries in this layer, if available.
-    #[inline] pub fn bounds(&self) -> Option<Rect<f64>> { self.geoms.as_ref()?.bounds() }
-
     /// Get the union of all MultiPolygons in this layer into a single MultiPolygon.
     /// Note that this can be computationally expensive for large layers.
-    #[inline] pub fn union(&self) -> Option<MultiPolygon<f64>> { self.geoms.as_ref()?.union() }
+    pub fn union(&self) -> Option<MultiPolygon<f64>> {
+        let region = self.region.as_ref()?;
+        Some(region.union_of(region.unit_ids()))
+    }
 
     /// Get centroid lon/lat for each entity, preferring DataFrame columns if present, else computing from geometry.
     pub fn centroids(&self) -> Vec<Point<f64>> {
@@ -125,12 +115,6 @@ impl MapLayer {
                 .collect()
         }
         
-        if let Some(geoms) = &self.geoms {
-            assert_eq!(geoms.len(), self.len(), "Expected geoms length {} to match number of entities {}", geoms.len(), self.len());
-
-            return geoms.centroids()
-        }
-
         vec![Point::new(f64::NAN, f64::NAN); self.len()]
     }
 
@@ -225,7 +209,7 @@ impl fmt::Debug for MapLayer {
             .field("n", &self.geo_ids.len())
             .field("data", &format_args!("{}x{}", self.unit_data.height(), self.unit_data.width()))
             .field("adj", &!self.adjacencies.is_empty())
-            .field("geom", &self.geoms.is_some())
+            .field("region", &self.region.is_some())
             .finish()
     }
 }

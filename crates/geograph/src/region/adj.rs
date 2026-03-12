@@ -7,6 +7,19 @@ use crate::unit::UnitId;
 use super::Region;
 
 impl Region {
+    /// Return `self` with extra undirected adjacency pairs added to both the
+    /// Rook and Queen matrices.  The new edges carry weight `0.0` (no shared
+    /// geometric boundary).  Pairs that already exist are silently ignored.
+    ///
+    /// Use this to bake in manually-patched island bridges before serialising
+    /// the region, so the forced pairs survive round-trips through `.region.gz`.
+    pub fn with_forced_adjacencies(mut self, pairs: &[(UnitId, UnitId)]) -> Self {
+        if pairs.is_empty() { return self; }
+        self.adjacent = self.adjacent.with_extra_edges(pairs);
+        self.touching = self.touching.with_extra_edges(pairs);
+        self
+    }
+
     /// Returns `true` if `a` and `b` share a positive-length boundary segment.
     #[inline]
     pub fn are_adjacent(&self, a: UnitId, b: UnitId) -> bool {

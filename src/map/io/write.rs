@@ -143,20 +143,22 @@ impl MapLayer {
             }
         }
 
-        // geometries (optional)
-        if let Some(geom) = &self.geoms {
-            let shapes = geom.shapes();
+        // geometries (optional — sourced from Region)
+        if let Some(region) = &self.region {
+            let shapes: Vec<MultiPolygon<f64>> = region.unit_ids()
+                .map(|u| region.geometry(u).clone())
+                .collect();
             if !shapes.is_empty() {
                 let geom_bytes: Vec<u8> = match formats.geometry.as_str() {
                     #[cfg(feature = "parquet")]
-                    "geoparquet" => crate::io::geoparquet::write_geoparquet_bytes(shapes)?,
+                    "geoparquet" => crate::io::geoparquet::write_geoparquet_bytes(&shapes)?,
                     #[cfg(feature = "pmtiles")]
                     "pmtiles" => {
                         let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(self.ty());
                         let geo_ids: Vec<String> = self.geo_ids.iter()
                             .map(|g| g.id().to_string())
                             .collect();
-                        crate::io::pmtiles::write_to_pmtiles_bytes(shapes, Some(&geo_ids), min_zoom, max_zoom)?
+                        crate::io::pmtiles::write_to_pmtiles_bytes(&shapes, Some(&geo_ids), min_zoom, max_zoom)?
                     },
                     _ => {
                         #[cfg(not(feature = "parquet"))]
@@ -303,11 +305,13 @@ impl Map {
         
         // Write individual per-layer PMTiles and collect layers for multi-layer file
         let mut geo_id_vecs: Vec<Vec<String>> = Vec::new();
-        let mut layer_info: Vec<(&str, &[MultiPolygon<f64>], u8, u8, usize)> = Vec::new();
+        let mut layer_info: Vec<(&str, Vec<MultiPolygon<f64>>, u8, u8, usize)> = Vec::new();
 
         for layer in self.layers_iter() {
-            if let Some(geom) = &layer.geoms {
-                let shapes = geom.shapes();
+            if let Some(region) = &layer.region {
+                let shapes: Vec<MultiPolygon<f64>> = region.unit_ids()
+                    .map(|u| region.geometry(u).clone())
+                    .collect();
                 if !shapes.is_empty() {
                     let layer_name = layer.ty().to_str();
                     let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(layer.ty());
@@ -318,7 +322,7 @@ impl Map {
                     // Write individual layer PMTiles
                     let layer_geom_file = format!("geom/{layer_name}.pmtiles");
                     let layer_geom_bytes = crate::io::pmtiles::write_to_pmtiles_bytes(
-                        shapes, Some(&geo_ids), min_zoom, max_zoom,
+                        &shapes, Some(&geo_ids), min_zoom, max_zoom,
                     )?;
                     sink.put(&layer_geom_file, &layer_geom_bytes)?;
                     file_hashes.insert(layer_geom_file, FileHash {
@@ -331,11 +335,11 @@ impl Map {
                 }
             }
         }
-        
-        // Build the pmtiles_layers vec with references
+
+        // Build the pmtiles_layers vec with references into the owned shapes
         let pmtiles_layers: Vec<(&str, &[MultiPolygon<f64>], Option<&[String]>, u8, u8)> = layer_info.iter()
             .map(|(name, shapes, min_zoom, max_zoom, idx)| {
-                (*name, *shapes, Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)
+                (*name, shapes.as_slice(), Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)
             })
             .collect();
         

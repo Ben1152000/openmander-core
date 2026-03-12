@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 mod algorithm;
 mod bbox;
 mod geom;

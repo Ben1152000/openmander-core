@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 mod articulation;
 mod graph;
 mod unit_graph;

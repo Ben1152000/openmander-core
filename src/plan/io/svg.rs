@@ -13,8 +13,9 @@ impl Plan {
 
     /// Draw dissolved districts using only frontier blocks + state boundary.
     fn to_svg_with_size(&self, path: &Path, color_partisan: bool, width: i32, margin: i32) -> Result<()> {
-        let bounds = self.map().base()?.bounds()
-            .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?;
+        let bounds = self.map().base()?.region()
+            .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?
+            .bounds_all();
 
         let vp = Viewport::new(bounds, width as f64, margin as f64);
 
@@ -67,8 +68,11 @@ impl Plan {
     /// Build dissolved boundary for district `d` using frontier blocks, immediate same-district neighbors,
     /// and segments on the state outer boundary.
     fn build_district_path_string(&self, d: u32, state_outline: &SegmentSet, project: &Projection) -> Result<Option<String>> {
-        let shapes = self.map().base()?.shapes()
+        let base_region = self.map().base()?.region()
             .ok_or_else(|| anyhow!("[to_svg] No block geoms available"))?;
+        let shapes: Vec<geo::MultiPolygon<f64>> = base_region.unit_ids()
+            .map(|u| base_region.geometry(u).clone())
+            .collect();
 
         let adjacencies = self.map().base()?.adjacencies();
 

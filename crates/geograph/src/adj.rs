@@ -183,6 +183,40 @@ impl AdjacencyMatrix {
         self.weights.as_ref().map_or(0.0, |w| w[edge_idx])
     }
 
+    /// Return a new `AdjacencyMatrix` with all existing edges plus the given
+    /// undirected pairs (both directions added) with weight `0.0`.
+    ///
+    /// Pairs where either unit is `UnitId::EXTERIOR` are silently dropped.
+    /// If a forced pair already exists, its weight is unchanged (0.0 is added
+    /// to the existing weight via the duplicate-merge in `from_directed_pairs_weighted`).
+    pub(crate) fn with_extra_edges(self, extra: &[(UnitId, UnitId)]) -> Self {
+        if extra.is_empty() { return self; }
+
+        let nu = self.num_units();
+        let mut triples: Vec<(UnitId, UnitId, f64)> =
+            Vec::with_capacity(self.neighbors.len() + extra.len() * 2);
+
+        // Preserve all existing edges with their current weights.
+        for u in 0..nu {
+            let uid = UnitId(u as u32);
+            let start = self.offsets[u] as usize;
+            let end   = self.offsets[u + 1] as usize;
+            for i in start..end {
+                let w = self.weights.as_ref().map_or(0.0, |ws| ws[i]);
+                triples.push((uid, self.neighbors[i], w));
+            }
+        }
+
+        // Add forced pairs in both directions with weight 0.0.
+        for &(a, b) in extra {
+            if a == UnitId::EXTERIOR || b == UnitId::EXTERIOR { continue; }
+            triples.push((a, b, 0.0));
+            triples.push((b, a, 0.0));
+        }
+
+        Self::from_directed_pairs_weighted(nu, triples)
+    }
+
     /// Slice of weights for `unit`'s neighbors, aligned to `neighbors(unit)`.
     ///
     /// Returns an empty slice if no weights are stored.

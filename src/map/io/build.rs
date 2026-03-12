@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, path::Path};
+use std::{collections::{HashMap, HashSet}, path::Path, sync::Arc};
 
 use anyhow::{Context, Ok, Result, anyhow, bail, ensure};
 use polars::{frame::DataFrame, prelude::*, series::Series};
@@ -6,7 +6,6 @@ use shapefile::dbase::{FieldValue, Record};
 
 use crate::{
     ParentRefs,
-    geom::Geometries,
     map::{GeoId, GeoType, Map, MapLayer, util},
 };
 
@@ -96,14 +95,15 @@ impl MapLayer {
         let mut layer = Self::new(ty);
         layer.set_data(df, "geo_id")?;
 
-        // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64>
-        layer.geoms = Some(Geometries::new(
-            &shapes.into_iter()
-                .map(|shape| crate::io::shp::shape_to_multipolygon(shape))
-                .collect::<Result<Vec<_>>>()
-                .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?,
-            crate::io::shp::epsg_from_shapefile(path),
-        ));
+        // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64> and build Region.
+        let multipolygons: Vec<geo::MultiPolygon<f64>> = shapes.into_iter()
+            .map(|shape| crate::io::shp::shape_to_multipolygon(shape))
+            .collect::<Result<Vec<_>>>()
+            .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?;
+
+        let region = geograph::Region::new(multipolygons, None)
+            .map_err(|e| anyhow!("Region construction failed for {:?}: {}: {:?}", ty, path.display(), e))?;
+        layer.set_region(region);
 
         Ok(layer)
     }
@@ -165,17 +165,28 @@ impl MapLayer {
             .collect::<Result<_>>()?
     }
 
-    /// Compute adjacencies for the layer geometries, if it exists.
-    fn compute_adjacencies(&mut self) -> Result<()> {
-        let geoms = self.geoms.as_ref()
-            .ok_or_else(|| anyhow!("Cannot compute adjacencies on empty geometry!"))?;
-        self.adjacencies = geoms.compute_adjacencies_fast(1e8)?;
-
+    /// Extract adjacencies from the block layer's Region.
+    /// Neighbors are sorted by UnitId; CCW sort happens separately via sort_adjacencies_ccw().
+    fn extract_adjacencies_from_region(&mut self) -> Result<()> {
+        let region = self.region.as_ref()
+            .ok_or_else(|| anyhow!("Cannot extract adjacencies: no region available!"))?;
+        self.adjacencies = (0..self.len())
+            .map(|i| {
+                region.neighbors(geograph::UnitId(i as u32))
+                    .iter()
+                    .map(|u| u.0)
+                    .collect()
+            })
+            .collect();
+        // edge_lengths will be populated after CCW sort via compute_edge_lengths_from_region
+        self.edge_lengths = vec![Vec::new(); self.len()];
         Ok(())
     }
 
-    /// Patch adjacency list with manual bridges for island/remote blocks.
-    fn patch_adjacencies(&mut self) -> Result<()> {
+    /// Bake manual island-bridge patches into the block layer's Region before
+    /// adjacency extraction.  Forced pairs are stored in the Region's adjacency
+    /// matrix so they survive serialisation round-trips through `.region.gz`.
+    fn patch_region(&mut self) -> Result<()> {
         let patches = [
             // Washington County, Rhode Island
             (GeoId::new_block("440099902000001"), GeoId::new_block("440099901000017")),
@@ -222,12 +233,23 @@ impl MapLayer {
             (GeoId::new_block("150019912000001"), GeoId::new_block("150099902000018")),
         ];
 
-        patches.into_iter().for_each(|(left, right)| {
-            if let (Some(&left), Some(&right)) = (self.index.get(&left), self.index.get(&right)) {
-                if !self.adjacencies[left as usize].contains(&right) { self.adjacencies[left as usize].push(right) }
-                if !self.adjacencies[right as usize].contains(&left) { self.adjacencies[right as usize].push(left) }
-            }
-        });
+        // Convert GeoId patches to UnitId pairs (skip any that aren't present in this state).
+        let unit_pairs: Vec<(geograph::UnitId, geograph::UnitId)> = patches.iter()
+            .filter_map(|(left, right)| {
+                let a = self.index.get(left).copied()?;
+                let b = self.index.get(right).copied()?;
+                Some((geograph::UnitId(a), geograph::UnitId(b)))
+            })
+            .collect();
+
+        if unit_pairs.is_empty() { return Ok(()); }
+
+        // Unwrap the Arc (uniquely owned during build) and patch the Region.
+        let arc = self.region.take()
+            .ok_or_else(|| anyhow!("patch_region: block layer has no Region"))?;
+        let region = Arc::try_unwrap(arc)
+            .map_err(|_| anyhow!("patch_region: Region Arc is shared; cannot patch"))?;
+        self.region = Some(Arc::new(region.with_forced_adjacencies(&unit_pairs)));
 
         Ok(())
     }
@@ -256,55 +278,73 @@ impl MapLayer {
         }
     }
 
-    /// Compute shared perimeters for the layer geometries, if it exists.
-    fn compute_shared_perimeters(&mut self) -> Result<()> {
-        let geoms = self.geoms.as_ref()
-            .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
-        self.edge_lengths = geoms.compute_shared_perimeters_fast(&self.adjacencies, 1e8)?;
-
+    /// Compute edge lengths from the layer's Region, aligned to self.adjacencies.
+    /// For each (i, j) pair, looks up the shared boundary length from Region (O(log deg)).
+    /// Returns 0.0 for edges not present in Region (e.g., manually patched island bridges).
+    fn compute_edge_lengths_from_region(&mut self) -> Result<()> {
+        let Some(region) = &self.region else {
+            // No region: initialize edge_lengths with zeros
+            self.edge_lengths = self.adjacencies.iter()
+                .map(|neighbors| vec![0.0; neighbors.len()])
+                .collect();
+            return Ok(());
+        };
+        let adj = region.adjacency();
+        self.edge_lengths = self.adjacencies.iter().enumerate()
+            .map(|(i, neighbors)| {
+                let uid_i = geograph::UnitId(i as u32);
+                neighbors.iter().map(|&j| {
+                    let uid_j = geograph::UnitId(j);
+                    adj.neighbors(uid_i)
+                        .binary_search(&uid_j)
+                        .ok()
+                        .map(|pos| adj.weight_at(adj.offset(uid_i) + pos))
+                        .unwrap_or(0.0)
+                }).collect()
+            })
+            .collect();
         Ok(())
     }
 
-    /// Compute outer perimeters for the layer geometries (Block layer),
+    /// Compute outer perimeters from the layer's Region (Block layer only),
     /// returning a DataFrame suitable for `merge_block_data`.
     ///
     /// The returned DataFrame has:
     ///   - "GEOID" (String) – block IDs
     ///   - "outer_perimeter_m" (f64) – outer perimeter length in meters
-    fn compute_outer_perimeters(&self) -> Result<DataFrame> {
-        let geoms = self.geoms.as_ref()
-            .ok_or_else(|| anyhow!("Cannot compute perimeters on empty geometry!"))?;
+    fn compute_outer_perimeters_from_region(&self) -> Result<DataFrame> {
+        let region = self.region.as_ref()
+            .ok_or_else(|| anyhow!("Cannot compute outer perimeters: no region available!"))?;
 
-        // Compute outer perimeter length for each geometry
-        let outer_perimeters = geoms.compute_outer_perimeters_fast(1e8)?;
+        let outer_perimeters: Vec<f64> = (0..self.len())
+            .map(|i| region.exterior_boundary_length(geograph::UnitId(i as u32)))
+            .collect();
 
-        // Sanity check against number of geo_ids
         assert_eq!(outer_perimeters.len(), self.geo_ids.len(),
-            "compute_outer_perimeters: length mismatch (got {}, expected {})",
+            "compute_outer_perimeters_from_region: length mismatch (got {}, expected {})",
             outer_perimeters.len(),
             self.geo_ids.len(),
         );
 
-        // Build a String GEOID column from the layer's geo_ids
         let geo_ids = self.geo_ids.iter()
             .map(|gid| gid.id().to_string())
             .collect::<Vec<_>>();
 
-        let df = DataFrame::new(vec![
+        Ok(DataFrame::new(vec![
             Column::new("GEOID".into(), geo_ids),
             Column::new("outer_perimeter_m".into(), outer_perimeters),
-        ])?;
-
-        Ok(df)
+        ])?)
     }
 
-    /// Compute approximate convex hulls for all MultiPolygons in this layer, if geometries are present.
-    fn compute_approximate_hulls(&mut self, max_points: usize, min_area: f64) -> Result<()> {
-        let geoms = self.geoms.as_ref()
-            .ok_or_else(|| anyhow!("Cannot compute hulls on empty geometry!"))?;
-        self.hulls = Some(geoms.approximate_hulls(max_points, min_area));
-
-        Ok(())
+    /// Compute convex hulls for all units in this layer from Region.
+    fn compute_approximate_hulls_from_region(&mut self) {
+        if let Some(region) = &self.region {
+            self.hulls = Some(
+                (0..self.len())
+                    .map(|i| region.convex_hull(geograph::UnitId(i as u32)))
+                    .collect()
+            );
+        }
     }
 }
 
@@ -507,8 +547,10 @@ impl Map {
         // Compute adjacencies for all layers, aggregating from blocks up to states.
         if verbose > 0 { eprintln!("[build_pack] computing adjacencies"); }
         if let Some(block_layer) = map.layer_mut(GeoType::Block) {
-            block_layer.compute_adjacencies()?;
-            block_layer.patch_adjacencies()?;
+            // Bake island-bridge patches into the Region before extraction so
+            // they are preserved when the pack is serialised to .region.gz.
+            block_layer.patch_region()?;
+            block_layer.extract_adjacencies_from_region()?;
             block_layer.sort_adjacencies_ccw();
             map.aggregate_adjacencies(GeoType::Block, GeoType::VTD)?;
             map.aggregate_adjacencies(GeoType::Block, GeoType::Group)?;
@@ -524,42 +566,25 @@ impl Map {
             }
         }
 
-        if verbose > 0 { eprintln!("[build_pack] computing shared perimeters"); }
+        if verbose > 0 { eprintln!("[build_pack] computing edge lengths"); }
         for layer in map.layers_iter_mut() {
-            layer.compute_shared_perimeters()?
+            layer.compute_edge_lengths_from_region()?;
         }
 
         // Compute outer perimeters at the block level and aggregate to higher layers.
         if verbose > 0 { eprintln!("[build_pack] computing outer perimeters"); }
         if let Some(block_layer) = map.layer(GeoType::Block) {
-            map.merge_block_data(block_layer.compute_outer_perimeters()?, "GEOID")?;
+            map.merge_block_data(block_layer.compute_outer_perimeters_from_region()?, "GEOID")?;
         }
 
         if verbose > 0 { eprintln!("[build_pack] computing approximate hulls"); }
         for layer in map.layers_iter_mut() {
-            layer.compute_approximate_hulls(4, 0.998)?
+            layer.compute_approximate_hulls_from_region();
         }
 
         if verbose > 0 { eprintln!("[build_pack] constructing graphs"); }
         for layer in map.layers_iter_mut() {
             layer.construct_graph()
-        }
-
-        // Build Region for every layer that has geometries.
-        if verbose > 0 { eprintln!("[build_pack] building Region objects"); }
-        for layer in map.layers_iter_mut() {
-            if let Some(shapes) = layer.shapes().cloned() {
-                let ty = layer.ty();
-                if verbose > 0 { eprintln!("[build_pack] building Region for {:?}", ty); }
-                match geograph::Region::new(shapes, None) {
-                    std::result::Result::Ok(region) => {
-                        layer.set_region(region);
-                    }
-                    Err(e) => {
-                        eprintln!("[build_pack] Warning: Region construction failed for {:?}: {:?}", ty, e);
-                    }
-                }
-            }
         }
 
         Ok(map)

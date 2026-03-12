@@ -147,11 +147,6 @@ impl WasmPlan {
                 )));
             }
             
-            // Check if layer has geometries
-            if lyr.shapes().is_none() {
-                return Err(js_err("Layer does not have geometries loaded"));
-            }
-            
             // Convert bounds from Vec<f64> to Option<[f64; 4]>
             let bounds_opt = bounds.and_then(|b| {
                 if b.len() == 4 {

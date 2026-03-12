@@ -1,11 +1,9 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use geo::MultiPolygon;
 use polars::frame::DataFrame;
 
 use crate::{
-    geom::Geometries,
     map::{GeoId, GeoType, Map, MapLayer, ParentRefs, util},
     map::pack::{DiskPack, PackSource, PackFormat, PackFormats, Manifest},
 };
@@ -57,11 +55,6 @@ fn read_layer_from_pack_source_with_formats(
         "csv" => "csv",
         _ => return Err(anyhow::anyhow!("Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data)),
     };
-    let geom_ext = match formats.geometry.as_str() {
-        "geoparquet" => "geoparquet",
-        "pmtiles" => "pmtiles",
-        _ => return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry)),
-    };
     let hull_ext = match formats.hull.as_str() {
         "wkb" => "wkb",
         #[cfg(feature = "parquet")]
@@ -71,7 +64,6 @@ fn read_layer_from_pack_source_with_formats(
 
     let adj_file = format!("adj/{layer_name}.{adj_ext}");
     let data_file = format!("data/{layer_name}.{data_ext}");
-    let geom_file = format!("geom/{layer_name}.{geom_ext}");
     let hull_file = format!("hull/{layer_name}.{hull_ext}");
 
     // data
@@ -144,36 +136,6 @@ fn read_layer_from_pack_source_with_formats(
     // Update layer with loaded data
     layer.set_pack_data(unit_data, parents, geo_ids, index, adjacencies, edge_lengths, hulls)?;
     layer.construct_graph();
-
-    // geometry (optional)
-    if src.has(&geom_file) {
-        let geom_bytes = src.get(&geom_file)?;
-        let geoms: Vec<MultiPolygon<f64>> = match formats.geometry.as_str() {
-            #[cfg(feature = "parquet")]
-            "geoparquet" => crate::io::geoparquet::read_geoparquet_bytes(&geom_bytes)?,
-            #[cfg(feature = "pmtiles")]
-            "pmtiles" => crate::io::pmtiles::read_from_pmtiles_bytes(&geom_bytes)?,
-            _ => {
-                #[cfg(not(feature = "parquet"))]
-                if formats.geometry == "geoparquet" {
-                    return Err(anyhow::anyhow!("GeoParquet format requires 'parquet' feature to be enabled"));
-                }
-                #[cfg(not(feature = "pmtiles"))]
-                if formats.geometry == "pmtiles" {
-                    return Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"));
-                }
-                return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry));
-            }
-        };
-        // Only create Geometries if we have actual geometries
-        // Empty geometry vectors should result in None (geometry file is optional)
-        if !geoms.is_empty() {
-            // Note: We don't pad geometries here because we don't know which feature IDs
-            // are missing. The padding will be handled in to_geojson_with_districts
-            // when we know the expected count and can properly index them.
-            layer.set_geometries(Some(Geometries::new(&geoms, None)));
-        }
-    }
 
     // region (optional — geom/{layer_name}.region.gz or legacy .region)
     let region_file = if src.has(&format!("geom/{layer_name}.region.gz")) {

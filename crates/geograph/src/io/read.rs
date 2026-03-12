@@ -121,16 +121,29 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     }
 
     // ---- Adjacency CSR ----
-    // Read CSR as unweighted, then rebuild Rook adjacency with edge weights
-    // from the DCEL edge lengths.
-    let _adjacent_unweighted = read_csr(reader, nu)?;
+    // Read the stored Rook CSR.  It may contain forced pairs (island bridges)
+    // that are not present in the DCEL geometry; those must be preserved.
+    let adjacent_stored = read_csr(reader, nu)?;
     let touching = read_csr(reader, nu)?;
 
     // ---- Rebuild DCEL ----
     let dcel = Dcel { vertices, half_edges, faces };
 
-    // ---- Rebuild Rook adjacency with edge weights from DCEL ----
-    let adjacent = crate::region::adj::build_adjacent(&dcel, &face_to_unit, &edge_length, nu);
+    // ---- Rebuild Rook adjacency: DCEL-derived weights + forced pairs from stored CSR ----
+    // Build the natural adjacency from the DCEL (correct shared-boundary weights).
+    let adjacent_natural = crate::region::adj::build_adjacent(&dcel, &face_to_unit, &edge_length, nu);
+    // Any pair in the stored CSR that is absent from the DCEL-derived matrix is a
+    // forced (island-bridge) pair.  Add those with weight 0.0.
+    let forced_pairs: Vec<(UnitId, UnitId)> = (0..nu as u32)
+        .flat_map(|u| {
+            let uid = UnitId(u);
+            adjacent_stored.neighbors(uid).iter()
+                .filter(|&&v| !adjacent_natural.contains(uid, v))
+                .map(move |&v| (uid, v))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let adjacent = adjacent_natural.with_extra_edges(&forced_pairs);
 
     // ---- Derive remaining cache fields ----
     let exterior_boundary_length =

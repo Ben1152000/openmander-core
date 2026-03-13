@@ -5,6 +5,7 @@ use crate::unit::UnitId;
 /// `offsets[u]..offsets[u+1]` indexes into `neighbors` to give the sorted
 /// list of units adjacent to unit `u`.  Supports O(log deg) membership tests
 /// via binary search.
+#[derive(Clone)]
 pub struct AdjacencyMatrix {
     /// CSR row offsets; length = `num_units + 1`.
     offsets: Vec<u32>,

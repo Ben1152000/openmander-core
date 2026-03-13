@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{Context, Ok, Result, anyhow, bail, ensure};
 use polars::{frame::DataFrame, prelude::*, series::Series};
@@ -92,9 +92,6 @@ impl MapLayer {
         let df = records_to_dataframe(records, ty)?
             .with_row_index("idx".into(), None)?;
 
-        let mut layer = Self::new(ty);
-        layer.set_data(df, "geo_id")?;
-
         // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64> and build Region.
         let multipolygons: Vec<geo::MultiPolygon<f64>> = shapes.into_iter()
             .map(|shape| crate::io::shp::shape_to_multipolygon(shape))
@@ -103,30 +100,25 @@ impl MapLayer {
 
         let region = geograph::Region::new(multipolygons, None)
             .map_err(|e| anyhow!("Region construction failed for {:?}: {}: {:?}", ty, path.display(), e))?;
-        layer.set_region(region);
 
-        Ok(layer)
-    }
-
-    /// Initialize layer data with a new dataframe, replacing existing data.
-    fn set_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
-        let size = df.height();
-
-        self.geo_ids = df.column(id_col)?.str()?
-            .into_no_null_iter()
-            .map(|val| GeoId::new(self.ty(), val))
+        let n = df.height();
+        let geo_ids: Vec<GeoId> = df.column("geo_id")?.str()?.into_no_null_iter()
+            .map(|val| GeoId::new(ty, val))
             .collect();
-
-        self.index = self.geo_ids.iter().enumerate()
+        let index = geo_ids.iter().enumerate()
             .map(|(i, geo_id)| (geo_id.clone(), i as u32))
             .collect();
+        let parents = vec![ParentRefs::default(); n];
+        // Weights computed from the initial df; finalized after all data is merged.
+        let unit_weights = Arc::new(crate::graph::WeightMatrix::from_dataframe(&df));
 
-        self.unit_data = df;
-        self.parents = vec![ParentRefs::default(); size];
-        self.adjacencies = vec![Vec::new(); size];
-        self.edge_lengths = vec![Vec::new(); size];
+        Ok(Self::new(ty, geo_ids, index, parents, df, unit_weights, Arc::new(region)))
+    }
 
-        Ok(())
+    /// Recompute weights from the fully-merged unit_data. Called at the end of `build_pack`
+    /// after all demographic/election data has been merged in.
+    fn finalize_weights(&mut self) {
+        self.unit_weights = Arc::new(crate::graph::WeightMatrix::from_dataframe(&self.unit_data));
     }
 
     /// Merge new dataframe into self.data, preserving geo_id
@@ -163,24 +155,6 @@ impl MapLayer {
                 .ok_or_else(|| anyhow!("No parent found for entity with geo_id: {:?}", geo_id))
                 .map(|geo_id| self.parents[i].set(parent_ty, Some(geo_id.clone())))))
             .collect::<Result<_>>()?
-    }
-
-    /// Extract adjacencies from the block layer's Region.
-    /// Neighbors are sorted by UnitId; CCW sort happens separately via sort_adjacencies_ccw().
-    fn extract_adjacencies_from_region(&mut self) -> Result<()> {
-        let region = self.region.as_ref()
-            .ok_or_else(|| anyhow!("Cannot extract adjacencies: no region available!"))?;
-        self.adjacencies = (0..self.len())
-            .map(|i| {
-                region.neighbors(geograph::UnitId(i as u32))
-                    .iter()
-                    .map(|u| u.0)
-                    .collect()
-            })
-            .collect();
-        // edge_lengths will be populated after CCW sort via compute_edge_lengths_from_region
-        self.edge_lengths = vec![Vec::new(); self.len()];
-        Ok(())
     }
 
     /// Bake manual island-bridge patches into the block layer's Region before
@@ -244,65 +218,10 @@ impl MapLayer {
 
         if unit_pairs.is_empty() { return Ok(()); }
 
-        // Unwrap the Arc (uniquely owned during build) and patch the Region.
-        let arc = self.region.take()
-            .ok_or_else(|| anyhow!("patch_region: block layer has no Region"))?;
-        let region = Arc::try_unwrap(arc)
-            .map_err(|_| anyhow!("patch_region: Region Arc is shared; cannot patch"))?;
-        self.region = Some(Arc::new(region.with_forced_adjacencies(&unit_pairs)));
+        // Clone the Region and rebuild with forced adjacencies.
+        let region = (*self.region).clone();
+        self.region = Arc::new(region.with_forced_adjacencies(&unit_pairs));
 
-        Ok(())
-    }
-
-    /// Sort each node's adjacency list in counter-clockwise (CCW) angular order,
-    /// using centroid-to-centroid angles.
-    ///
-    /// Angles are quantized to 1e-6 radians with neighbor-index tiebreaking for
-    /// deterministic, platform-independent ordering.
-    fn sort_adjacencies_ccw(&mut self) {
-        let centroids = self.centroids();
-
-        for (i, neighbors) in self.adjacencies.iter_mut().enumerate() {
-            let cx = centroids[i].x();
-            let cy = centroids[i].y();
-
-            neighbors.sort_by(|&a, &b| {
-                let angle_a = (centroids[a as usize].y() - cy).atan2(centroids[a as usize].x() - cx);
-                let angle_b = (centroids[b as usize].y() - cy).atan2(centroids[b as usize].x() - cx);
-
-                let qa = (angle_a * 1e6).round() as i64;
-                let qb = (angle_b * 1e6).round() as i64;
-
-                (qa, a).cmp(&(qb, b))
-            });
-        }
-    }
-
-    /// Compute edge lengths from the layer's Region, aligned to self.adjacencies.
-    /// For each (i, j) pair, looks up the shared boundary length from Region (O(log deg)).
-    /// Returns 0.0 for edges not present in Region (e.g., manually patched island bridges).
-    fn compute_edge_lengths_from_region(&mut self) -> Result<()> {
-        let Some(region) = &self.region else {
-            // No region: initialize edge_lengths with zeros
-            self.edge_lengths = self.adjacencies.iter()
-                .map(|neighbors| vec![0.0; neighbors.len()])
-                .collect();
-            return Ok(());
-        };
-        let adj = region.adjacency();
-        self.edge_lengths = self.adjacencies.iter().enumerate()
-            .map(|(i, neighbors)| {
-                let uid_i = geograph::UnitId(i as u32);
-                neighbors.iter().map(|&j| {
-                    let uid_j = geograph::UnitId(j);
-                    adj.neighbors(uid_i)
-                        .binary_search(&uid_j)
-                        .ok()
-                        .map(|pos| adj.weight_at(adj.offset(uid_i) + pos))
-                        .unwrap_or(0.0)
-                }).collect()
-            })
-            .collect();
         Ok(())
     }
 
@@ -313,8 +232,7 @@ impl MapLayer {
     ///   - "GEOID" (String) – block IDs
     ///   - "outer_perimeter_m" (f64) – outer perimeter length in meters
     fn compute_outer_perimeters_from_region(&self) -> Result<DataFrame> {
-        let region = self.region.as_ref()
-            .ok_or_else(|| anyhow!("Cannot compute outer perimeters: no region available!"))?;
+        let region = &*self.region;
 
         let outer_perimeters: Vec<f64> = (0..self.len())
             .map(|i| region.exterior_boundary_length(geograph::UnitId(i as u32)))
@@ -336,16 +254,6 @@ impl MapLayer {
         ])?)
     }
 
-    /// Compute convex hulls for all units in this layer from Region.
-    fn compute_approximate_hulls_from_region(&mut self) {
-        if let Some(region) = &self.region {
-            self.hulls = Some(
-                (0..self.len())
-                    .map(|i| region.convex_hull(geograph::UnitId(i as u32)))
-                    .collect()
-            );
-        }
-    }
 }
 
 impl Map {
@@ -393,42 +301,6 @@ impl Map {
         self.layer_mut(GeoType::Block)
             .ok_or_else(|| anyhow!("[Map.merge_block_data] Missing layer {:?}", GeoType::Block))?
             .merge_data(df, "GEOID")?;
-
-        Ok(())
-    }
-
-    /// Aggregate adjacencies from a child layer to a parent layer.
-    fn aggregate_adjacencies(&mut self, ty: GeoType, parent_ty: GeoType) -> Result<()> {
-        let layer = self.layer(ty)
-            .ok_or_else(|| anyhow!("[Map.aggregate_adjacencies] Missing layer {:?}", ty))?;
-
-        // If the parent layer is absent, skip aggregation.
-        let Some(parent_layer) = self.layer(parent_ty) else { return Ok(()); };
-
-        let parents = layer.parents.iter()
-            .map(|parent_refs| {
-                let geo_id = parent_refs.get(parent_ty)
-                    .ok_or_else(|| anyhow!("Parent with type {:?} is not defined for {:?}", parent_ty, ty))?;
-                parent_layer.index.get(geo_id).copied()
-                    .ok_or_else(|| anyhow!("Parent index does not contain {:?}", geo_id.id()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Build parent edge sets from child graph
-        let mut parent_sets = vec![HashSet::new(); parent_layer.len()];
-        for (i, neighbors) in layer.adjacencies.iter().enumerate() {
-            for &j in neighbors.iter().filter(|&&j| parents[i] != parents[j as usize]) {
-                parent_sets[parents[i] as usize].insert(parents[j as usize]);
-            }
-        }
-
-        // Write back into parent's adjacency list
-        if let Some(parent_layer) = self.layer_mut(parent_ty) {
-            parent_layer.adjacencies = parent_sets.into_iter()
-                .map(|set| set.into_iter().collect::<Vec<_>>())
-                .map(|mut neighbors| { neighbors.sort_unstable(); neighbors })
-                .collect();
-        }
 
         Ok(())
     }
@@ -544,31 +416,10 @@ impl Map {
             &input_dir.join(format!("Election_Data_Block_{state_code}/election_data_block_{state_code}.v06.csv"))
         )?)?, "GEOID")?;
 
-        // Compute adjacencies for all layers, aggregating from blocks up to states.
-        if verbose > 0 { eprintln!("[build_pack] computing adjacencies"); }
+        // Bake island-bridge patches into the block Region so they survive serialisation.
+        if verbose > 0 { eprintln!("[build_pack] patching island bridges"); }
         if let Some(block_layer) = map.layer_mut(GeoType::Block) {
-            // Bake island-bridge patches into the Region before extraction so
-            // they are preserved when the pack is serialised to .region.gz.
             block_layer.patch_region()?;
-            block_layer.extract_adjacencies_from_region()?;
-            block_layer.sort_adjacencies_ccw();
-            map.aggregate_adjacencies(GeoType::Block, GeoType::VTD)?;
-            map.aggregate_adjacencies(GeoType::Block, GeoType::Group)?;
-            map.aggregate_adjacencies(GeoType::Group, GeoType::Tract)?;
-            map.aggregate_adjacencies(GeoType::Tract, GeoType::County)?;
-            map.aggregate_adjacencies(GeoType::County, GeoType::State)?;
-        }
-
-        if verbose > 0 { eprintln!("[build_pack] sorting adjacencies CCW"); }
-        for layer in map.layers_iter_mut() {
-            if layer.ty() != GeoType::Block {
-                layer.sort_adjacencies_ccw();
-            }
-        }
-
-        if verbose > 0 { eprintln!("[build_pack] computing edge lengths"); }
-        for layer in map.layers_iter_mut() {
-            layer.compute_edge_lengths_from_region()?;
         }
 
         // Compute outer perimeters at the block level and aggregate to higher layers.
@@ -577,14 +428,9 @@ impl Map {
             map.merge_block_data(block_layer.compute_outer_perimeters_from_region()?, "GEOID")?;
         }
 
-        if verbose > 0 { eprintln!("[build_pack] computing approximate hulls"); }
+        if verbose > 0 { eprintln!("[build_pack] finalizing weights"); }
         for layer in map.layers_iter_mut() {
-            layer.compute_approximate_hulls_from_region();
-        }
-
-        if verbose > 0 { eprintln!("[build_pack] constructing graphs"); }
-        for layer in map.layers_iter_mut() {
-            layer.construct_graph()
+            layer.finalize_weights();
         }
 
         Ok(map)

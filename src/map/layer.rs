@@ -1,11 +1,11 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
-use geo::{MultiPolygon, Point, Polygon};
-use polars::{frame::DataFrame, prelude::DataType};
+use geo::{MultiPolygon, Point};
+use polars::frame::DataFrame;
 
 use geograph::Region;
 
-use crate::{graph::{UnitGraph, WeightedGraph, WeightMatrix}, map::{GeoId, GeoType, ParentRefs}};
+use crate::{graph::{UnitGraph, WeightMatrix}, map::{GeoId, GeoType, ParentRefs}};
 
 /// A single planar partition Layer of the map, containing entities and their relationships.
 #[derive(Clone)]
@@ -15,51 +15,22 @@ pub struct MapLayer {
     pub(super) index: HashMap<GeoId, u32>,        // Map between geo_ids and per-level contiguous indices
     pub(super) parents: Vec<ParentRefs>,          // References to parent entities (higher level types)
     pub(super) unit_data: DataFrame,              // Entity data (incl. name, centroid, geographic data, election data)
-    pub(super) adjacencies: Vec<Vec<u32>>,        // Adjacency list of contiguous indices
-    pub(super) edge_lengths: Vec<Vec<f64>>,       // Shared perimeter lengths for adjacencies
-    pub(super) hulls: Option<Vec<Polygon<f64>>>,  // Approximate hulls for each entity (todo: remove option)
-    pub(super) graph: Arc<WeightedGraph>,         // Graph representation of layer used for partitioning
-    pub(super) unit_weights: Option<Arc<WeightMatrix>>, // Demographic/election weights (extracted from graph)
-    pub(super) region: Option<Arc<Region>>,       // Planar map for block layer (None for aggregated layers)
+    pub(super) unit_weights: Arc<WeightMatrix>,   // Demographic/election weights (extracted from unit_data)
+    pub(super) region: Arc<Region>,               // Planar map (geometry + adjacency + edge weights)
 }
 
 impl MapLayer {
-    pub(crate) fn new(ty: GeoType) -> Self {
-        Self {
-            ty,
-            geo_ids: Vec::new(),
-            index: HashMap::new(),
-            parents: Vec::new(),
-            unit_data: DataFrame::default(),
-            adjacencies: Vec::new(),
-            edge_lengths: Vec::new(),
-            hulls: None,
-            graph: Arc::default(),
-            unit_weights: None,
-            region: None,
-        }
-    }
-
-    /// Set layer data from pack reading (used by IO operations).
-    /// This is a helper method for the IO module to populate layer data.
-    pub(crate) fn set_pack_data(
-        &mut self,
-        unit_data: DataFrame,
-        parents: Vec<ParentRefs>,
+    /// Create a fully-initialized layer from pre-computed parts.
+    pub(crate) fn new(
+        ty: GeoType,
         geo_ids: Vec<GeoId>,
         index: HashMap<GeoId, u32>,
-        adjacencies: Vec<Vec<u32>>,
-        edge_lengths: Vec<Vec<f64>>,
-        hulls: Option<Vec<Polygon<f64>>>,
-    ) -> Result<(), anyhow::Error> {
-        self.unit_data = unit_data;
-        self.parents = parents;
-        self.geo_ids = geo_ids;
-        self.index = index;
-        self.adjacencies = adjacencies;
-        self.edge_lengths = edge_lengths;
-        self.hulls = hulls;
-        Ok(())
+        parents: Vec<ParentRefs>,
+        unit_data: DataFrame,
+        unit_weights: Arc<WeightMatrix>,
+        region: Arc<Region>,
+    ) -> Self {
+        Self { ty, geo_ids, index, parents, unit_data, unit_weights, region }
     }
 
     /// Get the number of entities in this layer.
@@ -83,20 +54,11 @@ impl MapLayer {
     /// Get a reference to the DataFrame containing entity data for this layer.
     #[inline] pub fn data(&self) -> &DataFrame { &self.unit_data }
 
-    /// Get a reference to the adjacency list for this layer.
-    #[inline] pub fn adjacencies(&self) -> &Vec<Vec<u32>> { &self.adjacencies }
-
-    /// Get a reference to the shared perimeter weights for this layer.
-    #[inline] pub fn shared_perimeters(&self) -> &Vec<Vec<f64>> { &self.edge_lengths }
-
-    /// Get the approximate convex hulls of all MultiPolygons in this layer, if geometries are present.
-    #[inline] pub fn hulls(&self) -> Option<&Vec<Polygon<f64>>> { self.hulls.as_ref() }
-
     /// Get the union of all MultiPolygons in this layer into a single MultiPolygon.
     /// Note that this can be computationally expensive for large layers.
-    pub fn union(&self) -> Option<MultiPolygon<f64>> {
-        let region = self.region.as_ref()?;
-        Some(region.union_of(region.unit_ids()))
+    #[inline]
+    pub fn union(&self) -> MultiPolygon<f64> {
+        self.region.union_of(self.region.unit_ids())
     }
 
     /// Get centroid lon/lat for each entity, preferring DataFrame columns if present, else computing from geometry.
@@ -114,92 +76,19 @@ impl MapLayer {
                 .map(|(lon, lat)| Point::new(lon.unwrap_or(f64::NAN), lat.unwrap_or(f64::NAN)))
                 .collect()
         }
-        
         vec![Point::new(f64::NAN, f64::NAN); self.len()]
     }
 
-    /// Construct a graph representation of the layer for partitioning.
-    /// Requires data, adjacencies, and shared_perimeters to be computed first.
-    pub(crate) fn construct_graph(&mut self) {
-        assert!(self.unit_data.height() != 0, "DataFrame must be populated before constructing graph");
-
-        let weights_i64 = self.unit_data.get_columns().iter()
-            .map(|column| (column.name().to_string(), column))
-            .filter(|(name, _)| name != "idx")
-            .filter_map(|(name, column)| match column.dtype() {
-                DataType::Int64  => Some((name, column.i64().unwrap().into_no_null_iter().collect())),
-                DataType::Int32  => Some((name, column.i32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                DataType::Int16  => Some((name, column.i16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                DataType::Int8   => Some((name, column.i8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                DataType::UInt64 => Some((name, column.u64().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                DataType::UInt32 => Some((name, column.u32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                DataType::UInt16 => Some((name, column.u16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                DataType::UInt8  => Some((name, column.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
-                _ => None,
-            }).collect();
-
-        let weights_f64 = self.unit_data.get_columns().iter()
-            .map(|column| (column.name().to_string(), column))
-            .filter_map(|(name, column)| match column.dtype() {
-                DataType::Float64 => Some((name, column.f64().unwrap().into_no_null_iter().collect())),
-                DataType::Float32 => Some((name, column.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect())),
-                _ => None,
-            }).collect();
-
-        let weights = WeightMatrix::new(self.len(), weights_i64, weights_f64);
-        self.unit_weights = Some(Arc::new(weights.clone()));
-
-        // Filter self-edges out of adjacencies before building the graph.
-        let filtered_adj: Vec<Vec<u32>> = self.adjacencies.iter().enumerate()
-            .map(|(i, nbrs)| nbrs.iter().filter(|&&n| n as usize != i).copied().collect())
-            .collect();
-        let filtered_weights: Vec<Vec<f64>> = self.adjacencies.iter().enumerate()
-            .map(|(i, nbrs)| nbrs.iter().zip(self.edge_lengths[i].iter())
-                .filter(|&(&n, _)| n as usize != i).map(|(_, &w)| w).collect())
-            .collect();
-
-        // Set exterior flags from outer_perimeter_m > 0 in node weights.
-        let exterior: Vec<bool> = (0..self.len())
-            .map(|i| weights.get_as_f64("outer_perimeter_m", i).unwrap_or(0.0) > 0.0)
-            .collect();
-
-        // Use empty hulls if not available (hulls are optional)
-        // Create a local empty Vec that lives long enough for the function call
-        let empty_hulls: Vec<geo::Polygon<f64>> = Vec::new();
-        let hulls = self.hulls().unwrap_or(&empty_hulls);
-
-        let mut graph = WeightedGraph::new(
-            self.len(),
-            &filtered_adj,
-            &filtered_weights,
-            weights,
-            hulls,
-        );
-        graph.set_exterior(exterior);
-        self.graph = Arc::new(graph);
-    }
-
-    /// Get an Arc clone of the graph representation of this layer.
-    #[inline] pub(crate) fn get_graph_ref(&self) -> Arc<WeightedGraph> { self.graph.clone() }
-
     /// Get the unit graph for this layer.
-    /// Uses Region if available, otherwise falls back to legacy WeightedGraph.
     pub(crate) fn get_unit_graph(&self) -> UnitGraph {
-        if let Some(region) = &self.region {
-            UnitGraph::Region(region.clone())
-        } else {
-            UnitGraph::Legacy(self.graph.clone())
-        }
+        UnitGraph(self.region.clone())
     }
 
     /// Get an Arc clone of the unit weights for this layer.
-    #[inline] pub(crate) fn get_unit_weights(&self) -> Option<Arc<WeightMatrix>> { self.unit_weights.clone() }
+    #[inline] pub(crate) fn get_unit_weights(&self) -> Arc<WeightMatrix> { self.unit_weights.clone() }
 
-    /// Get a reference to the Region, if present (block layer only).
-    #[inline] pub(crate) fn region(&self) -> Option<&Region> { self.region.as_deref() }
-
-    /// Set the Region for this layer.
-    pub(crate) fn set_region(&mut self, region: Region) { self.region = Some(Arc::new(region)); }
+    /// Get a reference to the Region for this layer.
+    #[inline] pub(crate) fn region(&self) -> &Region { &self.region }
 }
 
 impl fmt::Debug for MapLayer {
@@ -208,8 +97,7 @@ impl fmt::Debug for MapLayer {
             .field("ty", &self.ty)
             .field("n", &self.geo_ids.len())
             .field("data", &format_args!("{}x{}", self.unit_data.height(), self.unit_data.width()))
-            .field("adj", &!self.adjacencies.is_empty())
-            .field("region", &self.region.is_some())
+            .field("region_units", &self.region.num_units())
             .finish()
     }
 }

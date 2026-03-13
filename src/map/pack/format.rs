@@ -41,10 +41,7 @@ impl PackFormat {
         }
     }
 
-    /// Get file extension for hull files (always WKB, regardless of format)
-    pub fn hull_extension(&self) -> &'static str {
-        "wkb"
-    }
+
 }
 
 impl Default for PackFormat {

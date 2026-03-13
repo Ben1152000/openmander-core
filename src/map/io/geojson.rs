@@ -16,8 +16,7 @@ impl MapLayer {
     /// bounds: Optional bounding box [min_lon, min_lat, max_lon, max_lat] to filter features.
     /// Only features that intersect the bounds will be included. If None, all features are included.
     pub fn to_geojson_with_bounds(&self, bounds: Option<[f64; 4]>) -> Result<Value> {
-        let region = self.region.as_ref()
-            .ok_or_else(|| anyhow!("[to_geojson_with_bounds] No geometries available"))?;
+        let region = &*self.region;
 
         // Determine which indices to include based on bounds
         let indices: Vec<usize> = if let Some([min_lon, min_lat, max_lon, max_lat]) = bounds {
@@ -120,8 +119,7 @@ impl MapLayer {
     /// assignments: index -> district_id mapping
     /// bounds: Optional bounding box [min_lon, min_lat, max_lon, max_lat] to filter features.
     pub fn to_geojson_with_districts_and_bounds(&self, assignments: &[u32], bounds: Option<[f64; 4]>) -> Result<Value> {
-        let region = self.region.as_ref()
-            .ok_or_else(|| anyhow!("[to_geojson_with_districts] No geometries available"))?;
+        let region = &*self.region;
 
         let num_entities = self.geo_ids.len();
 

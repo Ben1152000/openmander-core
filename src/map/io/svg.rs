@@ -25,8 +25,7 @@ impl MapLayer {
     }
 
     fn render_svg(&self, writer: &mut impl Write, width: i32, margin: i32, series: Option<&str>) -> Result<()> {
-        let region = self.region.as_ref()
-            .ok_or_else(|| anyhow!("[to_svg] No geometries available to draw."))?;
+        let region = &*self.region;
         let bounds = region.bounds_all();
 
         let shapes: Vec<geo::MultiPolygon<f64>> = region.unit_ids()
@@ -51,10 +50,11 @@ impl MapLayer {
             crate::io::svg::draw_polygons(writer, &shapes, &project)?;
         }
 
-        let edges = self.adjacencies.iter().enumerate()
-            .flat_map(|(i, neighbors)| {
-                neighbors.iter()
-                    .filter_map(move |&j| ((j as usize) > i).then_some((i, j as usize)))
+        let edges = region.unit_ids()
+            .flat_map(|u| {
+                let i = u.0 as usize;
+                region.adjacency().neighbors(u).iter()
+                    .filter_map(move |&v| (v.0 as usize > i).then_some((i, v.0 as usize)))
             })
             .map(|(i, j)| (&centroids[i], &centroids[j]))
             .collect::<Vec<_>>();

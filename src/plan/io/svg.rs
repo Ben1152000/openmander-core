@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, io::Write, path::Path};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use geo::Coord;
 
 use crate::{io::svg::{Projection, SegmentSet, Viewport}, plan::Plan};
@@ -13,17 +13,14 @@ impl Plan {
 
     /// Draw dissolved districts using only frontier blocks + state boundary.
     fn to_svg_with_size(&self, path: &Path, color_partisan: bool, width: i32, margin: i32) -> Result<()> {
-        let bounds = self.map().base()?.region()
-            .ok_or_else(|| anyhow!("[to_svg] Could not determine bounds; nothing to draw."))?
-            .bounds_all();
+        let bounds = self.map().base()?.region().bounds_all();
 
         let vp = Viewport::new(bounds, width as f64, margin as f64);
 
         // --- Precompute state outer boundary as a segment set ---
         // Build a set of undirected segments for the *outer* state boundary (all exteriors).
         let state_outline = {
-            let outline = self.map().region()?.union()
-                .ok_or_else(|| anyhow!("[to_svg] No state geoms available"))?;
+            let outline = self.map().region()?.union();
 
             let mut ptmap: HashMap<crate::io::svg::QuantizedPoint, Coord<f64>> = HashMap::new();
             let mut set = crate::io::svg::SegmentSet::default();
@@ -68,13 +65,12 @@ impl Plan {
     /// Build dissolved boundary for district `d` using frontier blocks, immediate same-district neighbors,
     /// and segments on the state outer boundary.
     fn build_district_path_string(&self, d: u32, state_outline: &SegmentSet, project: &Projection) -> Result<Option<String>> {
-        let base_region = self.map().base()?.region()
-            .ok_or_else(|| anyhow!("[to_svg] No block geoms available"))?;
+        let base_region = self.map().base()?.region();
         let shapes: Vec<geo::MultiPolygon<f64>> = base_region.unit_ids()
             .map(|u| base_region.geometry(u).clone())
             .collect();
 
-        let adjacencies = self.map().base()?.adjacencies();
+        let base_adj = base_region.adjacency();
 
         // 1) indices to process: frontier(d) + same-district neighbors + state-edge blocks
         let frontier = self.partition.frontier(d as u32);
@@ -86,9 +82,10 @@ impl Plan {
         }
         // neighbors that are also in d (to cancel interior edges)
         for &i in frontier.iter() {
-            for &j in &adjacencies[i as usize] {
-                if self.partition.assignment(j as usize) == d {
-                    include.insert(j as usize);
+            for &v in base_adj.neighbors(geograph::UnitId(i as u32)) {
+                let j = v.0 as usize;
+                if self.partition.assignment(j) == d {
+                    include.insert(j);
                 }
             }
         }
@@ -152,9 +149,10 @@ impl Plan {
             if self.partition.assignment(i as usize) != d {
                 continue;
             }
-            for &j in &adjacencies[i as usize] {
-                if self.partition.assignment(j as usize) != d {
-                    add_shared(i as usize, j as usize);
+            for &v in base_adj.neighbors(geograph::UnitId(i as u32)) {
+                let j = v.0 as usize;
+                if self.partition.assignment(j) != d {
+                    add_shared(i as usize, j);
                 }
             }
         }

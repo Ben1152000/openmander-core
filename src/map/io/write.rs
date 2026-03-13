@@ -61,8 +61,7 @@ impl MapLayer {
         hashes: &mut BTreeMap<String, FileHash>,
     ) -> Result<()> {
         let layer_name = self.ty().to_str();
-        let adj_file = format!("adj/{layer_name}.csr.bin");
-        
+
         // Determine file extensions from formats
         let data_ext = match formats.data.as_str() {
             "parquet" => "parquet",
@@ -77,11 +76,6 @@ impl MapLayer {
         
         let data_file = format!("data/{layer_name}.{data_ext}");
         let geom_file = format!("geom/{layer_name}.{geom_ext}");
-        let hull_ext = match formats.hull.as_str() {
-            "geoparquet" => "geoparquet",
-            _ => "wkb",
-        };
-        let hull_file = format!("hull/{layer_name}.{hull_ext}");
 
         counts.insert(layer_name.into(), self.geo_ids.len());
 
@@ -106,95 +100,55 @@ impl MapLayer {
             },
         );
 
-        // adjacency (CSR)
-        if self.ty() != GeoType::State {
-            let adj_bytes = crate::io::csr::write_weighted_csr_bytes(&self.adjacencies, &self.edge_lengths)?;
-            sink.put(&adj_file, &adj_bytes)?;
+        // geometries (sourced from Region)
+        let region = &*self.region;
+        let shapes: Vec<MultiPolygon<f64>> = region.unit_ids()
+            .map(|u| region.geometry(u).clone())
+            .collect();
+        if !shapes.is_empty() {
+            let geom_bytes: Vec<u8> = match formats.geometry.as_str() {
+                #[cfg(feature = "parquet")]
+                "geoparquet" => crate::io::geoparquet::write_geoparquet_bytes(&shapes)?,
+                #[cfg(feature = "pmtiles")]
+                "pmtiles" => {
+                    let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(self.ty());
+                    let geo_ids: Vec<String> = self.geo_ids.iter()
+                        .map(|g| g.id().to_string())
+                        .collect();
+                    crate::io::pmtiles::write_to_pmtiles_bytes(&shapes, Some(&geo_ids), min_zoom, max_zoom)?
+                },
+                _ => {
+                    #[cfg(not(feature = "parquet"))]
+                    if formats.geometry == "geoparquet" {
+                        return Err(anyhow::anyhow!("GeoParquet format requires 'parquet' feature to be enabled"));
+                    }
+                    #[cfg(not(feature = "pmtiles"))]
+                    if formats.geometry == "pmtiles" {
+                        return Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"));
+                    }
+                    return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry));
+                }
+            };
+            sink.put(&geom_file, &geom_bytes)?;
             hashes.insert(
-                adj_file.clone(),
+                geom_file.clone(),
                 FileHash {
-                    sha256: sha256_bytes(&adj_bytes),
+                    sha256: sha256_bytes(&geom_bytes),
                 },
             );
         }
 
-        // convex hulls (optional)
-        if let Some(hulls) = &self.hulls {
-            if !hulls.is_empty() {
-                let hull_bytes = match formats.hull.as_str() {
-                    #[cfg(feature = "parquet")]
-                    "geoparquet" => crate::io::geoparquet::write_hulls_to_geoparquet_bytes(hulls)?,
-                    "wkb" => crate::io::wkb::write_hulls_to_wkb_bytes(hulls, true)?,
-                    #[cfg(not(feature = "parquet"))]
-                    "geoparquet" => {
-                        return Err(anyhow::anyhow!("GeoParquet hull format requires 'parquet' feature to be enabled"));
-                    }
-                    _ => {
-                        return Err(anyhow::anyhow!("Unsupported hull format: {}. Use 'geoparquet' or 'wkb'.", formats.hull));
-                    }
-                };
-                sink.put(&hull_file, &hull_bytes)?;
-                hashes.insert(
-                    hull_file.clone(),
-                    FileHash {
-                        sha256: sha256_bytes(&hull_bytes),
-                    },
-                );
-            }
+        // region — geom/{layer_name}.region.gz
+        let region_file = format!("geom/{layer_name}.region.gz");
+        let mut region_bytes: Vec<u8> = Vec::new();
+        {
+            let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
+            geograph::io::write(region, &mut gz)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+            gz.finish().context("Failed to finish gzip encoding for region")?;
         }
-
-        // geometries (optional — sourced from Region)
-        if let Some(region) = &self.region {
-            let shapes: Vec<MultiPolygon<f64>> = region.unit_ids()
-                .map(|u| region.geometry(u).clone())
-                .collect();
-            if !shapes.is_empty() {
-                let geom_bytes: Vec<u8> = match formats.geometry.as_str() {
-                    #[cfg(feature = "parquet")]
-                    "geoparquet" => crate::io::geoparquet::write_geoparquet_bytes(&shapes)?,
-                    #[cfg(feature = "pmtiles")]
-                    "pmtiles" => {
-                        let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(self.ty());
-                        let geo_ids: Vec<String> = self.geo_ids.iter()
-                            .map(|g| g.id().to_string())
-                            .collect();
-                        crate::io::pmtiles::write_to_pmtiles_bytes(&shapes, Some(&geo_ids), min_zoom, max_zoom)?
-                    },
-                    _ => {
-                        #[cfg(not(feature = "parquet"))]
-                        if formats.geometry == "geoparquet" {
-                            return Err(anyhow::anyhow!("GeoParquet format requires 'parquet' feature to be enabled"));
-                        }
-                        #[cfg(not(feature = "pmtiles"))]
-                        if formats.geometry == "pmtiles" {
-                            return Err(anyhow::anyhow!("PMTiles format requires 'pmtiles' feature to be enabled"));
-                        }
-                        return Err(anyhow::anyhow!("Unsupported geometry format: {}. Use 'geoparquet' or 'pmtiles'.", formats.geometry));
-                    }
-                };
-                sink.put(&geom_file, &geom_bytes)?;
-                hashes.insert(
-                    geom_file.clone(),
-                    FileHash {
-                        sha256: sha256_bytes(&geom_bytes),
-                    },
-                );
-            }
-        }
-
-        // region (optional — geom/{layer_name}.region)
-        if let Some(region_ref) = &self.region {
-            let region_file = format!("geom/{layer_name}.region.gz");
-            let mut region_bytes: Vec<u8> = Vec::new();
-            {
-                let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
-                geograph::io::write(region_ref.as_ref(), &mut gz)
-                    .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
-                gz.finish().context("Failed to finish gzip encoding for region")?;
-            }
-            sink.put(&region_file, &region_bytes)?;
-            hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
-        }
+        sink.put(&region_file, &region_bytes)?;
+        hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
 
         Ok(())
     }
@@ -208,7 +162,7 @@ impl Map {
 
     /// Write pack to disk directory with the specified format.
     pub fn write_to_pack_with_format(&self, path: &Path, format: PackFormat) -> Result<()> {
-        for dir in ["adj", "data", "geom", "hull"] {
+        for dir in ["data", "geom"] {
             util::ensure_dir_exists(&path.join(dir))?;
         }
 
@@ -258,81 +212,49 @@ impl Map {
         counts: &mut BTreeMap<&'static str, usize>,
         file_hashes: &mut BTreeMap<String, FileHash>,
     ) -> Result<()> {
-        // Write data, adjacency, and hull files for each layer
+        // Write data and region files for each layer
         for layer in self.layers_iter() {
             let layer_name = layer.ty().to_str();
-            let adj_file = format!("adj/{layer_name}.csr.bin");
             let data_file = format!("data/{layer_name}.csv");
-            let hull_file = format!("hull/{layer_name}.wkb");
-            
+
             counts.insert(layer_name.into(), layer.geo_ids.len());
-            
+
             // Write data file
             let data_bytes = crate::io::csv::write_csv_bytes(&mut layer.pack_data()?)?;
             sink.put(&data_file, &data_bytes)?;
             file_hashes.insert(data_file.clone(), FileHash { sha256: sha256_bytes(&data_bytes) });
-            
-            // Write adjacency file (skip for state layer)
-            if layer.ty() != GeoType::State {
-                let adj_bytes = crate::io::csr::write_weighted_csr_bytes(&layer.adjacencies, &layer.edge_lengths)?;
-                sink.put(&adj_file, &adj_bytes)?;
-                file_hashes.insert(adj_file.clone(), FileHash { sha256: sha256_bytes(&adj_bytes) });
-            }
-            
-            // Write hull file (if exists)
-            if let Some(hulls) = &layer.hulls {
-                if !hulls.is_empty() {
-                    let hull_bytes = crate::io::wkb::write_hulls_to_wkb_bytes(hulls, true)?;
-                    sink.put(&hull_file, &hull_bytes)?;
-                    file_hashes.insert(hull_file.clone(), FileHash { sha256: sha256_bytes(&hull_bytes) });
-                }
-            }
 
-            // Write region file (if exists)
-            if let Some(region_ref) = &layer.region {
-                let region_file = format!("geom/{layer_name}.region.gz");
-                let mut region_bytes: Vec<u8> = Vec::new();
-                {
-                    let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
-                    geograph::io::write(region_ref.as_ref(), &mut gz)
-                        .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
-                    gz.finish().context("Failed to finish gzip encoding for region")?;
-                }
-                sink.put(&region_file, &region_bytes)?;
-                file_hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
+            // Write region file
+            let region_file = format!("geom/{layer_name}.region.gz");
+            let mut region_bytes: Vec<u8> = Vec::new();
+            {
+                let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
+                geograph::io::write(&*layer.region, &mut gz)
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+                gz.finish().context("Failed to finish gzip encoding for region")?;
             }
+            sink.put(&region_file, &region_bytes)?;
+            file_hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
         }
-        
-        // Write individual per-layer PMTiles and collect layers for multi-layer file
+
+        // Collect all layers for the combined multi-layer PMTiles file
         let mut geo_id_vecs: Vec<Vec<String>> = Vec::new();
         let mut layer_info: Vec<(&str, Vec<MultiPolygon<f64>>, u8, u8, usize)> = Vec::new();
 
         for layer in self.layers_iter() {
-            if let Some(region) = &layer.region {
-                let shapes: Vec<MultiPolygon<f64>> = region.unit_ids()
-                    .map(|u| region.geometry(u).clone())
+            let region = &*layer.region;
+            let shapes: Vec<MultiPolygon<f64>> = region.unit_ids()
+                .map(|u| region.geometry(u).clone())
+                .collect();
+            if !shapes.is_empty() {
+                let layer_name = layer.ty().to_str();
+                let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(layer.ty());
+                let geo_ids: Vec<String> = layer.geo_ids.iter()
+                    .map(|g| g.id().to_string())
                     .collect();
-                if !shapes.is_empty() {
-                    let layer_name = layer.ty().to_str();
-                    let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(layer.ty());
-                    let geo_ids: Vec<String> = layer.geo_ids.iter()
-                        .map(|g| g.id().to_string())
-                        .collect();
-
-                    // Write individual layer PMTiles
-                    let layer_geom_file = format!("geom/{layer_name}.pmtiles");
-                    let layer_geom_bytes = crate::io::pmtiles::write_to_pmtiles_bytes(
-                        &shapes, Some(&geo_ids), min_zoom, max_zoom,
-                    )?;
-                    sink.put(&layer_geom_file, &layer_geom_bytes)?;
-                    file_hashes.insert(layer_geom_file, FileHash {
-                        sha256: sha256_bytes(&layer_geom_bytes),
-                    });
-
-                    let idx = geo_id_vecs.len();
-                    geo_id_vecs.push(geo_ids);
-                    layer_info.push((layer_name, shapes, min_zoom, max_zoom, idx));
-                }
+                let idx = geo_id_vecs.len();
+                geo_id_vecs.push(geo_ids);
+                layer_info.push((layer_name, shapes, min_zoom, max_zoom, idx));
             }
         }
 

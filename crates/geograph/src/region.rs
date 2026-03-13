@@ -21,6 +21,7 @@ use crate::unit::UnitId;
 ///
 /// See DESIGN.md for a full description of the internal representation and
 /// the public API contract.
+#[derive(Clone)]
 pub struct Region {
     /// The half-edge data structure encoding the full planar embedding.
     pub(crate) dcel: Dcel<Coord<f64>>,

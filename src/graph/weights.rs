@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ndarray::{s, Array1, Array2, Axis};
+use polars::{frame::DataFrame, prelude::DataType};
 
 #[derive(Clone, Debug)]
 pub(crate) enum WeightType { I64, F64 }
@@ -35,6 +36,34 @@ impl WeightMatrix {
         });
 
         weights
+    }
+
+    /// Build a `WeightMatrix` from the numeric columns of a DataFrame, skipping `idx`.
+    pub(crate) fn from_dataframe(df: &DataFrame) -> Self {
+        let weights_i64 = df.get_columns().iter()
+            .map(|c| (c.name().to_string(), c))
+            .filter(|(name, _)| name != "idx")
+            .filter_map(|(name, c)| match c.dtype() {
+                DataType::Int64  => Some((name, c.i64().unwrap().into_no_null_iter().collect())),
+                DataType::Int32  => Some((name, c.i32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::Int16  => Some((name, c.i16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::Int8   => Some((name, c.i8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::UInt64 => Some((name, c.u64().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::UInt32 => Some((name, c.u32().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::UInt16 => Some((name, c.u16().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                DataType::UInt8  => Some((name, c.u8().unwrap().into_no_null_iter().map(|v| v as i64).collect())),
+                _ => None,
+            }).collect();
+
+        let weights_f64 = df.get_columns().iter()
+            .map(|c| (c.name().to_string(), c))
+            .filter_map(|(name, c)| match c.dtype() {
+                DataType::Float64 => Some((name, c.f64().unwrap().into_no_null_iter().collect())),
+                DataType::Float32 => Some((name, c.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect())),
+                _ => None,
+            }).collect();
+
+        Self::new(df.height(), weights_i64, weights_f64)
     }
 
     /// Create an empty WeightMatrix with zero series.

@@ -15,23 +15,17 @@ pub(crate) struct FileHash {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) struct PackFormats {
-    /// Format for adjacency files (e.g., "csr")
-    pub adjacency: String,
     /// Format for data files (e.g., "csv", "parquet")
     pub data: String,
-    /// Format for geometry files (e.g., "geojson", "geoparquet", "pmtiles")
+    /// Format for geometry files (e.g., "geoparquet", "pmtiles")
     pub geometry: String,
-    /// Format for hull files (e.g., "wkb")
-    pub hull: String,
 }
 
 impl Default for PackFormats {
     fn default() -> Self {
         Self {
-            adjacency: "csr".to_string(),
             data: "csv".to_string(),  // CSV is the default (WASM-compatible)
             geometry: "pmtiles".to_string(),
-            hull: "wkb".to_string(),
         }
     }
 }
@@ -40,7 +34,6 @@ impl PackFormats {
     /// Create PackFormats from a PackFormat enum
     pub(crate) fn from_pack_format(format: PackFormat) -> Self {
         Self {
-            adjacency: "csr".to_string(),
             data: match format {
                 PackFormat::Parquet => "parquet".to_string(),
                 PackFormat::Pmtiles => "csv".to_string(),
@@ -48,11 +41,6 @@ impl PackFormats {
             geometry: match format {
                 PackFormat::Parquet => "geoparquet".to_string(),
                 PackFormat::Pmtiles => "pmtiles".to_string(),
-            },
-            // Hull format matches geometry format for geoparquet, otherwise use wkb
-            hull: match format {
-                PackFormat::Parquet => "geoparquet".to_string(),
-                PackFormat::Pmtiles => "wkb".to_string(),
             },
         }
     }

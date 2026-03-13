@@ -14,7 +14,7 @@ pub(crate) struct Partition {
     pub(super) part_graph: WeightedGraph,    // Graph structure for parts (including aggregated weights)
     unit_graph: UnitGraph,                   // Graph topology for basic units (census block)
     unit_weights: Arc<WeightMatrix>,         // Demographic/election weights for basic units
-    region_graph: Arc<WeightedGraph>,        // Reference to full region graph (state)
+    region_weights: Arc<WeightMatrix>,       // Summed weights for the entire region (state totals)
 }
 
 impl Partition {
@@ -23,10 +23,9 @@ impl Partition {
         num_parts: usize,
         unit_graph: UnitGraph,
         unit_weights: Arc<WeightMatrix>,
-        region_graph: impl Into<Arc<WeightedGraph>>,
+        region_weights: Arc<WeightMatrix>,
     ) -> Self {
         assert!(num_parts > 0, "num_parts must be at least 1");
-        let region_graph: Arc<WeightedGraph> = region_graph.into();
 
         let mut part_weights = unit_weights.copy_of_size(num_parts);
         part_weights.set_row_to_sum_of(0, &unit_weights);
@@ -50,7 +49,7 @@ impl Partition {
             part_graph,
             unit_graph,
             unit_weights,
-            region_graph,
+            region_weights,
         }
     }
 
@@ -317,7 +316,7 @@ impl Partition {
 
     /// Get the total weight of the entire region for a given series.
     pub(crate) fn region_total(&self, series: &str) -> f64 {
-        self.region_graph.node_weights().get_as_f64(series, 0).unwrap()
+        self.region_weights.get_as_f64(series, 0).unwrap()
     }
 
     /// Get a reference to the part weights matrix.

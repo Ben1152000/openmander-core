@@ -12,7 +12,7 @@ Example:
     python build_pack.py IL
     python build_pack.py HI --no-vtd --verbose
     python build_pack.py TX --no-copy  # skip copying to app
-    python build_pack.py IL --rebuild  # rebuild even if pack already exists
+    python build_pack.py IL -f         # rebuild even if pack already exists
 """
 
 import shutil
@@ -31,14 +31,17 @@ except ImportError:
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    flags = [a for a in sys.argv[1:] if a.startswith("--")]
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    flags = [a for a in sys.argv[1:] if a.startswith("-")]
 
-    state_code = args[0].upper() if args else "IL"
+    if not args:
+        print(__doc__)
+        sys.exit(0)
+    state_code = args[0].upper()
     has_vtd = "--no-vtd" not in flags
     verbose = 1 if "--verbose" in flags else 0
     copy_to_app = "--no-copy" not in flags
-    rebuild = "--rebuild" in flags
+    rebuild = "--force" in flags or "-f" in flags
 
     print(f"Building pack for {state_code}")
     print("=" * 60)
@@ -51,7 +54,7 @@ def main():
 
     # Step 1: Build the initial pack if it doesn't exist (or --rebuild)
     if rebuild and original_pack_dir.exists():
-        print(f"\n[Step 1] Removing existing pack for rebuild...")
+        print(f"\n[Step 1] Removing existing pack (--force)...")
         shutil.rmtree(original_pack_dir)
 
     if not original_pack_dir.exists():
@@ -119,8 +122,7 @@ def main():
     print(f"\nThe webpack ({state_code}_2020_webpack) contains:")
     print(f"  - CSV data files (for WASM compatibility)")
     print(f"  - PMTiles geometry files (for efficient web display)")
-    print(f"  - WKB hull files (for convex hull operations)")
-    print(f"  - CSR adjacency files (for graph operations)")
+    print(f"  - Region files (.region.gz, for geometry and adjacency)")
 
 
 if __name__ == "__main__":

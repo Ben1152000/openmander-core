@@ -4,7 +4,6 @@ use anyhow::{Result};
 
 use crate::{
     Metric, Objective,
-    graph::WeightMatrix,
     io::wkb::multipolygon_to_wkb,
     map::{GeoId, Map},
     partition::Partition,
@@ -25,13 +24,13 @@ impl Plan {
         let map: Arc<Map> = map.into();
         let base = map.base()?;
         let unit_graph = base.get_unit_graph();
-        let unit_weights = base.get_unit_weights()
-            .unwrap_or_else(|| Arc::new(WeightMatrix::empty(base.len())));
+        let unit_weights = base.get_unit_weights();
+        let region_weights = map.region()?.get_unit_weights();
         let partition = Partition::new(
             num_districts as usize + 1,
             unit_graph,
             unit_weights,
-            map.region()?.get_graph_ref(),
+            region_weights,
         );
 
         Ok(Self { map, num_districts, partition })
@@ -160,8 +159,7 @@ impl Plan {
     /// or coordinate matching required.
     pub fn district_geometries_wkb(&self) -> Result<Vec<(u32, Vec<u8>)>> {
         let base = self.map.base()?;
-        let region = base.region()
-            .ok_or_else(|| anyhow::anyhow!("No Region available for boundary extraction"))?;
+        let region = base.region();
 
         let mut results = Vec::with_capacity(self.num_districts as usize);
 

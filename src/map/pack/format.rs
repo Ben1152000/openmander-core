@@ -32,16 +32,6 @@ impl PackFormat {
             Self::Pmtiles => "csv",
         }
     }
-
-    /// Get file extension for geometry files
-    pub fn geometry_extension(&self) -> &'static str {
-        match self {
-            Self::Parquet => "geoparquet",
-            Self::Pmtiles => "pmtiles",
-        }
-    }
-
-
 }
 
 impl Default for PackFormat {

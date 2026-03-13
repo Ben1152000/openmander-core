@@ -11,36 +11,26 @@ pub(crate) struct FileHash {
     pub sha256: String,
 }
 
-/// Format specification for different pack components
+/// Format specification for pack data files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) struct PackFormats {
     /// Format for data files (e.g., "csv", "parquet")
     pub data: String,
-    /// Format for geometry files (e.g., "geoparquet", "pmtiles")
-    pub geometry: String,
 }
 
 impl Default for PackFormats {
     fn default() -> Self {
-        Self {
-            data: "csv".to_string(),  // CSV is the default (WASM-compatible)
-            geometry: "pmtiles".to_string(),
-        }
+        Self { data: "csv".to_string() }
     }
 }
 
 impl PackFormats {
-    /// Create PackFormats from a PackFormat enum
     pub(crate) fn from_pack_format(format: PackFormat) -> Self {
         Self {
             data: match format {
                 PackFormat::Parquet => "parquet".to_string(),
                 PackFormat::Pmtiles => "csv".to_string(),
-            },
-            geometry: match format {
-                PackFormat::Parquet => "geoparquet".to_string(),
-                PackFormat::Pmtiles => "pmtiles".to_string(),
             },
         }
     }

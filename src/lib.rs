@@ -15,7 +15,7 @@ mod wasm_console {
     }
 }
 
-mod geom;
+// mod geom;
 mod graph;
 mod io;
 mod map;

@@ -105,59 +105,15 @@ fn read_layer_from_pack_source_with_formats(
     Ok(MapLayer::new(ty, geo_ids, index, parents, unit_data, unit_weights, Arc::new(region)))
 }
 
-/// Detect all formats from file extensions in the pack
+/// Detect the data format from file extensions in the pack.
 fn detect_formats_from_files(src: &dyn PackSource) -> PackFormats {
-    let mut formats = PackFormats::default();
-    
-    // Detect data format
     #[cfg(feature = "parquet")]
-    {
-        for ty in GeoType::ALL {
-            let parquet_file = format!("data/{}.parquet", ty.to_str());
-            if src.has(&parquet_file) {
-                formats.data = "parquet".to_string();
-                break;
-            }
+    for ty in GeoType::ALL {
+        if src.has(&format!("data/{}.parquet", ty.to_str())) {
+            return PackFormats { data: "parquet".to_string() };
         }
     }
-    // Check for CSV files
-    if formats.data == "csv" {
-        for ty in GeoType::ALL {
-            let csv_file = format!("data/{}.csv", ty.to_str());
-            if src.has(&csv_file) {
-                formats.data = "csv".to_string();
-                break;
-            }
-        }
-    }
-    // Default is CSV if no parquet found
-    
-    // Detect geometry format
-    #[cfg(feature = "parquet")]
-    {
-        for ty in GeoType::ALL {
-            let geoparquet_file = format!("geom/{}.geoparquet", ty.to_str());
-            if src.has(&geoparquet_file) {
-                formats.geometry = "geoparquet".to_string();
-                break;
-            }
-        }
-    }
-    #[cfg(feature = "pmtiles")]
-    {
-        for ty in GeoType::ALL {
-            let pmtiles_file = format!("geom/{}.pmtiles", ty.to_str());
-            if src.has(&pmtiles_file) {
-                formats.geometry = "pmtiles".to_string();
-                break;
-            }
-        }
-    }
-    // Default is pmtiles if no geoparquet found
-    
-    // Adjacency format is always "csr" (default)
-    
-    formats
+    PackFormats::default() // CSV
 }
 
 /// Read map from any PackSource using format information from manifest.
@@ -240,20 +196,13 @@ impl Map {
             match Manifest::from_pack_source(&src) {
                 Ok(manifest) => {
                     let manifest_formats = manifest.formats();
-                    // Check if formats are using defaults (old manifest without formats field)
-                    // If formats match defaults, detect from file extensions instead
-                    let default_formats = PackFormats::default();
-                    let is_using_defaults = manifest_formats.data == default_formats.data
-                        && manifest_formats.geometry == default_formats.geometry;
-
-                    let formats = if is_using_defaults {
-                        // Manifest has default formats (likely old manifest without formats field)
-                        // Detect formats from actual file extensions
+                    // If the manifest reports the default data format, detect from file extensions
+                    // instead in case this is an old manifest without an explicit formats field.
+                    let formats = if manifest_formats.data == PackFormats::default().data {
                         detect_formats_from_files(&src)
                     } else {
                         manifest_formats.clone()
                     };
-                    
                     return read_map_from_pack_source_with_formats(&src, &formats);
                 }
                 Err(_) => {

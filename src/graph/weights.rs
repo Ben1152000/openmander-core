@@ -67,6 +67,7 @@ impl WeightMatrix {
     }
 
     /// Create an empty WeightMatrix with zero series.
+    #[allow(unused)]
     pub(crate) fn empty(size: usize) -> Self {
         Self {
             series: HashMap::new(),
@@ -86,14 +87,6 @@ impl WeightMatrix {
         self.series.get(series).map(|(kind, c)| match kind {
             WeightType::I64 => self.i64[(u, *c)] as f64,
             WeightType::F64 => self.f64[(u, *c)],
-        })
-    }
-
-    /// Get the total weight of a subgraph as f64, regardless of original type.
-    pub(crate) fn get_subgraph_weight_as_f64(&self, series: &str, subgraph: &[usize]) -> Option<f64> {
-        self.series.get(series).map(|(kind, c)| match kind {
-            WeightType::I64 => subgraph.iter().map(|&u| self.i64[(u, *c)] as f64).sum(),
-            WeightType::F64 => subgraph.iter().map(|&u| self.f64[(u, *c)]).sum(),
         })
     }
 
@@ -169,5 +162,134 @@ impl WeightMatrix {
         }
         self.i64.row_mut(to_row).scaled_add(-1, &sum_i);
         self.f64.row_mut(to_row).scaled_add(-1.0, &sum_f);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_matrix() -> WeightMatrix {
+        WeightMatrix::new(
+            3,
+            HashMap::from([
+                ("pop".into(), vec![100i64, 200, 300]),
+                ("votes".into(), vec![10i64, 20, 30]),
+            ]),
+            HashMap::from([
+                ("area".into(), vec![1.5f64, 2.5, 3.5]),
+            ]),
+        )
+    }
+
+    #[test]
+    fn test_series_and_contains() {
+        let m = make_matrix();
+        assert!(m.contains("pop"));
+        assert!(m.contains("votes"));
+        assert!(m.contains("area"));
+        assert!(!m.contains("missing"));
+        assert_eq!(m.series().len(), 3);
+    }
+
+    #[test]
+    fn test_get_as_f64() {
+        let m = make_matrix();
+        assert_eq!(m.get_as_f64("pop", 0), Some(100.0));
+        assert_eq!(m.get_as_f64("pop", 2), Some(300.0));
+        assert_eq!(m.get_as_f64("area", 1), Some(2.5));
+        assert_eq!(m.get_as_f64("missing", 0), None);
+    }
+
+    #[test]
+    fn test_copy_of_size() {
+        let m = make_matrix();
+        let copy = m.copy_of_size(5);
+        assert_eq!(copy.series().len(), 3);
+        assert!(copy.contains("pop"));
+        assert_eq!(copy.get_as_f64("pop", 0), Some(0.0));
+        assert_eq!(copy.get_as_f64("area", 4), Some(0.0));
+    }
+
+    #[test]
+    fn test_clear_all_rows() {
+        let mut m = make_matrix();
+        m.clear_all_rows();
+        for i in 0..3 {
+            assert_eq!(m.get_as_f64("pop", i), Some(0.0));
+            assert_eq!(m.get_as_f64("area", i), Some(0.0));
+        }
+    }
+
+    #[test]
+    fn test_clear_row() {
+        let mut m = make_matrix();
+        m.clear_row(1);
+        assert_eq!(m.get_as_f64("pop", 0), Some(100.0));
+        assert_eq!(m.get_as_f64("pop", 1), Some(0.0));
+        assert_eq!(m.get_as_f64("area", 1), Some(0.0));
+        assert_eq!(m.get_as_f64("pop", 2), Some(300.0));
+    }
+
+    #[test]
+    fn test_add_row() {
+        let mut m = make_matrix();
+        m.add_row(0, 1); // row 0 += row 1
+        assert_eq!(m.get_as_f64("pop", 0), Some(300.0));  // 100+200
+        assert_eq!(m.get_as_f64("area", 0), Some(4.0));   // 1.5+2.5
+        assert_eq!(m.get_as_f64("pop", 1), Some(200.0));  // unchanged
+    }
+
+    #[test]
+    fn test_set_row_to_sum_of() {
+        let src = make_matrix();
+        let mut dst = src.copy_of_size(1); // same column layout required for raw row ops
+        dst.set_row_to_sum_of(0, &src);
+        assert_eq!(dst.get_as_f64("pop", 0), Some(600.0));   // 100+200+300
+        assert_eq!(dst.get_as_f64("votes", 0), Some(60.0));  // 10+20+30
+        assert_eq!(dst.get_as_f64("area", 0), Some(7.5));    // 1.5+2.5+3.5
+    }
+
+    #[test]
+    fn test_add_row_from() {
+        let src = make_matrix();
+        let mut dst = src.clone(); // same column layout required for raw row ops
+        dst.add_row_from(0, &src, 2); // dst[0] += src[2]
+        assert_eq!(dst.get_as_f64("pop", 0), Some(400.0));  // 100+300
+        assert_eq!(dst.get_as_f64("area", 0), Some(5.0));   // 1.5+3.5
+    }
+
+    #[test]
+    fn test_subtract_row_from() {
+        let src = make_matrix();
+        let mut dst = src.clone();
+        dst.subtract_row_from(2, &src, 1); // dst[2] -= src[1]
+        assert_eq!(dst.get_as_f64("pop", 2), Some(100.0));  // 300-200
+        assert_eq!(dst.get_as_f64("area", 2), Some(1.0));   // 3.5-2.5
+    }
+
+    #[test]
+    fn test_add_rows_from() {
+        let src = make_matrix();
+        let mut dst = src.clone();
+        dst.add_rows_from(0, &src, &[1, 2]); // dst[0] += src[1] + src[2]
+        assert_eq!(dst.get_as_f64("pop", 0), Some(600.0));  // 100+200+300
+        assert_eq!(dst.get_as_f64("area", 0), Some(7.5));   // 1.5+2.5+3.5
+    }
+
+    #[test]
+    fn test_subtract_rows_from() {
+        let src = make_matrix();
+        let mut dst = src.clone();
+        dst.subtract_rows_from(2, &src, &[0, 1]); // dst[2] -= src[0] + src[1]
+        assert_eq!(dst.get_as_f64("pop", 2), Some(0.0));    // 300-100-200
+        assert_eq!(dst.get_as_f64("area", 2), Some(-0.5));  // 3.5-1.5-2.5
+    }
+
+    #[test]
+    fn test_empty_weights() {
+        let m = WeightMatrix::new(3, HashMap::new(), HashMap::new());
+        assert_eq!(m.series().len(), 0);
+        assert_eq!(m.get_as_f64("anything", 0), None);
     }
 }

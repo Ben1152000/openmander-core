@@ -12,9 +12,7 @@ impl Partition {
     /// Get the perimeter of a part in meters.
     #[inline]
     pub(crate) fn perimeter(&self, part: u32) -> f64 {
-        self.part_graph.edges_with_weights(part as usize)
-            .filter_map(|(edge, weight)| (part as usize != edge).then_some(weight))
-            .sum()
+        self.part_graph.total_perimeter(part as usize)
     }
 
     /// Compute the Polsby-Popper compactness score for a part.

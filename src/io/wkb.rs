@@ -1,21 +1,52 @@
-//! WKB reading operations.
+//! WKB writing operations.
 
 use anyhow::{Context, Result};
-use flate2::read::GzDecoder;
-use geo::Polygon;
-use std::io::Read;
+use geo::{MultiPolygon, Polygon};
+use std::io::{Read, Write};
 
 /// WKB geometry type for Polygon
 const WKB_POLYGON: u32 = 3;
+/// WKB geometry type for MultiPolygon
+const WKB_MULTIPOLYGON: u32 = 6;
 /// WKB byte order: little endian
 const WKB_LE: u8 = 1;
 
-/// Magic bytes for WKB hull file format: "OMHK" (OpenMander Hull)
-const MAGIC: &[u8] = b"OMHK";
-/// Format version (currently 1)
-const VERSION: u8 = 1;
+/// Write a Polygon to WKB format (minimal implementation)
+fn polygon_to_wkb(poly: &Polygon<f64>) -> Result<Vec<u8>> {
+    let mut wkb = Vec::new();
+    
+    // Byte order (little endian)
+    wkb.write_all(&[WKB_LE])?;
+    
+    // Geometry type (Polygon)
+    wkb.write_all(&WKB_POLYGON.to_le_bytes())?;
+    
+    // Number of rings (1 exterior + interiors)
+    let num_rings = (1 + poly.interiors().len()) as u32;
+    wkb.write_all(&num_rings.to_le_bytes())?;
+    
+    // Exterior ring
+    let exterior = poly.exterior();
+    wkb.write_all(&(exterior.0.len() as u32).to_le_bytes())?;
+    for coord in exterior.coords() {
+        wkb.write_all(&coord.x.to_le_bytes())?;
+        wkb.write_all(&coord.y.to_le_bytes())?;
+    }
+    
+    // Interior rings
+    for interior in poly.interiors() {
+        wkb.write_all(&(interior.0.len() as u32).to_le_bytes())?;
+        for coord in interior.coords() {
+            wkb.write_all(&coord.x.to_le_bytes())?;
+            wkb.write_all(&coord.y.to_le_bytes())?;
+        }
+    }
+    
+    Ok(wkb)
+}
 
 /// Read a Polygon from WKB format (minimal implementation)
+#[allow(unused)]
 fn polygon_from_wkb(wkb_bytes: &[u8]) -> Result<Polygon<f64>> {
     let mut cursor = std::io::Cursor::new(wkb_bytes);
     
@@ -107,74 +138,25 @@ fn polygon_from_wkb(wkb_bytes: &[u8]) -> Result<Polygon<f64>> {
     Ok(Polygon::new(exterior, interiors))
 }
 
-/// Read hulls from WKB format bytes.
-pub(crate) fn read_hulls_from_wkb_bytes(bytes: &[u8]) -> Result<Vec<Polygon<f64>>> {
-    let mut cursor = std::io::Cursor::new(bytes);
-    
-    // Read and verify magic
-    let mut magic = [0u8; 4];
-    cursor.read_exact(&mut magic)
-        .context("[io::wkb::read] Failed to read magic bytes")?;
-    if magic != MAGIC {
-        return Err(anyhow::anyhow!("[io::wkb::read] Invalid WKB hull file: bad magic bytes"));
+/// Write a MultiPolygon to WKB format.
+pub(crate) fn multipolygon_to_wkb(mp: &MultiPolygon<f64>) -> Result<Vec<u8>> {
+    let mut wkb = Vec::new();
+
+    // Byte order (little endian)
+    wkb.write_all(&[WKB_LE])?;
+
+    // Geometry type (MultiPolygon)
+    wkb.write_all(&WKB_MULTIPOLYGON.to_le_bytes())?;
+
+    // Number of polygons
+    let num_polygons = mp.0.len() as u32;
+    wkb.write_all(&num_polygons.to_le_bytes())?;
+
+    // Write each polygon
+    for poly in &mp.0 {
+        let poly_wkb = polygon_to_wkb(poly)?;
+        wkb.write_all(&poly_wkb)?;
     }
-    
-    // Read version
-    let mut version = [0u8; 1];
-    cursor.read_exact(&mut version)
-        .context("[io::wkb::read] Failed to read version")?;
-    if version[0] != VERSION {
-        return Err(anyhow::anyhow!("[io::wkb::read] Unsupported WKB hull file version: {}", version[0]));
-    }
-    
-    // Read count
-    let mut count_bytes = [0u8; 4];
-    cursor.read_exact(&mut count_bytes)
-        .context("[io::wkb::read] Failed to read hull count")?;
-    let count = u32::from_le_bytes(count_bytes) as usize;
-    
-    // Read compression flag
-    let mut compressed_flag = [0u8; 1];
-    cursor.read_exact(&mut compressed_flag)
-        .context("[io::wkb::read] Failed to read compression flag")?;
-    let is_compressed = compressed_flag[0] != 0;
-    
-    // Read and decompress data if needed
-    let mut data = Vec::new();
-    cursor.read_to_end(&mut data)
-        .context("[io::wkb::read] Failed to read WKB data")?;
-    
-    let wkb_data = if is_compressed {
-        let mut decoder = GzDecoder::new(&data[..]);
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed)
-            .context("[io::wkb::read] Failed to decompress WKB data")?;
-        decompressed
-    } else {
-        data
-    };
-    
-    // Parse WKB geometries
-    let mut cursor = std::io::Cursor::new(wkb_data);
-    let mut hulls = Vec::with_capacity(count);
-    
-    for _ in 0..count {
-        // Read length
-        let mut len_bytes = [0u8; 4];
-        cursor.read_exact(&mut len_bytes)
-            .context("[io::wkb::read] Failed to read WKB length")?;
-        let len = u32::from_le_bytes(len_bytes) as usize;
-        
-        // Read WKB bytes
-        let mut wkb_bytes = vec![0u8; len];
-        cursor.read_exact(&mut wkb_bytes)
-            .context("[io::wkb::read] Failed to read WKB bytes")?;
-        
-        // Parse WKB to Polygon
-        let polygon = polygon_from_wkb(&wkb_bytes)
-            .context("[io::wkb::read] Failed to parse WKB polygon")?;
-        hulls.push(polygon);
-    }
-    
-    Ok(hulls)
+
+    Ok(wkb)
 }

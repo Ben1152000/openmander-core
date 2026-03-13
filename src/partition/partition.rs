@@ -1,8 +1,8 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    graph::{UnitGraph, WeightedGraph, WeightMatrix},
-    partition::{FrontierEdgeList, MultiSet, PartitionSet},
+    graph::{UnitGraph, WeightMatrix},
+    partition::{FrontierEdgeList, MultiSet, PartGraph, PartitionSet},
 };
 
 /// A partition of a graph into contiguous parts (districts).
@@ -11,7 +11,7 @@ pub(crate) struct Partition {
     pub(super) parts: PartitionSet,          // Sets of nodes in each part (including unassigned 0)
     pub(super) frontiers: MultiSet,          // Nodes on the boundary of each part
     pub(super) frontier_edges: FrontierEdgeList, // Half-edges on the boundary of each part
-    pub(super) part_graph: WeightedGraph,    // Graph structure for parts (including aggregated weights)
+    pub(super) part_graph: PartGraph,        // Aggregated weights and perimeters for each part
     unit_graph: UnitGraph,                   // Graph topology for basic units (census block)
     unit_weights: Arc<WeightMatrix>,         // Demographic/election weights for basic units
     region_weights: Arc<WeightMatrix>,       // Summed weights for the entire region (state totals)
@@ -29,15 +29,7 @@ impl Partition {
 
         let mut part_weights = unit_weights.copy_of_size(num_parts);
         part_weights.set_row_to_sum_of(0, &unit_weights);
-
-        // Instantiate graph with a zero-length edge between each part (to be updated later).
-        let part_graph = WeightedGraph::new(
-            num_parts,
-            &vec![(0..num_parts as u32).collect::<Vec<_>>(); num_parts],
-            &vec![vec![0.0; num_parts]; num_parts],
-            part_weights,
-            &vec![], // To be implemented later
-        );
+        let part_graph = PartGraph::new(num_parts, part_weights);
 
         // edge_count() returns total directed edges (each undirected edge counted twice)
         let num_directed_edges = unit_graph.edge_count();
@@ -96,6 +88,7 @@ impl Partition {
 
         self.part_graph.node_weights_mut().clear_all_rows();
         self.part_graph.node_weights_mut().set_row_to_sum_of(0, &self.unit_weights);
+        self.part_graph.clear_perimeters();
     }
 
     /// Whether a node is on the frontier of its part: it has a graph
@@ -265,41 +258,34 @@ impl Partition {
         }
 
         // Recompute per-part totals.
-        let mut part_weights = WeightMatrix::copy_of_size(&self.unit_weights, self.num_parts() as usize);
+        let mut part_weights = self.unit_weights.copy_of_size(self.num_parts() as usize);
         for (node, &part) in self.assignments().iter().enumerate() {
             part_weights.add_row_from(part as usize, &self.unit_weights, node);
         }
 
-        // Recompute edge weights between parts.
-        let mut edge_weights = vec![vec![0.0; self.num_parts() as usize]; self.num_parts() as usize];
+        // Rebuild part graph with fresh perimeters.
+        let mut part_graph = PartGraph::new(self.num_parts() as usize, part_weights);
         for part in 0..self.num_parts() {
             for &node in self.frontiers.get(part as usize).iter() {
                 for (edge, weight) in self.graph().edges_with_weights(node) {
                     let other = self.assignment(edge);
-                    if other != part { 
-                        edge_weights[part as usize][other as usize] += weight;
+                    if other != part {
+                        part_graph.add_perimeter(part as usize, other as usize, weight);
                     }
                 }
             }
         }
 
-        // Account for exterior edge weights
+        // Account for exterior perimeters.
         for part in 1..self.num_parts() {
-            let exterior = part_weights
+            let exterior = part_graph.node_weights()
                 .get_as_f64("outer_perimeter_m", part as usize)
                 .unwrap_or(0.0);
-            edge_weights[part as usize][0] += exterior;
-            edge_weights[0][part as usize] += exterior;
+            part_graph.add_perimeter(part as usize, 0, exterior);
+            part_graph.add_perimeter(0, part as usize, exterior);
         }
 
-        // Rebuild part graph.
-        self.part_graph = WeightedGraph::new(
-            self.num_parts() as usize,
-            &vec![(0..self.num_parts()).collect::<Vec<_>>(); self.num_parts() as usize],
-            &edge_weights,
-            part_weights,
-            &vec![],
-        );
+        self.part_graph = part_graph;
     }
 
     /// Sum of a given series for a specific part.
@@ -339,33 +325,30 @@ impl Partition {
             node,
         );
 
-        // Update edge weights between parts.
-        let size = self.num_parts();
+        // Update perimeters between parts.
         for (edge, weight) in self.unit_graph.edges_with_weights(node) {
             let part = self.assignment(edge);
             if part != prev {
-                // Subtract edge weight from (prev, part)
-                self.part_graph.edge_weights_mut()[(prev * size + part) as usize] -= weight;
-                self.part_graph.edge_weights_mut()[(part * size + prev) as usize] -= weight;
+                self.part_graph.add_perimeter(prev as usize, part as usize, -weight);
+                self.part_graph.add_perimeter(part as usize, prev as usize, -weight);
             }
             if part != next {
-                // Add edge weight to (next, part)
-                self.part_graph.edge_weights_mut()[(next * size + part) as usize] += weight;
-                self.part_graph.edge_weights_mut()[(part * size + next) as usize] += weight;
+                self.part_graph.add_perimeter(next as usize, part as usize, weight);
+                self.part_graph.add_perimeter(part as usize, next as usize, weight);
             }
         }
 
-        // Account for exterior edge weights
+        // Account for exterior perimeter.
         let exterior = self.unit_weights
             .get_as_f64("outer_perimeter_m", node)
             .unwrap_or(0.0);
         if prev != 0 {
-            self.part_graph.edge_weights_mut()[(prev * size + 0) as usize] -= exterior;
-            self.part_graph.edge_weights_mut()[(0 * size + prev) as usize] -= exterior;
+            self.part_graph.add_perimeter(prev as usize, 0, -exterior);
+            self.part_graph.add_perimeter(0, prev as usize, -exterior);
         }
         if next != 0 {
-            self.part_graph.edge_weights_mut()[(next * size + 0) as usize] += exterior;
-            self.part_graph.edge_weights_mut()[(0 * size + next) as usize] += exterior;
+            self.part_graph.add_perimeter(next as usize, 0, exterior);
+            self.part_graph.add_perimeter(0, next as usize, exterior);
         }
     }
 
@@ -383,53 +366,37 @@ impl Partition {
             subgraph,
         );
 
-        // Update edge weights between parts.
-        let size = self.num_parts();
+        // Update perimeters between parts.
         let in_subgraph = subgraph.iter().copied().collect::<HashSet<_>>();
         for &node in subgraph {
             for (edge, weight) in self.unit_graph.edges_with_weights(node) {
                 let part = self.assignment(edge);
                 if part != prev && !in_subgraph.contains(&edge) {
-                    // Subtract edge weight from (prev, part)
-                    self.part_graph.edge_weights_mut()[(prev * size + part) as usize] -= weight;
-                    self.part_graph.edge_weights_mut()[(part * size + prev) as usize] -= weight;
+                    self.part_graph.add_perimeter(prev as usize, part as usize, -weight);
+                    self.part_graph.add_perimeter(part as usize, prev as usize, -weight);
                 }
                 if part != next {
-                    // Add edge weight to (next, part)
-                    self.part_graph.edge_weights_mut()[(next * size + part) as usize] += weight;
-                    self.part_graph.edge_weights_mut()[(part * size + next) as usize] += weight;
+                    self.part_graph.add_perimeter(next as usize, part as usize, weight);
+                    self.part_graph.add_perimeter(part as usize, next as usize, weight);
                 }
             }
 
-            // Account for exterior edge weights
+            // Account for exterior perimeter.
             let exterior = self.unit_weights
                 .get_as_f64("outer_perimeter_m", node)
                 .unwrap_or(0.0);
             if prev != 0 {
-                self.part_graph.edge_weights_mut()[(prev * size + 0) as usize] -= exterior;
-                self.part_graph.edge_weights_mut()[(0 * size + prev) as usize] -= exterior;
+                self.part_graph.add_perimeter(prev as usize, 0, -exterior);
+                self.part_graph.add_perimeter(0, prev as usize, -exterior);
             }
             if next != 0 {
-                self.part_graph.edge_weights_mut()[(next * size + 0) as usize] += exterior;
-                self.part_graph.edge_weights_mut()[(0 * size + next) as usize] += exterior;
+                self.part_graph.add_perimeter(next as usize, 0, exterior);
+                self.part_graph.add_perimeter(0, next as usize, exterior);
             }
         }
     }
 
     pub(super) fn update_on_merge_parts(&mut self, target: u32, source: u32) {
-        // Update part weights.
-        self.part_graph.node_weights_mut().add_row(target as usize, source as usize);
-        self.part_graph.node_weights_mut().clear_row(source as usize);
-
-        // Update edge weights between parts.
-        let size = self.num_parts();
-        for part in 0..size {
-            if part != target && part != source {
-                self.part_graph.edge_weights_mut()[(target * size + part) as usize] += self.part_graph.edge_weights()[(source * size + part) as usize];
-                self.part_graph.edge_weights_mut()[(part * size + target) as usize] += self.part_graph.edge_weights()[(part * size + source) as usize];
-            }
-            self.part_graph.edge_weights_mut()[(source * size + part) as usize] = 0.0;
-            self.part_graph.edge_weights_mut()[(part * size + source) as usize] = 0.0;
-        }
+        self.part_graph.merge_into(target as usize, source as usize);
     }
 }

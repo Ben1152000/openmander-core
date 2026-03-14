@@ -5,7 +5,7 @@ use anyhow::{Result};
 use crate::{
     Metric, Objective,
     io::wkb::multipolygon_to_wkb,
-    map::{GeoId, Map},
+    map::{GeoId, GeoType, Map},
     partition::Partition,
 };
 use geograph::UnitId;
@@ -160,6 +160,45 @@ impl Plan {
 
     pub fn recombine(&mut self, a: u32, b: u32) -> Result<()> {
         self.partition.recombine_parts(a, b);
+        Ok(())
+    }
+
+    /// Assign all blocks belonging to a geographic unit to a given district.
+    ///
+    /// `layer` is the geographic level ("block", "vtd", "group", "tract", "county", "state").
+    /// `geo_id` is the FIPS identifier for the unit at that level.
+    /// `district` is the target district (1-indexed; 0 = unassigned).
+    /// Contiguity is not enforced.
+    pub fn assign_unit(&mut self, layer: &str, geo_id: &str, district: u32) -> Result<()> {
+        anyhow::ensure!(
+            district <= self.num_districts,
+            "district {} out of range [0, {}]", district, self.num_districts
+        );
+        let ty = GeoType::from_str(layer)
+            .ok_or_else(|| anyhow::anyhow!("unknown layer '{}'", layer))?;
+
+        let base = self.map.base()?;
+
+        let nodes: Vec<usize> = if ty == GeoType::Block {
+            base.geo_ids().iter()
+                .enumerate()
+                .filter(|(_, gid)| gid.id() == geo_id)
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            base.parents().iter()
+                .enumerate()
+                .filter(|(_, refs)| refs.get(ty).map(|id| id.id() == geo_id).unwrap_or(false))
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        anyhow::ensure!(!nodes.is_empty(), "no blocks found for {} geo_id '{}'", layer, geo_id);
+
+        for node in nodes {
+            self.partition.move_node(node, district, false);
+        }
+
         Ok(())
     }
 

@@ -87,6 +87,14 @@ impl WasmPlan {
         self.inner.recombine(a, b).map_err(js_err)
     }
 
+    /// Assign all blocks belonging to a geographic unit to a given district.
+    /// `layer`: geographic level ("block", "vtd", "tract", "county", etc.)
+    /// `geo_id`: FIPS identifier for the unit at that level.
+    /// `district`: target district (1-indexed; 0 = unassigned). Contiguity is not enforced.
+    pub fn assign_unit(&mut self, layer: String, geo_id: String, district: u32) -> Result<(), JsValue> {
+        self.inner.assign_unit(&layer, &geo_id, district).map_err(js_err)
+    }
+
     /// FAST assignments export: return a Uint32Array of length = #units in active layer.
     pub fn assignments_u32(&self) -> Result<Uint32Array, JsValue> {
         let a: Vec<u32> = self.inner.get_assignments_vec().map_err(js_err)?;

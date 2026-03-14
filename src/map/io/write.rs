@@ -20,7 +20,7 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 /// Get the recommended PMTiles zoom range for a given layer type.
 fn pmtiles_zoom_range_for_layer(ty: GeoType) -> (u8, u8) {
     match ty {
-        GeoType::State => (4, 8),
+        GeoType::State => (4, 14),
         GeoType::County => (4, 10),
         GeoType::Tract => (8, 12),
         GeoType::VTD => (4, 12),  // Start at 4 to enable preloading

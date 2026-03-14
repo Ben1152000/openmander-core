@@ -86,6 +86,65 @@ impl Partition {
         if -remaining > tolerance { self.equalize_parts(series, a, b, tolerance * 1.2) }
     }
 
+    /// Run one outer iteration of equalization. Returns `true` if all parts are within tolerance.
+    /// Intended for chunked execution from JS: call in a loop, yielding between calls.
+    pub(crate) fn equalize_step(&mut self, series: &str, tolerance: f64) -> bool {
+        assert_ne!(self.num_parts(), 1, "cannot equalize with only one part");
+        assert!(self.unit_weights().contains(series),
+            "series '{}' not found in node weights", series);
+
+        let mut rng = rand::rng();
+
+        let total = (1..self.num_parts())
+            .map(|p| self.part_weights().get_as_f64(series, p as usize).unwrap())
+            .sum::<f64>();
+        let target = total / ((self.num_parts() - 1) as f64);
+        let allowed = target * tolerance;
+
+        let totals = (1..self.num_parts())
+            .map(|p| self.part_weights().get_as_f64(series, p as usize).unwrap())
+            .collect::<Vec<_>>();
+        let deviations = totals.iter()
+            .map(|&t| (t - target).abs())
+            .collect::<Vec<_>>();
+        let largest_deviation = *deviations.iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+
+        if largest_deviation <= allowed {
+            println!("Target population per part: {:.0} ±{:.0}", target, allowed);
+            println!("Equalization complete, max deviation {:.0}", largest_deviation);
+            return true;
+        }
+
+        let distribution = WeightedIndex::new(&deviations).unwrap();
+        let part = distribution.sample(&mut rng) as u32 + 1;
+
+        if totals[part as usize - 1] > target * 2.0 {
+            let (smallest, _) = self.part_with_min_weight(series);
+            let neighbors = self.sample_neighboring_parts(smallest, 8, &mut rng);
+            if let Some((neighbor, _)) = neighbors.iter()
+                .map(|&p| (p, self.part_weights().get_as_f64(series, p as usize).unwrap()))
+                .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
+            {
+                if let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
+                    let frontier = self.frontiers.get(part as usize);
+                    if !frontier.is_empty() {
+                        let node = frontier[rng.random_range(0..frontier.len())];
+                        self.move_node_with_articulation(node, new_part);
+                        self.equalize_parts(series, part, new_part, largest_deviation / 2.0);
+                        return false;
+                    }
+                }
+            }
+        }
+
+        let neighbors = self.sample_neighboring_parts(part, 8, &mut rng);
+        if neighbors.is_empty() { return false; }
+        let other = neighbors[rng.random_range(0..neighbors.len())];
+        self.equalize_parts(series, part, other, largest_deviation / 2.0);
+        false
+    }
+
     /// Equalize total weights across all parts using greedy swaps.
     /// `series` should name a column in node_weights.series.
     /// `tolerance` is the allowed fraction deviation from ideal (e.g. 0.01 = ±1%).

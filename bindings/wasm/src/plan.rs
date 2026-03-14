@@ -38,8 +38,19 @@ impl WasmPlan {
         serde_wasm_bindgen::to_value(&v).map_err(|e| e.into())
     }
 
+    /// Totals for all parts including unassigned (index 0). Returns a JS array of numbers.
+    pub fn all_part_totals(&self, series: String) -> Result<JsValue, JsValue> {
+        let v = self.inner.all_part_totals(&series).map_err(js_err)?;
+        serde_wasm_bindgen::to_value(&v).map_err(|e| e.into())
+    }
+
     pub fn randomize(&mut self) -> Result<(), JsValue> {
         self.inner.randomize().map_err(js_err)
+    }
+
+    /// Run one outer iteration of equalization. Returns `true` if converged.
+    pub fn equalize_step(&mut self, series: String, tolerance: f64) -> Result<bool, JsValue> {
+        self.inner.equalize_step(&series, tolerance).map_err(js_err)
     }
 
     pub fn equalize(&mut self, series: String, tolerance: f64, max_iter: usize) -> Result<(), JsValue> {

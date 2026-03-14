@@ -83,6 +83,12 @@ impl Plan {
             .collect())
     }
 
+    /// Sum of a weight series across all parts including unassigned (part 0).
+    /// Index 0 = unassigned units, indices 1..=num_districts = districts.
+    pub fn all_part_totals(&self, series: &str) -> Result<Vec<f64>> {
+        Ok(self.partition.part_totals(series))
+    }
+
     /// Compute metric values for the current partition (per-district scores).
     pub fn compute_metric(&self, metric: &Metric) -> Vec<f64> {
         metric.compute(&self.partition)
@@ -102,6 +108,11 @@ impl Plan {
     pub fn randomize(&mut self) -> Result<()> {
         self.partition.randomize();
         Ok(())
+    }
+
+    /// Run one outer iteration of equalization. Returns `true` if all districts are within tolerance.
+    pub fn equalize_step(&mut self, series: &str, tolerance: f64) -> Result<bool> {
+        Ok(self.partition.equalize_step(series, tolerance))
     }
 
     /// Equalize a weight series across districts using greedy swaps.

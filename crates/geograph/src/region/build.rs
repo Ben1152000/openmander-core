@@ -1,6 +1,6 @@
 use ahash::AHashMap;
 
-use geo::{Coord, MultiPolygon, Rect};
+use geo::{Coord, LineString, MultiPolygon, Polygon, Rect};
 
 use crate::dcel::{Dcel, FaceId, HalfEdgeId, VertexId, OUTER_FACE};
 use crate::rtree::SpatialIndex;
@@ -601,6 +601,11 @@ impl Region {
         let rtree = SpatialIndex::new(&bounds);
         let unit_to_faces = compute_unit_to_faces(&face_to_unit, num_units);
 
+        // Replace input geometries with DCEL-derived ones so that donut-shaped
+        // units (blocks surrounding enclaves) have correct interior hole rings.
+        let geometries = reconstruct_geometries(&dcel, &face_to_unit, num_units);
+        let face_inner_cycles = compute_face_inner_cycles(&dcel);
+
         let region = Region {
             dcel,
             face_to_unit,
@@ -617,6 +622,7 @@ impl Region {
             touching,
             rtree,
             unit_to_faces,
+            face_inner_cycles,
         };
 
         #[cfg(debug_assertions)]
@@ -721,6 +727,79 @@ fn signed_area_deg(dcel: &Dcel<Coord<f64>>, cycle: &[HalfEdgeId]) -> f64 {
     area / 2.0
 }
 
+/// Reconstruct `MultiPolygon` geometries for each unit from the DCEL.
+///
+/// Scans all half-edge cycles grouped by face, classifies each cycle as an
+/// outer ring (positive signed area = CCW) or hole (negative = CW), and
+/// builds `Polygon::new(outer, holes)` for each face.  This correctly
+/// handles donut-shaped units (e.g. a block that surrounds an enclave) where
+/// the DCEL face has both an outer ring cycle and one or more hole cycles.
+///
+/// Shared with `io/read.rs` for deserialization.
+pub(crate) fn reconstruct_geometries(
+    dcel: &Dcel<Coord<f64>>,
+    face_to_unit: &[UnitId],
+    num_units: usize,
+) -> Vec<MultiPolygon<f64>> {
+    let nhe = dcel.num_half_edges();
+    let nf  = dcel.num_faces();
+
+    // Trace every half-edge cycle and group by face.
+    let mut visited = vec![false; nhe];
+    let mut face_cycles: Vec<Vec<(Vec<Coord<f64>>, f64)>> = vec![Vec::new(); nf];
+
+    for h in 0..nhe {
+        if visited[h] { continue; }
+        let face_id = dcel.half_edge(HalfEdgeId(h)).face.0;
+
+        let mut coords: Vec<Coord<f64>> = Vec::new();
+        let mut signed_area = 0.0;
+        let mut cur = HalfEdgeId(h);
+        loop {
+            if visited[cur.0] { break; }
+            visited[cur.0] = true;
+            let c0 = dcel.vertex(dcel.half_edge(cur).origin).coords;
+            let c1 = dcel.vertex(dcel.dest(cur)).coords;
+            coords.push(c0);
+            signed_area += c0.x * c1.y - c1.x * c0.y;
+            cur = dcel.half_edge(cur).next;
+        }
+        signed_area /= 2.0;
+
+        if coords.is_empty() { continue; }
+        if let Some(&first) = coords.first() { coords.push(first); }
+        face_cycles[face_id].push((coords, signed_area));
+    }
+
+    // For each non-EXTERIOR face, partition cycles into outer ring + holes.
+    let mut polys: Vec<Vec<Polygon<f64>>> = vec![Vec::new(); num_units];
+
+    for f in 0..nf {
+        let unit = face_to_unit[f];
+        if unit == UnitId::EXTERIOR { continue; }
+
+        let cycles = &face_cycles[f];
+        if cycles.is_empty() { continue; }
+
+        let mut outer: Option<LineString<f64>> = None;
+        let mut holes: Vec<LineString<f64>> = Vec::new();
+
+        for (coords, area) in cycles {
+            if *area > 0.0 {
+                outer = Some(LineString(coords.clone()));
+            } else {
+                holes.push(LineString(coords.clone()));
+            }
+        }
+
+        if let Some(outer_ring) = outer {
+            polys[unit.0 as usize].push(Polygon::new(outer_ring, holes));
+        }
+    }
+
+    polys.into_iter().map(MultiPolygon).collect()
+}
+
 /// Build a `unit_to_faces` index from `face_to_unit`.
 /// Shared with `io/read.rs` for deserialization.
 pub(crate) fn compute_unit_to_faces(face_to_unit: &[UnitId], num_units: usize) -> Vec<Vec<FaceId>> {
@@ -731,6 +810,52 @@ pub(crate) fn compute_unit_to_faces(face_to_unit: &[UnitId], num_units: usize) -
         }
     }
     unit_to_faces
+}
+
+/// Compute starting half-edges for non-primary face cycles.
+///
+/// Most faces have exactly one boundary cycle reachable from `face.half_edge`.
+/// Donut-shaped units have faces with two disconnected cycles: the outer ring
+/// (primary) and the inner ring (hole).  This function finds the starting
+/// half-edge for each non-primary cycle so `union_of_frontier` can traverse them.
+///
+/// Shared with `io/read.rs` for deserialization.
+pub(crate) fn compute_face_inner_cycles(dcel: &Dcel<Coord<f64>>) -> Vec<Vec<HalfEdgeId>> {
+    let nf = dcel.num_faces();
+    let nhe = dcel.num_half_edges();
+
+    // Mark all half-edges reachable from each face's primary cycle.
+    let mut visited = vec![false; nhe];
+    for f in 0..nf {
+        if let Some(start) = dcel.face(FaceId(f)).half_edge {
+            let mut h = start;
+            loop {
+                if visited[h.0] { break; }
+                visited[h.0] = true;
+                h = dcel.half_edge(h).next;
+                if h == start { break; }
+            }
+        }
+    }
+
+    // Any unvisited half-edge belongs to an inner (non-primary) cycle.
+    // Record one start per inner cycle, grouped by face.
+    let mut face_inner_cycles: Vec<Vec<HalfEdgeId>> = vec![Vec::new(); nf];
+    for h in 0..nhe {
+        if visited[h] { continue; }
+        let face_id = dcel.half_edge(HalfEdgeId(h)).face.0;
+        face_inner_cycles[face_id].push(HalfEdgeId(h));
+        // Mark the entire cycle as visited so we only record one start per cycle.
+        let mut cur = HalfEdgeId(h);
+        loop {
+            if visited[cur.0] { break; }
+            visited[cur.0] = true;
+            cur = dcel.half_edge(cur).next;
+            if cur == HalfEdgeId(h) { break; }
+        }
+    }
+
+    face_inner_cycles
 }
 
 // ---------------------------------------------------------------------------

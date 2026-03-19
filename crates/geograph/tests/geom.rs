@@ -5,6 +5,36 @@
 use geo::{Coord, LineString, MultiPolygon, Polygon};
 use geograph::{Region, UnitId};
 
+/// Build a polygon whose exterior is the given rectangle and that has one
+/// interior hole ring for each entry in `holes`.  Each hole is specified as
+/// `(x0, y0, x1, y1)` but may have extra interior vertices supplied via a
+/// custom `LineString` when needed (use `rect_hole_with_verts` for that).
+fn rect_poly_with_holes(
+    x0: f64, y0: f64, x1: f64, y1: f64,
+    holes: Vec<LineString<f64>>,
+) -> Polygon<f64> {
+    Polygon::new(
+        LineString(vec![
+            Coord { x: x0, y: y0 },
+            Coord { x: x1, y: y0 },
+            Coord { x: x1, y: y1 },
+            Coord { x: x0, y: y1 },
+            Coord { x: x0, y: y0 },
+        ]),
+        holes,
+    )
+}
+
+fn rect_hole(x0: f64, y0: f64, x1: f64, y1: f64) -> LineString<f64> {
+    LineString(vec![
+        Coord { x: x0, y: y0 },
+        Coord { x: x1, y: y0 },
+        Coord { x: x1, y: y1 },
+        Coord { x: x0, y: y1 },
+        Coord { x: x0, y: y0 },
+    ])
+}
+
 fn rect_poly(x0: f64, y0: f64, x1: f64, y1: f64) -> Polygon<f64> {
     Polygon::new(
         LineString(vec![
@@ -258,4 +288,109 @@ fn shared_boundary_length_is_symmetric() {
         (ab - ba).abs() < 1e-6,
         "shared_boundary_length is not symmetric: {ab} vs {ba}"
     );
+}
+
+/// Topology test: Unit A (a large rectangle) encloses three separate regions:
+///
+/// ```text
+/// +--------------------------------------------+
+/// |                  Unit A                    |
+/// |  +---------+  +---------+---------+  +--+ |
+/// |  |         |  |         |         |  |  | |
+/// |  | Unit B  |  | Unit C  | Unit D  |  |  | |
+/// |  |  (1,2)- |  |  (5,2)- | (8,2)- |  |gap| |
+/// |  |  (4,8)  |  |  (8,8)  | (11,8) |  |  | |
+/// |  +---------+  +---------+---------+  +--+ |
+/// |                                            |
+/// +--------------------------------------------+
+/// ```
+///
+/// - Unit A: outer rectangle (0,0)-(14,10) with explicit interior holes for
+///   B, the combined C+D region, and a gap (no unit fills the gap hole).
+/// - Unit B (UnitId 1): simple rectangle (1,2)-(4,8), standalone enclave of A.
+/// - Unit C (UnitId 2): rectangle (5,2)-(8,8), shares edge with D at x=8.
+/// - Unit D (UnitId 3): rectangle (8,2)-(11,8), shares edge with C at x=8.
+/// - gap: the hole (12,2)-(13,8) in A has no corresponding unit; it becomes an
+///   EXTERIOR gap face enclosed within A.
+///
+/// Expected geometry of `union_of`:
+/// - Unit A: 1 polygon, 3 interior holes (B hole, C+D combined hole, gap hole)
+/// - Units B, C, D: 1 polygon each, 0 interior holes
+///
+/// Expected topology:
+/// - A is adjacent to B, C, and D
+/// - C and D are adjacent to each other
+/// - B is not adjacent to C or D
+/// - A is exterior (touches region boundary); B, C, D are interior
+#[test]
+fn donut_unit_with_enclaves_and_gap_face() {
+    // Unit A: outer rectangle with 3 holes.
+    //   Hole 1: B's slot (1,2)-(4,8)
+    //   Hole 2: C+D combined slot (5,2)-(11,8); extra vertices at (8,2) and
+    //           (8,8) so the hole ring shares those vertices with C and D.
+    //   Hole 3: gap (12,2)-(13,8) — no unit fills this → EXTERIOR gap face.
+    let unit_a = MultiPolygon(vec![rect_poly_with_holes(
+        0.0, 0.0, 14.0, 10.0,
+        vec![
+            rect_hole(1.0, 2.0, 4.0, 8.0),
+            // C+D hole: CCW winding expected by geo crate for outer ring; as a
+            // hole it will be reversed internally, but the coordinates here are
+            // the 6-vertex ring (adds the C-D shared column at x=8).
+            LineString(vec![
+                Coord { x: 5.0, y: 2.0 },
+                Coord { x: 8.0, y: 2.0 },
+                Coord { x: 11.0, y: 2.0 },
+                Coord { x: 11.0, y: 8.0 },
+                Coord { x: 8.0, y: 8.0 },
+                Coord { x: 5.0, y: 8.0 },
+                Coord { x: 5.0, y: 2.0 },
+            ]),
+            rect_hole(12.0, 2.0, 13.0, 8.0),
+        ],
+    )]);
+    let unit_b = MultiPolygon(vec![rect_poly(1.0, 2.0, 4.0, 8.0)]);
+    let unit_c = MultiPolygon(vec![rect_poly(5.0, 2.0, 8.0, 8.0)]);
+    let unit_d = MultiPolygon(vec![rect_poly(8.0, 2.0, 11.0, 8.0)]);
+
+    let r = Region::new(vec![unit_a, unit_b, unit_c, unit_d], None)
+        .expect("donut region construction failed");
+
+    let a = UnitId(0);
+    let b = UnitId(1);
+    let c = UnitId(2);
+    let d = UnitId(3);
+
+    // ---- geometry: Unit A should have 3 holes ----
+    let mp_a = r.union_of([a]);
+    assert_eq!(mp_a.0.len(), 1, "Unit A should be a single polygon");
+    assert_eq!(
+        mp_a.0[0].interiors().len(), 3,
+        "Unit A should have 3 interior rings (B, C+D, gap); got {}",
+        mp_a.0[0].interiors().len()
+    );
+
+    // ---- geometry: B, C, D should have no holes ----
+    for (uid, name) in [(b, "B"), (c, "C"), (d, "D")] {
+        let mp = r.union_of([uid]);
+        assert_eq!(mp.0.len(), 1, "Unit {name} should be a single polygon");
+        assert_eq!(
+            mp.0[0].interiors().len(), 0,
+            "Unit {name} should have no interior rings"
+        );
+    }
+
+    // ---- adjacency ----
+    let adj = r.adjacency();
+    assert!(adj.contains(a, b), "A should be adjacent to B");
+    assert!(adj.contains(a, c), "A should be adjacent to C");
+    assert!(adj.contains(a, d), "A should be adjacent to D");
+    assert!(adj.contains(c, d), "C should be adjacent to D");
+    assert!(!adj.contains(b, c), "B should not be adjacent to C");
+    assert!(!adj.contains(b, d), "B should not be adjacent to D");
+
+    // ---- exterior flags ----
+    assert!(r.is_exterior(a), "Unit A should be exterior");
+    assert!(!r.is_exterior(b), "Unit B should not be exterior");
+    assert!(!r.is_exterior(c), "Unit C should not be exterior");
+    assert!(!r.is_exterior(d), "Unit D should not be exterior");
 }

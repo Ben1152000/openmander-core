@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use geo::{Coord, LineString, MultiPolygon, Polygon, Rect};
+use geo::{Coord, MultiPolygon, Rect};
 
 use crate::adj::AdjacencyMatrix;
 use crate::dcel::{Dcel, Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};
@@ -161,9 +161,10 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         rect
     };
     let is_exterior = compute_is_exterior(&dcel, &face_to_unit, nu);
-    let geometries  = reconstruct_geometries(&dcel, &face_to_unit, nu);
+    let geometries  = crate::region::build::reconstruct_geometries(&dcel, &face_to_unit, nu);
     let rtree       = SpatialIndex::new(&bounds);
     let unit_to_faces = crate::region::build::compute_unit_to_faces(&face_to_unit, nu);
+    let face_inner_cycles = crate::region::build::compute_face_inner_cycles(&dcel);
 
     Ok(Region {
         dcel,
@@ -181,6 +182,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         touching,
         rtree,
         unit_to_faces,
+        face_inner_cycles,
     })
 }
 
@@ -305,29 +307,4 @@ fn compute_is_exterior(
         }
     }
     flags
-}
-
-fn reconstruct_geometries(
-    dcel: &Dcel<Coord<f64>>,
-    face_to_unit: &[UnitId],
-    num_units: usize,
-) -> Vec<MultiPolygon<f64>> {
-    let mut polys: Vec<Vec<Polygon<f64>>> = vec![Vec::new(); num_units];
-
-    for f in 0..dcel.num_faces() {
-        let unit = face_to_unit[f];
-        if unit == UnitId::EXTERIOR { continue; }
-        let start = match dcel.face(FaceId(f)).half_edge {
-            Some(he) => he,
-            None => continue,
-        };
-        let mut coords: Vec<Coord<f64>> = dcel
-            .face_cycle(start)
-            .map(|he| dcel.vertex(dcel.half_edge(he).origin).coords)
-            .collect();
-        if let Some(&first) = coords.first() { coords.push(first); }
-        polys[unit.0 as usize].push(Polygon::new(LineString(coords), vec![]));
-    }
-
-    polys.into_iter().map(MultiPolygon).collect()
 }

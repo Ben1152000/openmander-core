@@ -8,7 +8,7 @@ pub use build::RegionError;
 use geo::{Coord, MultiPolygon, Rect};
 
 use crate::adj::AdjacencyMatrix;
-use crate::dcel::{Dcel, FaceId};
+use crate::dcel::{Dcel, FaceId, HalfEdgeId};
 use crate::rtree::SpatialIndex;
 use crate::unit::UnitId;
 
@@ -73,6 +73,15 @@ pub struct Region {
     /// Maps each unit to the DCEL faces it owns.
     /// Indexed by `UnitId.0`; most units have exactly one face.
     pub(crate) unit_to_faces: Vec<Vec<FaceId>>,
+
+    /// Starting half-edges for non-primary face cycles, indexed by `FaceId.0`.
+    ///
+    /// Most faces have a single boundary cycle (reachable from `face.half_edge`),
+    /// so most entries are empty.  Donut-shaped units have one face with two
+    /// disconnected boundary cycles: the outer ring (primary, pointed to by
+    /// `face.half_edge`) and the inner ring (hole).  The inner-ring starting
+    /// half-edge is stored here so that `union_of_frontier` can traverse it.
+    pub(crate) face_inner_cycles: Vec<Vec<HalfEdgeId>>,
 }
 
 impl Region {
@@ -267,6 +276,7 @@ pub(crate) mod test_helpers {
         };
 
         let unit_to_faces = crate::region::build::compute_unit_to_faces(&face_to_unit, 2);
+        let face_inner_cycles = crate::region::build::compute_face_inner_cycles(&dcel);
 
         Region {
             dcel,
@@ -291,6 +301,7 @@ pub(crate) mod test_helpers {
             touching,
             rtree,
             unit_to_faces,
+            face_inner_cycles,
         }
     }
 }

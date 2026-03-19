@@ -1,7 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use std::sync::Arc;
 
-use pyo3::{pyclass, pymethods, Bound, PyResult};
+use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use pyo3::exceptions::PyValueError;
 
 /// Python-facing Map wrapper.
@@ -71,6 +71,49 @@ impl Map {
                 .map_err(|e| PyValueError::new_err(e.to_string()))?;
         }
         Ok(())
+    }
+
+    /// Return per-unit geometry statistics for a given layer.
+    ///
+    /// Returns a list of dicts with keys:
+    ///   - ``geo_id``: unit identifier string
+    ///   - ``idx``: 0-based unit index within the layer
+    ///   - ``num_polygons``: number of polygons in the MultiPolygon
+    ///   - ``holes_per_polygon``: list[int] — interior-ring count for each polygon
+    ///   - ``is_exterior``: bool — touches the region boundary
+    ///
+    /// Parameters
+    /// ----------
+    /// layer : str, default="block"
+    ///     One of: "state", "county", "tract", "group", "vtd", "block".
+    #[pyo3(text_signature = "(self, layer='block')")]
+    pub fn geometry_stats<'py>(&self, py: Python<'py>, layer: Option<&str>) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+        use pyo3::types::{PyDict, PyList};
+
+        let layer_name = layer.unwrap_or("block");
+        let ty = openmander_core::GeoType::from_str(layer_name).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "Unknown layer {:?}. Expected one of: state, county, tract, group, vtd, block",
+                layer_name
+            ))
+        })?;
+
+        let stats = self.inner.geometry_stats(ty)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        use pyo3::types::{PyDictMethods, PyListMethods};
+        let out = PyList::empty_bound(py);
+        for (geo_id, idx, holes, is_ext) in stats {
+            let num_polygons = holes.len();
+            let d = PyDict::new_bound(py);
+            d.set_item("geo_id", &geo_id)?;
+            d.set_item("idx", idx)?;
+            d.set_item("num_polygons", num_polygons)?;
+            d.set_item("holes_per_polygon", holes)?;
+            d.set_item("is_exterior", is_ext)?;
+            out.append(d)?;
+        }
+        Ok(out)
     }
 
     /// Write an SVG for a given layer.

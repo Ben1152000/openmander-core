@@ -339,6 +339,7 @@ impl Region {
         let mut boundary: Vec<usize> = Vec::new();
         for unit in frontier_units {
             for &face_id in &self.unit_to_faces[unit.0 as usize] {
+                // Primary cycle (outer ring).
                 let start = match self.dcel.face(face_id).half_edge {
                     Some(he) => he,
                     None => continue,
@@ -352,6 +353,19 @@ impl Region {
                     }
                     h = he.next;
                     if h == start { break; }
+                }
+                // Inner ring cycles (holes in donut-shaped units).
+                for &inner_start in &self.face_inner_cycles[face_id.0] {
+                    let mut h = inner_start;
+                    loop {
+                        let he = self.dcel.half_edge(h);
+                        let twin_unit = self.face_to_unit[self.dcel.half_edge(he.twin).face.0];
+                        if twin_unit == UnitId::EXTERIOR || !is_in_district(twin_unit) {
+                            boundary.push(h.0);
+                        }
+                        h = he.next;
+                        if h == inner_start { break; }
+                    }
                 }
             }
         }

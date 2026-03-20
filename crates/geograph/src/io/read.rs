@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use geo::{Coord, MultiPolygon, Rect};
+use geo::{Coord, Rect};
 
 use crate::adj::AdjacencyMatrix;
 use crate::dcel::{Dcel, Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};

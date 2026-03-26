@@ -2,7 +2,6 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result};
 use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
-use geo::MultiPolygon;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -20,12 +19,12 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 /// Get the recommended PMTiles zoom range for a given layer type.
 fn pmtiles_zoom_range_for_layer(ty: GeoType) -> (u8, u8) {
     match ty {
-        GeoType::State => (4, 14),
-        GeoType::County => (4, 10),
-        GeoType::Tract => (8, 12),
-        GeoType::VTD => (4, 12),  // Start at 4 to enable preloading
-        GeoType::Group => (8, 12),
-        GeoType::Block => (12, 14),
+        GeoType::State  =>  (4, 14),
+        GeoType::County =>  (4, 10),
+        GeoType::Tract  =>  (4, 12),
+        GeoType::VTD    =>  (4, 14),  // Start at 4 to enable preloading
+        GeoType::Group  =>  (8, 12),
+        GeoType::Block  => (10, 14),
     }
 }
 
@@ -182,16 +181,15 @@ impl Map {
             file_hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
         }
 
-        // Collect all layers for the combined multi-layer PMTiles file
+        // Collect all layers for the combined multi-layer PMTiles file.
+        // Each layer's Region is passed directly so topology-preserving
+        // simplification can share arc coordinates across adjacent units.
         let mut geo_id_vecs: Vec<Vec<String>> = Vec::new();
-        let mut layer_info: Vec<(&str, Vec<MultiPolygon<f64>>, u8, u8, usize)> = Vec::new();
+        let mut layer_info: Vec<(&str, &geograph::Region, u8, u8, usize)> = Vec::new();
 
         for layer in self.layers_iter() {
             let region = &*layer.region;
-            let shapes: Vec<MultiPolygon<f64>> = region.unit_ids()
-                .map(|u| region.geometry(u).clone())
-                .collect();
-            if !shapes.is_empty() {
+            if region.num_units() > 0 {
                 let layer_name = layer.ty().to_str();
                 let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(layer.ty());
                 let geo_ids: Vec<String> = layer.geo_ids.iter()
@@ -199,14 +197,14 @@ impl Map {
                     .collect();
                 let idx = geo_id_vecs.len();
                 geo_id_vecs.push(geo_ids);
-                layer_info.push((layer_name, shapes, min_zoom, max_zoom, idx));
+                layer_info.push((layer_name, region, min_zoom, max_zoom, idx));
             }
         }
 
-        // Build the pmtiles_layers vec with references into the owned shapes
-        let pmtiles_layers: Vec<(&str, &[MultiPolygon<f64>], Option<&[String]>, u8, u8)> = layer_info.iter()
-            .map(|(name, shapes, min_zoom, max_zoom, idx)| {
-                (*name, shapes.as_slice(), Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)
+        // Build the pmtiles_layers vec with references into owned data.
+        let pmtiles_layers: Vec<(&str, &geograph::Region, Option<&[String]>, u8, u8)> = layer_info.iter()
+            .map(|(name, region, min_zoom, max_zoom, idx)| {
+                (*name, *region, Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)
             })
             .collect();
         

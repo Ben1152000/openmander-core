@@ -202,6 +202,43 @@ impl Plan {
         Ok(())
     }
 
+    /// Assign all blocks belonging to multiple geographic units to a given district in one pass.
+    ///
+    /// Equivalent to calling `assign_unit` for each geo_id, but iterates the block table only
+    /// once, making it O(blocks) rather than O(blocks × n). Contiguity is not enforced.
+    pub fn assign_units_batch(&mut self, layer: &str, geo_ids: &[&str], district: u32) -> Result<()> {
+        anyhow::ensure!(
+            district <= self.num_districts,
+            "district {} out of range [0, {}]", district, self.num_districts
+        );
+        if geo_ids.is_empty() { return Ok(()); }
+        let ty = GeoType::from_str(layer)
+            .ok_or_else(|| anyhow::anyhow!("unknown layer '{}'", layer))?;
+
+        let id_set: std::collections::HashSet<&str> = geo_ids.iter().copied().collect();
+        let base = self.map.base()?;
+
+        let nodes: Vec<usize> = if ty == GeoType::Block {
+            base.geo_ids().iter()
+                .enumerate()
+                .filter(|(_, gid)| id_set.contains(gid.id()))
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            base.parents().iter()
+                .enumerate()
+                .filter(|(_, refs)| refs.get(ty).map(|id| id_set.contains(id.id())).unwrap_or(false))
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        for node in nodes {
+            self.partition.move_node(node, district, false);
+        }
+
+        Ok(())
+    }
+
     /// Extract district boundaries as WKB using the DCEL Region.
     ///
     /// For each district, collects all assigned units and calls `Region::union_of`

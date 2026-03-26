@@ -95,6 +95,17 @@ impl WasmPlan {
         self.inner.assign_unit(&layer, &geo_id, district).map_err(js_err)
     }
 
+    /// Assign all blocks belonging to multiple geographic units to a district in one pass.
+    /// `geo_ids`: JS array of FIPS strings. Processes all units before returning, so only
+    /// one geometry/stats recomputation is needed instead of one per unit.
+    pub fn assign_units_batch(&mut self, layer: String, geo_ids: Array, district: u32) -> Result<(), JsValue> {
+        let ids: Vec<String> = (0..geo_ids.length())
+            .filter_map(|i| geo_ids.get(i).as_string())
+            .collect();
+        let ids_refs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
+        self.inner.assign_units_batch(&layer, &ids_refs, district).map_err(js_err)
+    }
+
     /// FAST assignments export: return a Uint32Array of length = #units in active layer.
     pub fn assignments_u32(&self) -> Result<Uint32Array, JsValue> {
         let a: Vec<u32> = self.inner.get_assignments_vec().map_err(js_err)?;

@@ -1,6 +1,7 @@
 pub(crate) mod adj;
 pub(crate) mod build;
 mod geom;
+mod simplify;
 mod topo;
 
 pub use build::RegionError;

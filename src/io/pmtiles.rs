@@ -3,7 +3,7 @@
 use std::{f64::consts::PI, io::Cursor};
 
 use anyhow::Result;
-use geo::{MultiPolygon, LineString, Polygon, Simplify};
+use geo::Polygon;
 
 /// Convert longitude to Web Mercator X coordinate (in radians)
 pub(super) fn lon_to_mercator_x(lon: f64) -> f64 { lon.to_radians() }
@@ -213,14 +213,18 @@ fn polygon_bounds(poly: &Polygon<f64>) -> (f64, f64, f64, f64) {
 /// Write multiple layers to a single PMTiles file with each layer at its appropriate zoom range.
 /// This creates a single PMTiles archive containing all geometry layers, where each layer
 /// is visible at its designated zoom levels (e.g., states at z4-8, blocks at z12-14).
-/// 
+///
 /// Parameters:
-/// - layers: Vec of (layer_name, geometries, geo_ids, min_zoom, max_zoom)
-/// 
+/// - layers: Vec of (layer_name, region, geo_ids, min_zoom, max_zoom)
+///
+/// Simplification is topology-preserving: each arc (maximal chain of half-edges whose
+/// interior vertices have out-degree 2) is simplified exactly once, so adjacent units
+/// always share the same simplified coordinates with no gaps at shared boundaries.
+///
 /// Returns: PMTiles file as bytes
 #[cfg(feature = "pmtiles")]
 pub(crate) fn write_to_pmtiles_bytes(
-    layers: Vec<(&str, &[MultiPolygon<f64>], Option<&[String]>, u8, u8)>
+    layers: Vec<(&str, &geograph::Region, Option<&[String]>, u8, u8)>
 ) -> Result<Vec<u8>> {
     use pmtiles2::{PMTiles, TileType, Compression as PmtilesCompression};
     use pmtiles2::util::tile_id;
@@ -229,28 +233,29 @@ pub(crate) fn write_to_pmtiles_bytes(
     use flate2::Compression as Flate2Compression;
     use std::io::Write;
     use std::collections::HashMap;
-    
+
     if layers.is_empty() {
         return Err(anyhow::anyhow!("Cannot write empty layer list to PMTiles"));
     }
-    
+
     // Calculate overall bounds from all layers
-    let mut global_min_lon = f64::INFINITY;
-    let mut global_min_lat = f64::INFINITY;
-    let mut global_max_lon = f64::NEG_INFINITY;
-    let mut global_max_lat = f64::NEG_INFINITY;
+    let mut global_min_lon  = f64::INFINITY;
+    let mut global_min_lat  = f64::INFINITY;
+    let mut global_max_lon  = f64::NEG_INFINITY;
+    let mut global_max_lat  = f64::NEG_INFINITY;
     let mut global_min_zoom = u8::MAX;
     let mut global_max_zoom = u8::MIN;
-    
-    for (_, geoms, _, min_zoom, max_zoom) in &layers {
+
+    for (_, region, _, min_zoom, max_zoom) in &layers {
         global_min_zoom = global_min_zoom.min(*min_zoom);
         global_max_zoom = global_max_zoom.max(*max_zoom);
-        
-        for mp in *geoms {
-            for poly in &mp.0 {
+
+        for unit in region.unit_ids() {
+            for poly in &region.geometry(unit).0 {
                 let (pmin_lon, pmin_lat, pmax_lon, pmax_lat) = polygon_bounds(poly);
-                if pmin_lon.is_finite() && pmin_lat.is_finite() && 
-                   pmax_lon.is_finite() && pmax_lat.is_finite() {
+                if pmin_lon.is_finite() && pmin_lat.is_finite()
+                    && pmax_lon.is_finite() && pmax_lat.is_finite()
+                {
                     global_min_lon = global_min_lon.min(pmin_lon);
                     global_min_lat = global_min_lat.min(pmin_lat);
                     global_max_lon = global_max_lon.max(pmax_lon);
@@ -260,34 +265,26 @@ pub(crate) fn write_to_pmtiles_bytes(
         }
     }
     
+    /// Simplification divisor relative to tile size.
+    /// tolerance = tile_size_degrees / SIMPLIFICATION_DIVISOR
+    ///
+    /// Higher → less simplification → fewer gaps between adjacent polygons,
+    /// larger tile files.  Set to f64::INFINITY to disable entirely.
+    ///
+    /// Topology-preserving simplification shares arc coordinates between adjacent
+    /// polygons, so raising this value reduces file size without introducing gaps.
+    const SIMPLIFICATION_DIVISOR: f64 = 1000.0; // increase to reduce simplification; f64::INFINITY to disable
+
     /// Calculate simplification tolerance for a given zoom level.
-    /// Returns 0.0 (no simplification) at max zoom to preserve full detail.
+    /// Returns 0.0 (no simplification) at max zoom or when SIMPLIFICATION_DIVISOR is infinite.
     fn calculate_tolerance_for_zoom(zoom: u8, max_zoom: u8) -> f64 {
-        // No simplification at max zoom - preserve full detail
-        if zoom >= max_zoom {
+        if zoom >= max_zoom || SIMPLIFICATION_DIVISOR.is_infinite() {
             return 0.0;
         }
-        
         let tile_size_degrees = 360.0 / (2.0_f64.powi(zoom as i32));
-        // Very conservative simplification at lower zooms
-        tile_size_degrees / 1000.0
+        tile_size_degrees / SIMPLIFICATION_DIVISOR
     }
-    
-    /// Simplify a MultiPolygon using Douglas-Peucker algorithm.
-    fn simplify_multipolygon(mp: &MultiPolygon<f64>, tolerance: f64) -> MultiPolygon<f64> {
-        let simplified_polygons: Vec<Polygon<f64>> = mp.0.iter()
-            .map(|poly| {
-                let simplified_exterior = poly.exterior().simplify(&tolerance);
-                let simplified_interiors: Vec<LineString<f64>> = poly.interiors()
-                    .iter()
-                    .map(|ring| ring.simplify(&tolerance))
-                    .collect();
-                Polygon::new(simplified_exterior, simplified_interiors)
-            })
-            .collect();
-        MultiPolygon(simplified_polygons)
-    }
-    
+
     // Maximum tiles a single polygon's bounding box may span at a given zoom level.
     // Polygons exceeding this (e.g. huge open-water census blocks) are skipped —
     // they are degenerate for redistricting and would clone the polygon tens of
@@ -324,9 +321,9 @@ pub(crate) fn write_to_pmtiles_bytes(
     }).collect();
     pm.meta_data.insert("vector_layers".into(), serde_json::json!(vector_layers));
 
-    let extent = 4096u32;
+    let extent: u32 = 4096;
     let extent_f = extent as f64;
-    let buffer = 256.0;
+    let buffer: f64 = 256.0;
 
     // Process one zoom level at a time so each zoom level's tile data is dropped
     // before the next is processed, bounding peak memory to a single zoom level.
@@ -334,17 +331,18 @@ pub(crate) fn write_to_pmtiles_bytes(
         // tile_coords -> layer_name -> [(idx, polygon)]
         let mut zoom_tiles: HashMap<(u64, u64), HashMap<&str, Vec<(usize, Polygon<f64>)>>> = HashMap::new();
 
-        for (layer_name, geoms, _geo_ids, min_zoom, max_zoom) in &layers {
+        for (layer_name, region, _geo_ids, min_zoom, max_zoom) in &layers {
             if zoom < *min_zoom || zoom > *max_zoom {
                 continue;
             }
             let tolerance = calculate_tolerance_for_zoom(zoom, *max_zoom);
 
-            for (idx, mp) in geoms.iter().enumerate() {
-                // Simplify one geometry at a time — never hold all simplified geoms in memory.
-                let simplified = simplify_multipolygon(mp, tolerance);
+            // Topology-preserving simplification: each shared arc is simplified
+            // exactly once, so adjacent units share identical boundary coordinates.
+            let simplified_geoms = region.simplified_geometries(tolerance);
 
-                for poly in &simplified.0 {
+            for (idx, mp) in simplified_geoms.iter().enumerate() {
+                for poly in &mp.0 {
                     let (poly_min_lon, poly_min_lat, poly_max_lon, poly_max_lat) = polygon_bounds(poly);
 
                     if !poly_min_lon.is_finite() || !poly_min_lat.is_finite() ||

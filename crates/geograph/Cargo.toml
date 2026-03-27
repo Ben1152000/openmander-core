@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/Ben1152000/openmander-core/tree/master/crates/geograph"
 readme = "README.md"
 keywords = ["geometry", "planar-graph", "dcel", "geospatial", "adjacency"]
-categories = ["data-structures", "algorithms", "geospatial"]
+categories = ["data-structures", "algorithms", "science::geo", "wasm"]
 include = ["src/**", "Cargo.toml", "README.md", "LICENSE*"]
 
 [dependencies]

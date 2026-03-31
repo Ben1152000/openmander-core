@@ -32,7 +32,7 @@ let enclaves   = region.enclaves([UnitId(0), UnitId(1)]);
 ## Features
 
 **Adjacency**
-- Rook (shared edge) and Queen (shared point) adjacency matrices in CSR format
+- Rook (shared edge) and Queen (shared point) adjacency matrices in CSR format (Knight contiguity is not tracked in this version)
 - Per-edge shared boundary lengths on the Rook matrix
 - `neighbors`, `are_adjacent`, `shared_boundary_length`
 

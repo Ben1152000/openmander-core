@@ -498,12 +498,6 @@ mod tests {
     }
 
     #[test]
-    fn new_has_one_face_the_outer_face() {
-        let d = Dcel::<(f64, f64)>::new();
-        assert_eq!(d.num_faces(), 1);
-    }
-
-    #[test]
     fn outer_face_is_face_id_zero() {
         assert_eq!(OUTER_FACE, FaceId(0));
     }

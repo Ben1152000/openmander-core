@@ -11,7 +11,6 @@ use super::{Region, RegionError, Ring};
 use super::adj::{build_adjacent, build_touching};
 use super::cache::{CacheData, compute_caches};
 
-
 impl Region {
     /// Build a `Region` from a vector of `MultiPolygon` geometries (one per
     /// unit, in the order that determines `UnitId` assignment).
@@ -59,7 +58,7 @@ impl Region {
         eprintln!("[region::new] 5b. queen adjacency built in {:.2?}", t0.elapsed());
         let rtree = SpatialIndex::new(&bounds);
         eprintln!("[region::new] 5c. rtree built in {:.2?}", t0.elapsed());
-        let unit_to_faces = compute_unit_to_faces(&face_to_unit, num_units);
+        let (unit_to_faces_offsets, unit_to_faces_data) = compute_unit_to_faces(&face_to_unit, num_units);
 
         eprintln!("[region::new] 5d. unit_to_faces built in {:.2?}", t0.elapsed());
 
@@ -85,7 +84,8 @@ impl Region {
             adjacent,
             touching,
             rtree,
-            unit_to_faces,
+            unit_to_faces_offsets,
+            unit_to_faces_data,
             face_inner_cycles,
         };
 
@@ -106,10 +106,7 @@ impl Region {
     /// in feature order.  Only `Polygon` and `MultiPolygon` geometry types are
     /// supported.
     pub fn from_geojson(_data: &str, _snap_tol: f64) -> Result<Self, RegionError> {
-        // GeoJSON parsing requires the `geojson` crate which is not currently
-        // in our dependencies.  This is left as a stub until that dependency
-        // is added.
-        todo!("from_geojson requires the `geojson` crate dependency")
+        Err(RegionError::InvalidGeometry("not implemented".into()))
     }
 
     /// Build a `Region` from a shapefile.
@@ -117,10 +114,7 @@ impl Region {
     /// Each shape record becomes one unit; `UnitId` is assigned in record
     /// order.  Only `Polygon` geometry types are supported.
     pub fn from_shapefile(_path: &std::path::Path, _snap_tol: f64) -> Result<Self, RegionError> {
-        // Shapefile parsing requires the `shapefile` crate which is not
-        // currently in our dependencies.  This is left as a stub until that
-        // dependency is added.
-        todo!("from_shapefile requires the `shapefile` crate dependency")
+        Err(RegionError::InvalidGeometry("not implemented".into()))
     }
 }
 
@@ -315,38 +309,16 @@ fn build_dcel(
                 // interior.  Check if the reverse edge exists as an outer
                 // ring edge — if so, the hole interior is that outer ring's
                 // unit.
-                if edge_face.contains_key(&pack_edge(b, a)) {
-                    // The reverse of this hole edge is an outer ring edge
-                    // with face `face`.  The hole interior edge (a→b) has
-                    // the hole's face on its left.  But we also know this
-                    // edge's reverse (b→a) has `face` on its left.  So
-                    // a→b is the twin of b→a: they share an edge.  We'll
-                    // handle this naturally during edge creation.
-                    //
-                    // But for the hole's own directed edge (a→b), the face
-                    // to its left is the enclosing unit's face (the unit
-                    // that has the hole).  We find that from ring_face:
-                    // The hole belongs to the same polygon as the outer ring
-                    // of unit u.  The enclosing face is the outer ring's face.
-                    let (_pi, _) = ring_info[u][ri];
-                    // Find the outer ring face for this polygon of unit u.
-                    let outer_face = ring_info[u].iter().enumerate()
-                        .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
-                        .and_then(|(ri2, _)| ring_face[u][ri2])
-                        .unwrap_or(OUTER_FACE);
-                    hole_edge_face.insert(pack_edge(a, b), outer_face);
-                } else {
-                    // No matching outer ring edge — this hole borders EXTERIOR.
-                    // The face to the left of the hole edge is some gap face.
-                    // We'll create gap faces later during the gap detection pass.
-                    // For now, mark with OUTER_FACE.
-                    let (_pi, _) = ring_info[u][ri];
-                    let outer_face = ring_info[u].iter().enumerate()
-                        .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
-                        .and_then(|(ri2, _)| ring_face[u][ri2])
-                        .unwrap_or(OUTER_FACE);
-                    hole_edge_face.insert(pack_edge(a, b), outer_face);
-                }
+                // The face to the left of this hole edge (a→b) is the
+                // enclosing unit's outer ring face.  Find it via ring_info
+                // regardless of whether the reverse edge (b→a) already
+                // exists as an outer ring edge.
+                let (pi, _) = ring_info[u][ri];
+                let outer_face = ring_info[u].iter().enumerate()
+                    .find(|&(_, &(pi2, is_outer))| pi2 == pi && is_outer)
+                    .and_then(|(ri2, _)| ring_face[u][ri2])
+                    .unwrap_or(OUTER_FACE);
+                hole_edge_face.insert(pack_edge(a, b), outer_face);
             }
         }
     }
@@ -755,16 +727,39 @@ pub(crate) fn reconstruct_geometries(
     polys.into_iter().map(MultiPolygon).collect()
 }
 
-/// Build a `unit_to_faces` index from `face_to_unit`.
+/// Build a flat CSR `unit_to_faces` index from `face_to_unit`.
 /// Shared with `io/read.rs` for deserialization.
-pub(crate) fn compute_unit_to_faces(face_to_unit: &[UnitId], num_units: usize) -> Vec<Vec<FaceId>> {
-    let mut unit_to_faces: Vec<Vec<FaceId>> = vec![Vec::new(); num_units];
-    for (f, &unit) in face_to_unit.iter().enumerate() {
+///
+/// Returns `(offsets, data)` where `data[offsets[u]..offsets[u+1]]` gives
+/// the face IDs belonging to unit `u`.
+pub(crate) fn compute_unit_to_faces(
+    face_to_unit: &[UnitId],
+    num_units: usize,
+) -> (Vec<u32>, Vec<FaceId>) {
+    // Count faces per unit.
+    let mut counts = vec![0u32; num_units];
+    for &unit in face_to_unit {
         if unit != UnitId::EXTERIOR {
-            unit_to_faces[unit.0 as usize].push(FaceId(f as u32));
+            counts[unit.0 as usize] += 1;
         }
     }
-    unit_to_faces
+    // Build prefix-sum offsets.
+    let mut offsets = vec![0u32; num_units + 1];
+    for u in 0..num_units {
+        offsets[u + 1] = offsets[u] + counts[u];
+    }
+    // Fill data.
+    let total = offsets[num_units] as usize;
+    let mut data = vec![FaceId(0); total];
+    let mut cursor = offsets[..num_units].to_vec();
+    for (f, &unit) in face_to_unit.iter().enumerate() {
+        if unit != UnitId::EXTERIOR {
+            let u = unit.0 as usize;
+            data[cursor[u] as usize] = FaceId(f as u32);
+            cursor[u] += 1;
+        }
+    }
+    (offsets, data)
 }
 
 /// Compute starting half-edges for non-primary face cycles.
@@ -775,7 +770,7 @@ pub(crate) fn compute_unit_to_faces(face_to_unit: &[UnitId], num_units: usize) -
 /// half-edge for each non-primary cycle so `union_of_frontier` can traverse them.
 ///
 /// Shared with `io/read.rs` for deserialization.
-pub(crate) fn compute_face_inner_cycles(dcel: &Dcel<Coord<f64>>) -> Vec<Vec<HalfEdgeId>> {
+pub(crate) fn compute_face_inner_cycles(dcel: &Dcel<Coord<f64>>) -> AHashMap<u32, Vec<HalfEdgeId>> {
     let num_faces = dcel.num_faces();
     let num_half_edges = dcel.num_half_edges();
 
@@ -794,12 +789,13 @@ pub(crate) fn compute_face_inner_cycles(dcel: &Dcel<Coord<f64>>) -> Vec<Vec<Half
     }
 
     // Any unvisited half-edge belongs to an inner (non-primary) cycle.
-    // Record one start per inner cycle, grouped by face.
-    let mut face_inner_cycles: Vec<Vec<HalfEdgeId>> = vec![Vec::new(); num_faces];
+    // Record one start per inner cycle, grouped by face (sparse — only
+    // donut-shaped faces have entries).
+    let mut face_inner_cycles: AHashMap<u32, Vec<HalfEdgeId>> = AHashMap::new();
     for e in 0..num_half_edges {
         if visited[e] { continue; }
-        let face_id = dcel.half_edge(HalfEdgeId(e as u32)).face.0 as usize;
-        face_inner_cycles[face_id].push(HalfEdgeId(e as u32));
+        let face_id = dcel.half_edge(HalfEdgeId(e as u32)).face.0;
+        face_inner_cycles.entry(face_id).or_default().push(HalfEdgeId(e as u32));
         // Mark the entire cycle as visited so we only record one start per cycle.
         let mut cur = HalfEdgeId(e as u32);
         loop {

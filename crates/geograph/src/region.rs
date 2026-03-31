@@ -3,7 +3,7 @@
 pub(crate) mod adj;
 pub(crate) mod build;
 mod boundary;
-mod cache;
+pub(crate) mod cache;
 mod snap;
 mod geom;
 mod simplify;
@@ -26,6 +26,8 @@ pub(crate) type Ring = Vec<Coord<f64>>;
 
 /// A collection of interior hole rings, matching `geo`'s `Polygon::new(exterior, interiors)`.
 pub(crate) type Interiors = Vec<LineString<f64>>;
+
+use ahash::AHashMap;
 
 use crate::adj::AdjacencyMatrix;
 use crate::dcel::{Dcel, FaceId, HalfEdgeId};
@@ -111,16 +113,19 @@ pub struct Region {
     /// R-tree spatial index over unit bounding boxes.
     pub(crate) rtree: SpatialIndex,
 
-    /// Maps each unit to the DCEL faces it owns.
-    /// Indexed by `UnitId.0`; most units have exactly one face.
-    pub(crate) unit_to_faces: Vec<Vec<FaceId>>,
-
-    /// Starting half-edges for inner boundary cycles of each face, indexed by `FaceId.0`.
+    /// Flat CSR index mapping each unit to the DCEL faces it owns.
     ///
-    /// Populated only for faces containing enclaves — one entry per enclave pocket,
-    /// pointing to the start of its inner ring cycle, which is otherwise unreachable
-    /// via `face.half_edge`.
-    pub(crate) face_inner_cycles: Vec<Vec<HalfEdgeId>>,
+    /// `unit_to_faces_data[unit_to_faces_offsets[u]..unit_to_faces_offsets[u+1]]`
+    /// gives all face IDs for unit `u`.  Most units have exactly one face.
+    pub(crate) unit_to_faces_offsets: Vec<u32>,
+    pub(crate) unit_to_faces_data: Vec<FaceId>,
+
+    /// Starting half-edges for inner boundary cycles, keyed by `FaceId.0`.
+    ///
+    /// Sparse: only faces containing enclaves (donut-shaped) have entries.
+    /// Each value is a list of starting half-edges for the inner ring cycles,
+    /// which are otherwise unreachable via `face.half_edge`.
+    pub(crate) face_inner_cycles: AHashMap<u32, Vec<HalfEdgeId>>,
 }
 
 impl Region {
@@ -131,6 +136,20 @@ impl Region {
     /// Returns the number of units in the region, excluding [`UnitId::EXTERIOR`].
     #[inline]
     pub fn num_units(&self) -> usize { self.geometries.len() }
+
+    /// Returns the starting half-edges of inner (hole) cycles for `face`, if any.
+    #[inline]
+    pub(crate) fn face_inner_cycle_starts(&self, face: FaceId) -> &[HalfEdgeId] {
+        self.face_inner_cycles.get(&face.0).map_or(&[], Vec::as_slice)
+    }
+
+    /// Returns the DCEL face IDs belonging to `unit`.
+    #[inline]
+    pub(crate) fn unit_faces(&self, unit: UnitId) -> &[FaceId] {
+        let start = self.unit_to_faces_offsets[unit.0 as usize] as usize;
+        let end   = self.unit_to_faces_offsets[unit.0 as usize + 1] as usize;
+        &self.unit_to_faces_data[start..end]
+    }
 
     /// Returns an iterator over all [`UnitId`]s in the region, excluding [`UnitId::EXTERIOR`].
     ///
@@ -245,7 +264,7 @@ pub(crate) mod test_helpers {
             )])
         };
 
-        let unit_to_faces = crate::region::build::compute_unit_to_faces(&face_to_unit, 2);
+        let (unit_to_faces_offsets, unit_to_faces_data) = crate::region::build::compute_unit_to_faces(&face_to_unit, 2);
         let face_inner_cycles = crate::region::build::compute_face_inner_cycles(&dcel);
 
         Region {
@@ -270,7 +289,8 @@ pub(crate) mod test_helpers {
             adjacent: adj,
             touching,
             rtree,
-            unit_to_faces,
+            unit_to_faces_offsets,
+            unit_to_faces_data,
             face_inner_cycles,
         }
     }

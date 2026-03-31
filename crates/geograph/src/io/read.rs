@@ -4,6 +4,7 @@ use geo::{Coord, Rect};
 
 use crate::adj::AdjacencyMatrix;
 use crate::dcel::{Dcel, Face, FaceId, HalfEdge, HalfEdgeId, Vertex, VertexId};
+use crate::region::cache::{compute_bounds, compute_centroids, compute_exterior_boundary_length, compute_is_exterior};
 use crate::region::Region;
 use crate::rtree::SpatialIndex;
 use crate::unit::UnitId;
@@ -143,11 +144,12 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     let adjacent_natural = crate::region::adj::build_adjacent(&dcel, &face_to_unit, &edge_length, num_units);
     // Any pair in the stored CSR that is absent from the DCEL-derived matrix is a
     // forced (island-bridge) pair.  Add those with weight 0.0.
+    let natural = &adjacent_natural;
     let forced_pairs: Vec<(UnitId, UnitId)> = (0..num_units as u32)
         .flat_map(|u| {
             let uid = UnitId(u);
             adjacent_stored.neighbors(uid).iter()
-                .filter(|&&v| !adjacent_natural.contains(uid, v))
+                .filter(move |&&v| !natural.contains(uid, v))
                 .map(move |&v| (uid, v))
                 .collect::<Vec<_>>()
         })
@@ -172,7 +174,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     let is_exterior = compute_is_exterior(&dcel, &face_to_unit, num_units);
     let geometries = crate::region::build::reconstruct_geometries(&dcel, &face_to_unit, num_units);
     let rtree = SpatialIndex::new(&bounds);
-    let unit_to_faces = crate::region::build::compute_unit_to_faces(&face_to_unit, num_units);
+    let (unit_to_faces_offsets, unit_to_faces_data) = crate::region::build::compute_unit_to_faces(&face_to_unit, num_units);
     let face_inner_cycles = crate::region::build::compute_face_inner_cycles(&dcel);
 
     Ok(Region {
@@ -190,7 +192,8 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         adjacent,
         touching,
         rtree,
-        unit_to_faces,
+        unit_to_faces_offsets,
+        unit_to_faces_data,
         face_inner_cycles,
     })
 }
@@ -205,6 +208,10 @@ fn read_csr(reader: &mut impl Read, num_units: usize) -> Result<AdjacencyMatrix,
         offsets.push(read_u32(reader)?);
     }
     let n_neighbors = *offsets.last().unwrap() as usize;
+    // Read neighbor values guided by the stored offsets, then rebuild the CSR
+    // via from_directed_pairs (sort + dedup).  The stored offsets are used only
+    // to know how many neighbors to read per unit; the output CSR offsets are
+    // recomputed from the pairs, which normalises any ordering differences.
     let mut pairs: Vec<(UnitId, UnitId)> = Vec::with_capacity(n_neighbors);
     for u in 0..num_units {
         let start = offsets[u]   as usize;
@@ -217,103 +224,3 @@ fn read_csr(reader: &mut impl Read, num_units: usize) -> Result<AdjacencyMatrix,
     Ok(AdjacencyMatrix::from_directed_pairs(num_units, pairs))
 }
 
-// ---------------------------------------------------------------------------
-// Cache derivation helpers
-// ---------------------------------------------------------------------------
-
-fn compute_exterior_boundary_length(
-    dcel: &Dcel<Coord<f64>>,
-    face_to_unit: &[UnitId],
-    edge_length: &[f64],
-    num_units: usize,
-) -> Vec<f64> {
-    let mut ext = vec![0.0f64; num_units];
-    for e in 0..dcel.num_half_edges() {
-        let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-        let unit = face_to_unit[half_edge.face.0 as usize];
-        if unit == UnitId::EXTERIOR { continue; }
-        if face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize] == UnitId::EXTERIOR {
-            ext[unit.0 as usize] += edge_length[e / 2];
-        }
-    }
-    ext
-}
-
-fn compute_centroids(
-    dcel: &Dcel<Coord<f64>>,
-    face_to_unit: &[UnitId],
-    num_units: usize,
-) -> Vec<Coord<f64>> {
-    let mut sum_x: Vec<f64> = vec![0.0; num_units];
-    let mut sum_y: Vec<f64> = vec![0.0; num_units];
-    let mut count: Vec<u32> = vec![0; num_units];
-
-    for e in 0..dcel.num_half_edges() {
-        let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-        let unit = face_to_unit[half_edge.face.0 as usize];
-        if unit == UnitId::EXTERIOR { continue; }
-        let coord = dcel.vertex(half_edge.origin).coords;
-        let u = unit.0 as usize;
-        sum_x[u] += coord.x;
-        sum_y[u] += coord.y;
-        count[u] += 1;
-    }
-
-    (0..num_units).map(|u| {
-        if count[u] == 0 {
-            Coord { x: 0.0, y: 0.0 }
-        } else {
-            Coord {
-                x: sum_x[u] / count[u] as f64,
-                y: sum_y[u] / count[u] as f64,
-            }
-        }
-    }).collect()
-}
-
-fn compute_bounds(
-    dcel: &Dcel<Coord<f64>>,
-    face_to_unit: &[UnitId],
-    num_units: usize,
-) -> Vec<Rect<f64>> {
-    let inf = f64::INFINITY;
-    let mut min_x = vec![ inf; num_units];
-    let mut min_y = vec![ inf; num_units];
-    let mut max_x = vec![-inf; num_units];
-    let mut max_y = vec![-inf; num_units];
-
-    for e in 0..dcel.num_half_edges() {
-        let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-        let unit = face_to_unit[half_edge.face.0 as usize];
-        if unit == UnitId::EXTERIOR { continue; }
-        let coord = dcel.vertex(half_edge.origin).coords;
-        let u = unit.0 as usize;
-        if coord.x < min_x[u] { min_x[u] = coord.x; }
-        if coord.y < min_y[u] { min_y[u] = coord.y; }
-        if coord.x > max_x[u] { max_x[u] = coord.x; }
-        if coord.y > max_y[u] { max_y[u] = coord.y; }
-    }
-
-    (0..num_units).map(|u| {
-        let (mnx, mny) = if min_x[u].is_finite() { (min_x[u], min_y[u]) } else { (0.0, 0.0) };
-        let (mxx, mxy) = if max_x[u].is_finite() { (max_x[u], max_y[u]) } else { (0.0, 0.0) };
-        Rect::new(Coord { x: mnx, y: mny }, Coord { x: mxx, y: mxy })
-    }).collect()
-}
-
-fn compute_is_exterior(
-    dcel: &Dcel<Coord<f64>>,
-    face_to_unit: &[UnitId],
-    num_units: usize,
-) -> Vec<bool> {
-    let mut flags = vec![false; num_units];
-    for e in 0..dcel.num_half_edges() {
-        let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-        let unit = face_to_unit[half_edge.face.0 as usize];
-        if unit == UnitId::EXTERIOR { continue; }
-        if face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize] == UnitId::EXTERIOR {
-            flags[unit.0 as usize] = true;
-        }
-    }
-    flags
-}

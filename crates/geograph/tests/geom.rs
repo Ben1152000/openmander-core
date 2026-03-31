@@ -155,7 +155,7 @@ fn exterior_boundary_length_of_subset_matches_sum() {
 #[test]
 fn bounds_of_subset_contains_all_unit_bounds() {
     let r = four_squares();
-    let combined = r.bounds_of(r.unit_ids());
+    let combined = r.bounds_of(r.unit_ids()).expect("non-empty region");
     for uid in r.unit_ids() {
         let b = r.bounds(uid);
         assert!(

@@ -74,9 +74,11 @@ pub(crate) fn build_touching(dcel: &Dcel<Coord<f64>>, face_to_unit: &[UnitId], n
             Some(edge) => edge,
             None => continue,
         };
-        let units: Vec<UnitId> = dcel.vertex_star(start)
+        let mut units: Vec<UnitId> = dcel.vertex_star(start)
             .map(|he| face_to_unit[dcel.half_edge(he).face.0 as usize])
             .collect();
+        units.sort_unstable();
+        units.dedup();
 
         for &a in &units {
             for &b in &units {

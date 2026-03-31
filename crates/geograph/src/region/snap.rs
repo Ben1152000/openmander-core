@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 use geo::Coord;
 
@@ -132,7 +132,7 @@ pub(crate) fn snap_vertices(rings: &mut [Vec<Ring>], tolerance: f64) {
         ((c.x * inv_tol).floor() as i64, (c.y * inv_tol).floor() as i64)
     };
 
-    let mut vertex_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut vertex_grid: AHashMap<(i64, i64), Vec<usize>> = AHashMap::new();
     for (vi, &coord) in coords.iter().enumerate() {
         vertex_grid.entry(cell_of(coord)).or_default().push(vi);
     }
@@ -146,6 +146,9 @@ pub(crate) fn snap_vertices(rings: &mut [Vec<Ring>], tolerance: f64) {
     }
 
     // 4d. For each edge, find cross-unit matches via the spatial hash.
+    //     Collect snap pairs first, then apply unions in a second pass to
+    //     avoid borrow conflicts (and per-candidate Vec clones) in the inner loop.
+    let mut snap_pairs: Vec<(usize, usize)> = Vec::new();
     for ei in 0..edges.len() {
         let (e1_unit, e1_i, e1_j) = (edges[ei].unit, edges[ei].i, edges[ei].j);
         let p_i = coords[e1_i];
@@ -160,27 +163,28 @@ pub(crate) fn snap_vertices(rings: &mut [Vec<Ring>], tolerance: f64) {
                     if !near(p_i, coords[k]) { continue; }
 
                     // Same-direction match: e1.i ≈ k (start), e1.j ≈ l (end)
-                    let from_k: Vec<usize> = edges_from[k].clone();
-                    for ej in from_k {
+                    for &ej in &edges_from[k] {
                         let l = edges[ej].j;
                         if near(p_j, coords[l]) {
-                            union(&mut parent, &mut rank, e1_i, k);
-                            union(&mut parent, &mut rank, e1_j, l);
+                            snap_pairs.push((e1_i, k));
+                            snap_pairs.push((e1_j, l));
                         }
                     }
 
                     // Reversed match: e1.i ≈ k (end), e1.j ≈ m (start)
-                    let to_k: Vec<usize> = edges_to[k].clone();
-                    for ej in to_k {
+                    for &ej in &edges_to[k] {
                         let m = edges[ej].i;
                         if near(p_j, coords[m]) {
-                            union(&mut parent, &mut rank, e1_i, k);
-                            union(&mut parent, &mut rank, e1_j, m);
+                            snap_pairs.push((e1_i, k));
+                            snap_pairs.push((e1_j, m));
                         }
                     }
                 }
             }
         }
+    }
+    for (a, b) in snap_pairs {
+        union(&mut parent, &mut rank, a, b);
     }
 
     // -----------------------------------------------------------------------

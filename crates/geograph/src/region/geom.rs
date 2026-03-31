@@ -51,25 +51,32 @@ impl Region {
 
     /// Boundary of `unit` as a `MultiLineString`.
     ///
-    /// Each element is one ring of the unit's polygon (outer ring or hole).
+    /// Each element is one ring of the unit's polygon: the outer ring for
+    /// each face, plus any inner (hole) rings for donut-shaped faces.
     /// Rings are closed (first coordinate repeated as last).
     pub fn boundary(&self, unit: UnitId) -> MultiLineString<f64> {
         let mut lines = Vec::new();
         for f in 0..self.dcel.num_faces() {
             if self.face_to_unit[f] != unit { continue; }
-            let start = match self.dcel.face(FaceId(f as u32)).half_edge {
+            let fid = FaceId(f as u32);
+            let start = match self.dcel.face(fid).half_edge {
                 Some(he) => he,
                 None => continue,
             };
-            let mut coords: Vec<Coord<f64>> = self.dcel
-                .face_cycle(start)
+            // Primary (outer) ring cycle.
+            let mut coords: Vec<Coord<f64>> = self.dcel.face_cycle(start)
                 .map(|he| self.dcel.vertex(self.dcel.half_edge(he).origin).coords)
                 .collect();
-            // Close the ring.
-            if let Some(&first) = coords.first() {
-                coords.push(first);
-            }
+            if let Some(&first) = coords.first() { coords.push(first); }
             lines.push(LineString(coords));
+            // Inner hole cycles (donut-shaped units have one per enclave).
+            for &inner_start in self.face_inner_cycle_starts(fid) {
+                let mut coords: Vec<Coord<f64>> = self.dcel.face_cycle(inner_start)
+                    .map(|he| self.dcel.vertex(self.dcel.half_edge(he).origin).coords)
+                    .collect();
+                if let Some(&first) = coords.first() { coords.push(first); }
+                lines.push(LineString(coords));
+            }
         }
         MultiLineString(lines)
     }
@@ -90,7 +97,16 @@ impl Region {
     }
 
     /// Total exterior perimeter of the subset `units`, in m.
-    /// Shared internal edges are excluded.
+    ///
+    /// Edges shared between two units **both inside `units`** are excluded; only
+    /// edges on the boundary between `units` and the outside (other units or the
+    /// region exterior) are counted.
+    ///
+    /// This differs from the cached [`Region::perimeter`] accessor, which returns
+    /// the pre-computed total boundary length for a single unit (all edges
+    /// bordering a different unit or the exterior, counted individually per unit).
+    /// For a single-unit subset the two values agree; for multi-unit subsets
+    /// `perimeter_of` gives the perimeter of the merged shape.
     pub fn perimeter_of(&self, units: impl IntoIterator<Item = UnitId>) -> f64 {
         let set: HashSet<UnitId> = units.into_iter().collect();
         let mut total = 0.0;
@@ -121,11 +137,10 @@ impl Region {
 
     /// Smallest bounding box containing all units in `units`.
     ///
-    /// # Panics
-    /// Panics if `units` is empty.
-    pub fn bounds_of(&self, units: impl IntoIterator<Item = UnitId>) -> Rect<f64> {
+    /// Returns `None` if `units` is empty.
+    pub fn bounds_of(&self, units: impl IntoIterator<Item = UnitId>) -> Option<Rect<f64>> {
         let mut iter = units.into_iter();
-        let first = iter.next().expect("bounds_of requires at least one unit");
+        let first = iter.next()?;
         let mut rect = self.bounds[first.0 as usize];
         for u in iter {
             let b = self.bounds[u.0 as usize];
@@ -140,7 +155,7 @@ impl Region {
                 },
             );
         }
-        rect
+        Some(rect)
     }
 
     /// Bounding box of the entire region (all units).  O(1), pre-cached.
@@ -166,6 +181,12 @@ impl Region {
     }
 
     /// Polsby-Popper compactness score for the subset: `4π·area / perimeter²`.
+    ///
+    /// Uses [`Region::perimeter_of`] (DCEL walk that excludes edges shared
+    /// within the subset) rather than the cached `perimeter` accessor (which
+    /// includes all boundary edges per unit individually).  For a single-unit
+    /// subset the two agree; for multi-unit subsets only inter-subset edges
+    /// count, giving the compactness of the merged shape.
     pub fn compactness_of(&self, units: impl IntoIterator<Item = UnitId>) -> f64 {
         let units: Vec<UnitId> = units.into_iter().collect();
         let a = self.area_of(units.iter().copied());
@@ -195,6 +216,7 @@ impl Region {
     }
 
     /// Total length of the boundary between `units` and `other`, in m.
+    #[inline]
     pub fn boundary_length_with(
         &self,
         units: impl IntoIterator<Item = UnitId>,
@@ -230,6 +252,7 @@ impl Region {
     ///
     /// Uses an R-tree for O(log n) candidate lookup, then exact
     /// point-in-polygon tests on candidates.
+    #[inline]
     pub fn unit_at(&self, point: Coord<f64>) -> Option<UnitId> {
         let geo_point = geo::Point::from(point);
         self.rtree.query_point([point.x, point.y])
@@ -240,6 +263,7 @@ impl Region {
     ///
     /// This is a coarse filter — returned units may not actually intersect
     /// the envelope geometrically.  Use for candidate generation.
+    #[inline]
     pub fn units_in_envelope(&self, envelope: Rect<f64>) -> Vec<UnitId> {
         let aabb = AABB::from_corners(
             [envelope.min().x, envelope.min().y],
@@ -421,7 +445,7 @@ mod tests {
     #[test]
     fn bounds_of_two_units_is_union() {
         let r = make_two_unit_region();
-        let b = r.bounds_of(r.unit_ids());
+        let b = r.bounds_of(r.unit_ids()).unwrap();
         assert_eq!(b.min(), Coord { x: 0.0, y: 0.0 });
         assert_eq!(b.max(), Coord { x: 2.0, y: 1.0 });
     }
@@ -429,7 +453,13 @@ mod tests {
     #[test]
     fn bounds_of_single_unit_matches_bounds() {
         let r = make_two_unit_region();
-        assert_eq!(r.bounds_of([UnitId(1)]), r.bounds(UnitId(1)));
+        assert_eq!(r.bounds_of([UnitId(1)]), Some(r.bounds(UnitId(1))));
+    }
+
+    #[test]
+    fn bounds_of_empty_returns_none() {
+        let r = make_two_unit_region();
+        assert_eq!(r.bounds_of([]), None);
     }
 
     // -----------------------------------------------------------------------

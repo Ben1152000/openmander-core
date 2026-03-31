@@ -15,49 +15,9 @@ impl Region {
     /// Outer boundaries are CCW; hole boundaries are CW.
     pub fn boundary_of(&self, units: impl IntoIterator<Item = UnitId>) -> MultiLineString<f64> {
         let set: HashSet<UnitId> = units.into_iter().collect();
-        let num_half_edges = self.dcel.num_half_edges();
-
-        // Mark boundary half-edges: face in set, twin face outside set.
-        let is_boundary: Vec<bool> = (0..num_half_edges).map(|e| {
-            let half_edge = self.dcel.half_edge(HalfEdgeId(e as u32));
-            let unit = self.face_to_unit[half_edge.face.0 as usize];
-            if !set.contains(&unit) { return false; }
-            let twin_face = self.dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face;
-            !set.contains(&self.face_to_unit[twin_face.0 as usize])
-        }).collect();
-
-        // Trace boundary cycles.
-        let mut visited = vec![false; num_half_edges];
-        let mut lines = Vec::new();
-
-        for e in 0..num_half_edges {
-            if !is_boundary[e] || visited[e] { continue; }
-
-            let mut coords = Vec::new();
-            let mut cur = HalfEdgeId(e as u32);
-            loop {
-                visited[cur.0 as usize] = true;
-                coords.push(self.dcel.vertex(self.dcel.half_edge(cur).origin).coords);
-
-                // Find next boundary edge: from dest(cur), scan CCW around the
-                // vertex until we find the next half-edge that is also boundary.
-                let mut next = self.dcel.half_edge(cur).next;
-                while !is_boundary[next.0 as usize] {
-                    next = self.dcel.half_edge(next.twin()).next;
-                }
-                cur = next;
-
-                if cur == HalfEdgeId(e as u32) { break; }
-            }
-
-            // Close the ring.
-            if let Some(&first) = coords.first() {
-                coords.push(first);
-            }
-            lines.push(LineString(coords));
-        }
-
-        MultiLineString(lines)
+        let is_boundary = self.boundary_mask(&set);
+        let cycles = self.trace_cycles(&is_boundary);
+        MultiLineString(cycles.into_iter().map(|(ring, _)| LineString(ring)).collect())
     }
 
     /// Geometric union of all unit polygons in `units`.
@@ -67,87 +27,9 @@ impl Region {
     /// area), and matches holes to their enclosing outer ring.
     pub fn union_of(&self, units: impl IntoIterator<Item = UnitId>) -> MultiPolygon<f64> {
         let set: HashSet<UnitId> = units.into_iter().collect();
-        let num_half_edges = self.dcel.num_half_edges();
-
-        // Mark boundary half-edges: face in set, twin face outside set.
-        let is_boundary: Vec<bool> = (0..num_half_edges).map(|e| {
-            let half_edge = self.dcel.half_edge(HalfEdgeId(e as u32));
-            let unit = self.face_to_unit[half_edge.face.0 as usize];
-            if !set.contains(&unit) { return false; }
-            let twin_face = self.dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face;
-            !set.contains(&self.face_to_unit[twin_face.0 as usize])
-        }).collect();
-
-        // Trace boundary cycles and compute signed area for each.
-        let mut visited = vec![false; num_half_edges];
-        let mut cycles: Vec<(Ring, f64)> = Vec::new();
-
-        for e in 0..num_half_edges {
-            if !is_boundary[e] || visited[e] { continue; }
-
-            let mut coords = Vec::new();
-            let mut signed_area = 0.0;
-            let mut cur = HalfEdgeId(e as u32);
-            loop {
-                visited[cur.0 as usize] = true;
-                let c0 = self.dcel.vertex(self.dcel.half_edge(cur).origin).coords;
-                coords.push(c0);
-
-                // Accumulate signed area (shoelace in degrees).
-                let c1 = self.dcel.vertex(self.dcel.dest(cur)).coords;
-                signed_area += c0.x * c1.y - c1.x * c0.y;
-
-                // Find next boundary edge.
-                let mut next = self.dcel.half_edge(cur).next;
-                while !is_boundary[next.0 as usize] {
-                    next = self.dcel.half_edge(next.twin()).next;
-                }
-                cur = next;
-
-                if cur == HalfEdgeId(e as u32) { break; }
-            }
-            signed_area /= 2.0;
-
-            // Close the ring.
-            if let Some(&first) = coords.first() {
-                coords.push(first);
-            }
-            cycles.push((coords, signed_area));
-        }
-
-        // Partition into outer rings (positive area = CCW) and holes (negative = CW).
-        let mut outers: Vec<(Ring, Interiors)> = Vec::new();
-        let mut holes: Vec<Ring> = Vec::new();
-
-        for (coords, area) in cycles {
-            if area > 0.0 {
-                outers.push((coords, Vec::new()));
-            } else {
-                holes.push(coords);
-            }
-        }
-
-        // Match each hole to its enclosing outer ring using point-in-ring test.
-        for hole in holes {
-            // Use the first vertex of the hole as the test point.
-            let pt = hole[0];
-            let mut best = 0;
-            for (i, (outer, _)) in outers.iter().enumerate() {
-                if point_in_ring(pt, outer) {
-                    best = i;
-                    break;
-                }
-            }
-            outers[best].1.push(LineString(hole));
-        }
-
-        // Build MultiPolygon.
-        let polys: Vec<Polygon<f64>> = outers
-            .into_iter()
-            .map(|(ring, holes)| Polygon::new(LineString(ring), holes))
-            .collect();
-
-        MultiPolygon(polys)
+        let is_boundary = self.boundary_mask(&set);
+        let cycles = self.trace_cycles(&is_boundary);
+        cycles_to_multipolygon(cycles)
     }
 
     /// Faster variant of [`Region::union_of`] for use when the caller knows which units
@@ -155,9 +37,14 @@ impl Region {
     ///
     /// Instead of scanning all DCEL half-edges, this only examines the faces
     /// belonging to `frontier_units` — units that share an edge with a
-    /// different district or the region exterior. `is_in_district(u)` must
-    /// return `true` iff unit `u` belongs to the same district; it is never
-    /// called with `UnitId::EXTERIOR`.
+    /// different district or the region exterior.
+    ///
+    /// # Contract
+    ///
+    /// `is_in_district(u)` must return `true` iff unit `u` belongs to the
+    /// same district as the frontier units.  It is **never** called with
+    /// `UnitId::EXTERIOR`; the caller must not pass exterior units in
+    /// `frontier_units` either.
     pub fn union_of_frontier(
         &self,
         frontier_units: impl IntoIterator<Item = UnitId>,
@@ -166,7 +53,7 @@ impl Region {
         // Collect boundary half-edges by walking only frontier unit faces.
         let mut boundary: Vec<u32> = Vec::new();
         for unit in frontier_units {
-            for &face_id in &self.unit_to_faces[unit.0 as usize] {
+            for &face_id in self.unit_faces(unit) {
                 // Primary cycle (outer ring).
                 let start = match self.dcel.face(face_id).half_edge {
                     Some(he) => he,
@@ -183,7 +70,7 @@ impl Region {
                     if cur == start { break; }
                 }
                 // Inner ring cycles (holes in donut-shaped units).
-                for &inner_start in &self.face_inner_cycles[face_id.0 as usize] {
+                for &inner_start in self.face_inner_cycle_starts(face_id) {
                     let mut cur = inner_start;
                     loop {
                         let half_edge = self.dcel.half_edge(cur);
@@ -198,18 +85,20 @@ impl Region {
             }
         }
 
-        let boundary_set: HashSet<u32> = boundary.iter().copied().collect();
-        let mut visited: HashSet<u32> = HashSet::new();
+        let num_half_edges = self.dcel.num_half_edges();
+        let mut in_boundary = vec![false; num_half_edges];
+        for &h in &boundary { in_boundary[h as usize] = true; }
+        let mut visited = vec![false; num_half_edges];
         let mut cycles: Vec<(Ring, f64)> = Vec::new();
 
         for &start_h in &boundary {
-            if visited.contains(&start_h) { continue; }
+            if visited[start_h as usize] { continue; }
 
             let mut coords = Vec::new();
             let mut signed_area = 0.0;
             let mut cur = HalfEdgeId(start_h);
             loop {
-                visited.insert(cur.0);
+                visited[cur.0 as usize] = true;
                 let c0 = self.dcel.vertex(self.dcel.half_edge(cur).origin).coords;
                 coords.push(c0);
 
@@ -217,7 +106,7 @@ impl Region {
                 signed_area += c0.x * c1.y - c1.x * c0.y;
 
                 let mut next = self.dcel.half_edge(cur).next;
-                while !boundary_set.contains(&next.0) {
+                while !in_boundary[next.0 as usize] {
                     next = self.dcel.half_edge(next.twin()).next;
                 }
                 cur = next;
@@ -229,31 +118,111 @@ impl Region {
             cycles.push((coords, signed_area));
         }
 
-        // Same hole-matching logic as union_of.
-        let mut outers: Vec<(Ring, Interiors)> = Vec::new();
-        let mut holes: Vec<Ring> = Vec::new();
-        for (coords, area) in cycles {
-            if area > 0.0 { outers.push((coords, Vec::new())); }
-            else          { holes.push(coords); }
-        }
-        for hole in holes {
-            let pt = hole[0];
-            let mut best = 0;
-            for (i, (outer, _)) in outers.iter().enumerate() {
-                if point_in_ring(pt, outer) { best = i; break; }
+        cycles_to_multipolygon(cycles)
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    /// Build a boolean mask over all half-edges: `true` iff the half-edge's
+    /// face is in `set` and its twin's face is outside `set`.
+    fn boundary_mask(&self, set: &HashSet<UnitId>) -> Vec<bool> {
+        let num_half_edges = self.dcel.num_half_edges();
+        (0..num_half_edges).map(|e| {
+            let half_edge = self.dcel.half_edge(HalfEdgeId(e as u32));
+            let unit = self.face_to_unit[half_edge.face.0 as usize];
+            if !set.contains(&unit) { return false; }
+            let twin_face = self.dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face;
+            !set.contains(&self.face_to_unit[twin_face.0 as usize])
+        }).collect()
+    }
+
+    /// Trace all boundary cycles given an `is_boundary` half-edge mask.
+    ///
+    /// Returns `Vec<(coords, signed_area)>` where each entry is a closed ring
+    /// (first coordinate repeated as last) and its signed shoelace area in
+    /// degree²/2 (positive = CCW outer ring, negative = CW hole).
+    fn trace_cycles(&self, is_boundary: &[bool]) -> Vec<(Ring, f64)> {
+        let num_half_edges = is_boundary.len();
+        let mut visited = vec![false; num_half_edges];
+        let mut cycles: Vec<(Ring, f64)> = Vec::new();
+
+        for e in 0..num_half_edges {
+            if !is_boundary[e] || visited[e] { continue; }
+
+            let mut coords = Vec::new();
+            let mut signed_area = 0.0;
+            let mut cur = HalfEdgeId(e as u32);
+            loop {
+                visited[cur.0 as usize] = true;
+                let c0 = self.dcel.vertex(self.dcel.half_edge(cur).origin).coords;
+                coords.push(c0);
+                let c1 = self.dcel.vertex(self.dcel.dest(cur)).coords;
+                signed_area += c0.x * c1.y - c1.x * c0.y;
+
+                let mut next = self.dcel.half_edge(cur).next;
+                while !is_boundary[next.0 as usize] {
+                    next = self.dcel.half_edge(next.twin()).next;
+                }
+                cur = next;
+
+                if cur == HalfEdgeId(e as u32) { break; }
             }
-            outers[best].1.push(LineString(hole));
+            signed_area /= 2.0;
+            if let Some(&first) = coords.first() { coords.push(first); }
+            cycles.push((coords, signed_area));
         }
-        let polys: Vec<Polygon<f64>> = outers.into_iter()
-            .map(|(ring, holes)| Polygon::new(LineString(ring), holes))
-            .collect();
-        MultiPolygon(polys)
+
+        cycles
     }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Partition cycles into outer rings and holes, match holes to their enclosing
+/// outer ring, and assemble a `MultiPolygon`.
+fn cycles_to_multipolygon(cycles: Vec<(Ring, f64)>) -> MultiPolygon<f64> {
+    let mut outers: Vec<(Ring, Interiors)> = Vec::new();
+    let mut holes: Vec<Ring> = Vec::new();
+
+    for (coords, area) in cycles {
+        if area > 0.0 {
+            outers.push((coords, Vec::new()));
+        } else {
+            holes.push(coords);
+        }
+    }
+
+    // Match each hole to its smallest enclosing outer ring using point-in-ring
+    // test.  Taking the smallest (by absolute signed area) correctly handles
+    // nested polygons where multiple outer rings may enclose the same hole.
+    for hole in holes {
+        let pt = hole[0];
+        let mut best = 0;
+        let mut best_area = f64::INFINITY;
+        for (i, (outer, _)) in outers.iter().enumerate() {
+            if point_in_ring(pt, outer) {
+                // Compute the absolute signed area of this outer ring.
+                let area = outer.windows(2)
+                    .map(|w| w[0].x * w[1].y - w[1].x * w[0].y)
+                    .sum::<f64>()
+                    .abs();
+                if area < best_area {
+                    best_area = area;
+                    best = i;
+                }
+            }
+        }
+        outers[best].1.push(LineString(hole));
+    }
+
+    MultiPolygon(outers.into_iter()
+        .map(|(ring, holes)| Polygon::new(LineString(ring), holes))
+        .collect())
+}
 
 /// Ray-casting point-in-polygon test.  Returns `true` if `pt` is strictly
 /// inside `ring` (a closed sequence of coordinates, first == last).

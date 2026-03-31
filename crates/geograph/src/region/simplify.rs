@@ -130,7 +130,7 @@ impl Region {
         for unit in self.unit_ids() {
             let mut polygons: Vec<Polygon<f64>> = Vec::new();
 
-            for &face_id in &self.unit_to_faces[unit.0 as usize] {
+            for &face_id in self.unit_faces(unit) {
                 let face = dcel.face(face_id);
                 let primary_start = match face.half_edge {
                     Some(he) => he,
@@ -139,9 +139,7 @@ impl Region {
 
                 // Primary outer cycle + inner hole cycles (for donut-shaped units).
                 let mut cycle_starts: Vec<HalfEdgeId> = vec![primary_start];
-                for &inner in &self.face_inner_cycles[face_id.0 as usize] {
-                    cycle_starts.push(inner);
-                }
+                cycle_starts.extend_from_slice(self.face_inner_cycle_starts(face_id));
 
                 let mut rings: Vec<LineString<f64>> = Vec::new();
                 for cycle_start in cycle_starts {

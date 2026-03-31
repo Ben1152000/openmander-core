@@ -72,7 +72,7 @@ impl Partition {
         final_temp: f64,
         boundary_factor: f64,
     ) {
-        assert!(self.parts.get(0).len() == 0, "part 0 (unassigned) must be empty");
+        assert!(self.parts.get(0).is_empty(), "part 0 (unassigned) must be empty");
         assert!(self.num_parts() > 2, "need at least two parts for anneal_balance");
         assert!(self.part_weights().contains(series), "part_weights must contain series '{series}'");
 
@@ -115,7 +115,7 @@ impl Partition {
             - self.graph().edges_with_weights(node)
                 .filter_map(|(v, w)| (self.assignment(v) == dest).then_some(w))
                 .sum::<f64>()
-            - if bundle.len() > 0 {
+            - if !bundle.is_empty() {
                 self.graph().edges_with_weights(node)
                     .filter(|&(v, _)| self.assignment(v) == src)
                     .filter_map(|(v, w)| bundle.contains(&v).then_some(w))
@@ -179,7 +179,7 @@ impl Partition {
         temp_search_batch_size: usize,
         batch_size: usize,
     ) {
-        assert!(self.parts.get(0).len() == 0, "part 0 (unassigned) must be empty");
+        assert!(self.parts.get(0).is_empty(), "part 0 (unassigned) must be empty");
         assert!(self.num_parts() > 2, "need at least two parts for annealing");
         assert!(!objectives.is_empty(), "must provide at least one objective");
         assert!(phase_start_probs.len() == objectives.len(), "must provide start_prob for each phase");
@@ -315,7 +315,7 @@ impl Partition {
             // Cool temperature
             let old_temp = state.temperature;
             state.temperature *= 1.0 - params.cooling_rate;
-            if state.current_iter % 10000 == 0 {
+            if state.current_iter.is_multiple_of(10000) {
                 println!("DEBUG: Iter {} cooling: {} -> {} (rate={})", state.current_iter, old_temp, state.temperature, params.cooling_rate);
             }
         }

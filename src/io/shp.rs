@@ -30,10 +30,8 @@ pub(crate) fn read_shapefile(path: &Path) -> Result<(Vec<Shape>, Vec<Record>)> {
 fn shp_to_geo(p: &shp::Polygon) -> geo::MultiPolygon<f64> {
     /// Ensure first and last are the same for geo::LineString coords
     fn ensure_closed(coords: &mut Vec<geo::Coord<f64>>) {
-        if !coords.is_empty() {
-            if coords[0] != coords[coords.len() - 1] {
-                coords.push(coords[0])
-            }
+        if !coords.is_empty() && coords[0] != coords[coords.len() - 1] {
+            coords.push(coords[0])
         }
     }
 
@@ -89,10 +87,8 @@ fn geo_to_shp(mp: &geo::MultiPolygon<f64>) -> shp::Polygon {
 
     /// Close a ring of shapefile::Point
     fn ensure_closed(pts: &mut Vec<shp::Point>) {
-        if !pts.is_empty() {
-            if pts[0].x != pts[pts.len() - 1].x || pts[0].y != pts[pts.len() - 1].y {
-                pts.push(pts[0]);
-            }
+        if !pts.is_empty() && pts[0].x != pts[pts.len() - 1].x || pts[0].y != pts[pts.len() - 1].y {
+            pts.push(pts[0]);
         }
     }
 

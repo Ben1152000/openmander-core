@@ -14,7 +14,7 @@ impl Partition {
 
         (1..self.num_parts())
             .map(|p| (p, self.part_weights().get_as_f64(series, p as usize).unwrap()))
-            .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
+            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .unwrap()
     }
 
@@ -124,7 +124,7 @@ impl Partition {
             let neighbors = self.sample_neighboring_parts(smallest, 8, &mut rng);
             if let Some((neighbor, _)) = neighbors.iter()
                 .map(|&p| (p, self.part_weights().get_as_f64(series, p as usize).unwrap()))
-                .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
+                .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             {
                 if let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
                     let frontier = self.frontiers.get(part as usize);
@@ -193,7 +193,7 @@ impl Partition {
                 let (smallest, _) = self.part_with_min_weight(series);
                 let (neighbor, _) = self.sample_neighboring_parts(smallest, 8, &mut rng).iter()
                     .map(|&p| (p, self.part_weights().get_as_f64(series, p as usize).unwrap()))
-                    .min_by(|(_, a), (_, b)| a.partial_cmp(&b).unwrap())
+                    .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
                     .unwrap();
 
                 // If merged successfully, assign a random frontier to the eliminated district and equalize with part
@@ -210,7 +210,7 @@ impl Partition {
 
             // Pick random neighboring part and equalize.
             let neighbors = self.sample_neighboring_parts(part, 8, &mut rng);
-            if neighbors.len() == 0 { continue }
+            if neighbors.is_empty() { continue }
 
             // Pick random neighbor
             let neighbors = neighbors.into_iter().collect::<Vec<_>>();

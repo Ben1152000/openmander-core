@@ -177,7 +177,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     let (unit_to_faces_offsets, unit_to_faces_data) = crate::region::build::compute_unit_to_faces(&face_to_unit, num_units);
     let face_inner_cycles = crate::region::build::compute_face_inner_cycles(&dcel);
 
-    Ok(Region {
+    let region = Region {
         dcel,
         face_to_unit,
         geometries,
@@ -195,7 +195,21 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         unit_to_faces_offsets,
         unit_to_faces_data,
         face_inner_cycles,
-    })
+    };
+
+    {
+        let mb = |b: usize| b as f64 / 1_048_576.0;
+        let breakdown = region.heap_bytes_breakdown();
+        let total: usize = breakdown.iter().map(|(_, b)| b).sum();
+        eprintln!("[geograph::io] Region heap ({} units, {:.0}M half-edges):",
+            region.num_units(), region.dcel.num_half_edges() as f64 / 1e6);
+        for (label, bytes) in &breakdown {
+            eprintln!("  {:<20} {:>6.1} MB", label, mb(*bytes));
+        }
+        eprintln!("  {:<20} {:>6.1} MB  (estimated)", "TOTAL", mb(total));
+    }
+
+    Ok(region)
 }
 
 // ---------------------------------------------------------------------------

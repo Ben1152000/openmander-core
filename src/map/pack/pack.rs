@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -25,14 +25,13 @@ pub(crate) fn remote_file_exists(url: &str) -> Result<bool> {
         .build()?;
 
     // Try HEAD first
-    match client.head(url).send() {
-        Ok(resp) => match resp.status() {
+    if let Ok(resp) = client.head(url).send() {
+        match resp.status() {
             StatusCode::OK => return Ok(true),
             StatusCode::NOT_FOUND | StatusCode::GONE => return Ok(false),
             // Some servers don’t like HEAD; fall through to range GET.
             _ => {}
-        },
-        Err(_) => {} // fall through to range GET
+        }
     }
 
     // Fallback: GET first byte only
@@ -51,9 +50,9 @@ pub(crate) fn remote_file_exists(url: &str) -> Result<bool> {
 /// Download data files for a state, build the map pack, and write it to a new directory in `path`.
 /// Returns the path to the new pack directory.
 #[cfg(feature = "download")]
-pub fn build_pack(state_code: &str, path: &PathBuf, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
+pub fn build_pack(state_code: &str, path: &Path, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
     let state_code = state_code.to_ascii_uppercase();
-    util::require_dir_exists(&path)?;
+    util::require_dir_exists(path)?;
 
     let pack_dir = path.join(format!("{state_code}_2020_pack"));
     util::ensure_dir_exists(&pack_dir)?;
@@ -79,9 +78,9 @@ pub fn build_pack(state_code: &str, path: &PathBuf, has_vtd: bool, verbose: u8) 
 /// `include_geoms` controls whether geometries are included in the download.
 /// Returns the path to the downloaded pack directory.
 #[cfg(feature = "download")]
-pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<PathBuf> {
+pub fn download_pack(state_code: &str, path: &Path, verbose: u8) -> Result<PathBuf> {
     let state_code = state_code.to_ascii_uppercase();
-    util::require_dir_exists(&path)?;
+    util::require_dir_exists(path)?;
 
     let pack_name = format!("{state_code}_2020_pack");
     let pack_url = format!("https://media.githubusercontent.com/media/Ben1152000/openmander-data/master/packs/{state_code}/{pack_name}.zip");
@@ -97,7 +96,7 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
     download_big_file(pack_url, &zip_path, true)?;
 
     if verbose > 0 { eprintln!("[download] extracting {}", zip_path.display()); }
-    util::extract_zip(&zip_path, &path, true)?;
+    util::extract_zip(&zip_path, path, true)?;
 
     if verbose > 0 { eprintln!("Downloaded pack to {}", pack_dir.display()); }
 
@@ -106,4 +105,4 @@ pub fn download_pack(state_code: &str, path: &PathBuf, verbose: u8) -> Result<Pa
 
 /// Validate the contents of a map pack at `pack_path`.
 #[allow(dead_code, unused_variables)]
-pub fn validate_pack(pack_path: &PathBuf, verbose: u8) -> Result<()> { todo!()}
+pub fn validate_pack(pack_path: &Path, verbose: u8) -> Result<()> { todo!()}

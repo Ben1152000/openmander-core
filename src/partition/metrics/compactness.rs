@@ -1,4 +1,4 @@
-use std::f64::{consts::PI, INFINITY};
+use std::f64::consts::PI;
 
 use crate::partition::Partition;
 
@@ -22,7 +22,7 @@ impl Partition {
     pub(crate) fn polsby_pobber(&self, part: u32) -> f64 {
         let area = self.area(part);
         let perimeter = self.perimeter(part);
-        if perimeter == 0.0 { return INFINITY }
+        if perimeter == 0.0 { return f64::INFINITY }
         4.0 * PI * area / (perimeter * perimeter)
     }
 
@@ -33,7 +33,7 @@ impl Partition {
     pub(crate) fn schwartzberg(&self, part: u32) -> f64 {
         let area = self.area(part);
         let perimeter = self.perimeter(part);
-        if perimeter == 0.0 { return INFINITY }
+        if perimeter == 0.0 { return f64::INFINITY }
         2.0 * PI * (area / PI).sqrt() / perimeter
     }
 

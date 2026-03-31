@@ -32,10 +32,8 @@ impl PendingWrite {
         tmp.as_file().sync_all().ok(); // best-effort fsync file
         tmp.persist(&self.target)
             .with_context(|| format!("rename to {}", self.target.display()))?;
-        if need_fsync_dir {
-            if let Some(dir) = self.target.parent() {
-                File::open(dir).and_then(|f| f.sync_all())?;
-            }
+        if need_fsync_dir && let Some(dir) = self.target.parent() {
+            File::open(dir).and_then(|f| f.sync_all())?;
         }
         Ok(())
     }
@@ -57,9 +55,9 @@ impl Seek for PendingWrite {
 }
 
 /// Download a large file from `file_url` to `out_path`.
-pub(crate) fn download_big_file(file_url: String, out_path: &PathBuf, force: bool) -> Result<()> {
+pub(crate) fn download_big_file(file_url: String, out_path: &Path, force: bool) -> Result<()> {
     // Safe big-file write (tempfile -> atomic rename), no accidental overwrite unless --force
-    let mut sink = PendingWrite::open(&out_path, force)?;
+    let mut sink = PendingWrite::open(out_path, force)?;
 
     let mut resp = reqwest::blocking::get(&file_url)
         .with_context(|| format!("GET {file_url}"))?
@@ -87,7 +85,7 @@ pub(crate) fn cleanup_download_dir(pack_dir: &Path, verbose: u8) -> Result<()> {
 }
 
 /// Download demographic data from Dave's redistricting
-fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+fn download_daves_demographics(out_dir: &Path, state: &str, verbose: u8) -> Result<()> {
     let file_url = format!("https://data.dra2020.net/file/dra-block-data/Demographic_Data_Block_{state}.v06.zip");
     let zip_path = out_dir.join(format!("Demographic_Data_Block_{state}.v06.zip"));
     let out_path = out_dir.join(format!("Demographic_Data_Block_{state}"));
@@ -102,7 +100,7 @@ fn download_daves_demographics(out_dir: &PathBuf, state: &str, verbose: u8) -> R
 }
 
 /// Download election data from Dave's redistricting
-fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
+fn download_daves_elections(out_dir: &Path, state: &str, verbose: u8) -> Result<()> {
     let file_url = format!("https://data.dra2020.net/file/dra-block-data/Election_Data_Block_{state}.v06.zip");
     let zip_path = out_dir.join(format!("Election_Data_Block_{state}.v06.zip"));
     let out_path = out_dir.join(format!("Election_Data_Block_{state}"));
@@ -118,10 +116,10 @@ fn download_daves_elections(out_dir: &PathBuf, state: &str, verbose: u8) -> Resu
 
 /// Download geometry data from US Census TIGER 2020 PL directory
 /// Example URL: "NE" -> "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/31_NEBRASKA/31/"
-fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verbose: u8) -> Result<()> {
-    let fips = util::state_abbr_to_fips(&state)
+fn download_tiger_geometries(out_dir: &Path, state: &str, has_vtd: bool, verbose: u8) -> Result<()> {
+    let fips = util::state_abbr_to_fips(state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
-    let name = util::state_abbr_to_name(&state)
+    let name = util::state_abbr_to_name(state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?
         .to_ascii_uppercase().replace(' ', "_");
 
@@ -150,8 +148,8 @@ fn download_tiger_geometries(out_dir: &PathBuf, state: &str, has_vtd: bool, verb
 
 /// Download block-level crosswalks from the US Census website
 /// Example URL: "NE" -> "https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST31_NE.zip"
-fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Result<()> {
-    let fips = util::state_abbr_to_fips(&state)
+fn download_census_crosswalks(out_dir: &Path, state: &str, verbose: u8) -> Result<()> {
+    let fips = util::state_abbr_to_fips(state)
         .with_context(|| format!("Unknown state/territory postal code: {state}"))?;
 
     let file_url = format!("https://www2.census.gov/geo/docs/maps-data/data/baf2020/BlockAssign_ST{fips}_{state}.zip");
@@ -170,8 +168,8 @@ fn download_census_crosswalks(out_dir: &PathBuf, state: &str, verbose: u8) -> Re
 
 /// Download all map files for the given state into the `download/` directory under `pack_dir`.
 /// Returns the path to the `download/` directory.
-pub(crate) fn download_data(state: &str, pack_dir: &PathBuf, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
-    util::require_dir_exists(&pack_dir)?;
+pub(crate) fn download_data(state: &str, pack_dir: &Path, has_vtd: bool, verbose: u8) -> Result<PathBuf> {
+    util::require_dir_exists(pack_dir)?;
 
     let download_dir = pack_dir.join("download");
     util::ensure_dir_exists(&download_dir)?;

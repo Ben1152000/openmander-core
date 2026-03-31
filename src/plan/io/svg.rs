@@ -73,12 +73,12 @@ impl Plan {
         let base_adj = base_region.adjacency();
 
         // 1) indices to process: frontier(d) + same-district neighbors + state-edge blocks
-        let frontier = self.partition.frontier(d as u32);
+        let frontier = self.partition.frontier(d);
 
         let mut include: HashSet<usize> = HashSet::new();
         // frontier
         for &i in frontier.iter() {
-            include.insert(i as usize);
+            include.insert(i);
         }
         // neighbors that are also in d (to cancel interior edges)
         for &i in frontier.iter() {
@@ -146,13 +146,13 @@ impl Plan {
 
         // a) internal district borders vs other districts
         for &i in frontier.iter() {
-            if self.partition.assignment(i as usize) != d {
+            if self.partition.assignment(i) != d {
                 continue;
             }
             for &v in base_adj.neighbors(geograph::UnitId(i as u32)) {
                 let j = v.0 as usize;
                 if self.partition.assignment(j) != d {
-                    add_shared(i as usize, j);
+                    add_shared(i, j);
                 }
             }
         }

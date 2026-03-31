@@ -73,16 +73,14 @@ pub(crate) fn polygonize_rings(boundary: &SegmentSet, ptmap: &HashMap<QuantizedP
 
     // Helper to remove one undirected edge (a<->b)
     let remove_edge = |a: QuantizedPoint, b: QuantizedPoint, adj: &mut HashMap<QuantizedPoint, Vec<QuantizedPoint>>| {
-        if let Some(v) = adj.get_mut(&a) {
-            if let Some(pos) = v.iter().position(|&x| x == b) {
+        if let Some(v) = adj.get_mut(&a)
+            && let Some(pos) = v.iter().position(|&x| x == b) {
                 v.swap_remove(pos);
             }
-        }
-        if let Some(v) = adj.get_mut(&b) {
-            if let Some(pos) = v.iter().position(|&x| x == a) {
+        if let Some(v) = adj.get_mut(&b)
+            && let Some(pos) = v.iter().position(|&x| x == a) {
                 v.swap_remove(pos);
             }
-        }
     };
 
     // Walk cycles
@@ -91,7 +89,7 @@ pub(crate) fn polygonize_rings(boundary: &SegmentSet, ptmap: &HashMap<QuantizedP
     // Collect all nodes with degree > 0
     let nodes: Vec<QuantizedPoint> = adj.iter().filter(|(_, v)| !v.is_empty()).map(|(k, _)| *k).collect();
 
-    while let Some(&start) = nodes.iter().find(|&&n| adj.get(&n).map_or(false, |v| !v.is_empty())) {
+    while let Some(&start) = nodes.iter().find(|&&n| adj.get(&n).is_some_and(|v| !v.is_empty())) {
         let mut ring_q: Vec<QuantizedPoint> = Vec::new();
         ring_q.push(start);
 
@@ -128,10 +126,8 @@ pub(crate) fn polygonize_rings(boundary: &SegmentSet, ptmap: &HashMap<QuantizedP
         }
 
         // Map back to f64 coords (drop duplicated last if present)
-        if let Some(last) = ring_q.last() {
-            if *last == start {
-                ring_q.pop();
-            }
+        if let Some(last) = ring_q.last() && *last == start {
+            ring_q.pop();
         }
         let ring_coords = ring_q
             .into_iter()

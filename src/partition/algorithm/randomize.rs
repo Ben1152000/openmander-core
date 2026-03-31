@@ -30,7 +30,7 @@ impl Partition {
     pub(crate) fn random_edge<R: Rng + ?Sized>(&self, node: usize, rng: &mut R) -> Option<usize> {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
         if self.graph().degree(node) == 0 { return None }
-        Some(self.graph().edge(node, rng.random_range(0..self.graph().degree(node)) as usize).unwrap())
+        Some(self.graph().edge(node, rng.random_range(0..self.graph().degree(node))).unwrap())
     }
 
     /// Select a random neighbor of a given node that is in the same part.

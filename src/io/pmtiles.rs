@@ -148,12 +148,11 @@ fn clean_ring(ring: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     // Remove consecutive duplicates
     let mut cleaned = Vec::new();
     cleaned.push(ring[0]);
-    for i in 1..ring.len() {
+    for &point in ring.iter().skip(1) {
         let prev = cleaned.last().unwrap();
-        let curr = ring[i];
         // Only add if different from previous point
-        if (curr.0 - prev.0).abs() > f64::EPSILON || (curr.1 - prev.1).abs() > f64::EPSILON {
-            cleaned.push(curr);
+        if (point.0 - prev.0).abs() > f64::EPSILON || (point.1 - prev.1).abs() > f64::EPSILON {
+            cleaned.push(point);
         }
     }
     
@@ -170,15 +169,13 @@ fn clean_ring(ring: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     if cleaned.len() >= 3 {
         let mut deduped = Vec::new();
         deduped.push(cleaned[0]);
-        for i in 1..cleaned.len() {
+        for &point in cleaned.iter().skip(1) {
             let prev_idx = if deduped.len() >= 2 { deduped.len() - 2 } else { 0 };
             let prev = deduped[prev_idx];
-            let curr = cleaned[i];
             // Skip if this point equals the point before the previous (A-B-A pattern)
-            if deduped.len() >= 2 && (curr.0 - prev.0).abs() < f64::EPSILON && (curr.1 - prev.1).abs() < f64::EPSILON {
-                continue;
+            if !(deduped.len() >= 2 && (point.0 - prev.0).abs() < f64::EPSILON && (point.1 - prev.1).abs() < f64::EPSILON) {
+                deduped.push(point);
             }
-            deduped.push(curr);
         }
         cleaned = deduped;
     }

@@ -6,7 +6,7 @@ impl Partition {
     /// Check if a part is empty (has no assigned nodes).
     pub(crate) fn part_is_empty(&self, part: u32) -> bool {
         assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
-        self.parts.get(part as usize).len() == 0
+        self.parts.get(part as usize).is_empty()
     }
 
     /// Check if a node borders a given part.
@@ -28,26 +28,26 @@ impl Partition {
 
     /// Check if moving `node` to a new part does not break contiguity.
     /// If `part` is 0 (unassigned), only checks if removing `node` breaks its current part.
-    pub(crate) fn check_node_contiguity(&self, node: usize, part: u32) -> bool {
-        assert!(node < self.graph().node_count(), "node {} out of range", node);
+    pub(crate) fn check_node_contiguity(&mut self, node: usize, part: u32) -> bool {
+        assert!(node < self.unit_graph.node_count(), "node {} out of range", node);
         assert!(part < self.num_parts(), "part must be in range [0, {})", self.num_parts());
 
-        let prev = self.assignment(node);
+        let prev = self.parts.find(node) as u32;
 
         // No-op move: always fine.
         if part == prev { return true }
 
         // For a non-empty destination, require at least one adjacent node in that part.
         if part != 0 && !self.part_is_empty(part)
-            && !self.graph().edges(node).any(|v| self.assignment(v) == part)
+            && !self.unit_graph.edges(node).any(|v| self.parts.find(v) as u32 == part)
         { return false }
 
-        // If currently unassigned, removing it can't break any real district.
+        // If currently unassigned, removing it can’t break any real district.
         if prev == 0 { return true }
 
         // Collect neighbors in the same part as `node`.
-        let neighbors = self.graph().edges(node)
-            .filter(|&v| self.assignment(v) == prev)
+        let neighbors = self.unit_graph.edges(node)
+            .filter(|&v| self.parts.find(v) as u32 == prev)
             .collect::<Vec<_>>();
 
         // If fewer than 2 same-part neighbors, removing `node` cannot disconnect the part.
@@ -55,12 +55,12 @@ impl Partition {
 
         // Fast path: exactly two neighbors and they’re directly connected.
         if neighbors.len() == 2
-            && self.graph().edges(neighbors[0]).any(|v| v == neighbors[1])
+            && self.unit_graph.edges(neighbors[0]).any(|v| v == neighbors[1])
         { return true }
 
         // Get the number of same-part neighbors for each neighbor.
         let neighbor_degrees = neighbors.iter()
-            .map(|&u| self.graph().edges(u).filter(|&v| self.assignment(v) == prev).count())
+            .map(|&u| self.unit_graph.edges(u).filter(|&v| self.parts.find(v) as u32 == prev).count())
             .collect::<Vec<_>>();
 
         // Heuristic: Start the BFS with the neighbor with fewest same-part neighbors.
@@ -71,22 +71,25 @@ impl Partition {
         // Fast path: If any neighbor has only a single same-part neighbor, removing `node` would disconnect.
         if min_degree == 1 { return false }
 
-        // Track which same-part neighbors have been reached.
-        let mut is_neighbor = vec![false; self.graph().node_count()];
-        for &u in &neighbors { is_neighbor[u] = true }
+        // Advance the generation counter to get a fresh "all-false" state in scratch buffers.
+        // scratch_a[u] == gen means "is_neighbor"; scratch_b[u] == gen means "visited".
+        self.scratch_gen = self.scratch_gen.wrapping_add(1);
+        let stamp = self.scratch_gen;
 
-        // BFS from one neighbor within `part`, forbidding `node`.
-        let mut visited = vec![false; self.graph().node_count()];
-        visited[node] = true;
-        visited[neighbors[start]] = true;
+        // Mark which same-part neighbors are BFS targets.
+        for &u in &neighbors { self.scratch_a[u] = stamp; }
+
+        // BFS from one neighbor within `prev`, forbidding `node`.
+        self.scratch_b[node] = stamp;
+        self.scratch_b[neighbors[start]] = stamp;
 
         let mut remaining = neighbors.len() - 1;
         let mut queue = VecDeque::from([neighbors[start]]);
         while let Some(u) = queue.pop_front() {
-            for v in self.graph().edges(u).filter(|&v| self.assignment(v) == prev && v != node) {
-                if !visited[v] {
-                    visited[v] = true;
-                    if is_neighbor[v] {
+            for v in self.unit_graph.edges(u) {
+                if self.parts.find(v) as u32 == prev && self.scratch_b[v] != stamp {
+                    self.scratch_b[v] = stamp;
+                    if self.scratch_a[v] == stamp {
                         // Check for early exit: if all targets have been visited, contiguity is preserved.
                         remaining -= 1; if remaining == 0 { return true }
                         queue.push_front(v); // prioritize BFS from targets
@@ -117,7 +120,7 @@ impl Partition {
         if !(part == 0 || self.part_is_empty(part) || subgraph.iter().any(|&u| self.graph().edges(u).any(|v| self.assignment(v) == part))) { return false }
 
         // Check if the subgraph itself is contiguous.
-        let mut seen = 1 as usize;
+        let mut seen: usize = 1;
         let mut visited = vec![false; self.graph().node_count()];
         let mut queue = VecDeque::from([subgraph[0]]);
         visited[subgraph[0]] = true;

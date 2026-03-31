@@ -83,8 +83,8 @@ impl Partition {
         // Build children lists once (tree is single component)
         let mut children = vec![Vec::new(); self.num_nodes()];
         for &u in &nodes {
-            if let Some(p) = parent[u] {
-                if p != u { children[p].push(u) }
+            if let Some(p) = parent[u] && p != u {
+                children[p].push(u);
             }
         }
 
@@ -169,7 +169,7 @@ impl Partition {
         let edge = self.balanced_cut(&tree, "T_20_CENS_Total").unwrap();
         let subtree = tree.subtree_slice(edge).unwrap();
 
-        self.move_subgraph(&subtree, other, false);
+        self.move_subgraph(subtree, other, false);
 
         println!("a population: {}", self.part_weights().get_as_f64("T_20_CENS_Total", a as usize).unwrap());
         println!("b population: {}", self.part_weights().get_as_f64("T_20_CENS_Total", b as usize).unwrap());

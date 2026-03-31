@@ -11,7 +11,7 @@ impl Partition {
     /// - `max_iter`: maximum number of Tabu iterations.
     /// - `tabu_tenure`: number of iterations for which the reverse move is tabu.
     /// - `boundary_factor`: mix between population imbalance and boundary length:
-    ///      0.0 = balance only, 1.0 = cut length only.
+    ///   0.0 = balance only, 1.0 = cut length only.
     /// - `candidates_per_iter`: how many random neighbor moves to sample per iteration.
     pub(crate) fn tabu_balance(
         &mut self,
@@ -166,9 +166,8 @@ impl Partition {
                     let new_cost = current_cost + delta;
 
                     // --- Tabu + aspiration ---
-                    let is_tabu = tabu
-                        .get(&(node, dest))
-                        .map_or(false, |&expire| expire > iter);
+                    let is_tabu = tabu.get(&(node, dest))
+                        .is_some_and(|&expire| expire > iter);
                     let is_aspiration = new_cost < best_cost;
 
                     if is_tabu && !is_aspiration {

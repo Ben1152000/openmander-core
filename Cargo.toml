@@ -14,6 +14,7 @@ anyhow = "1"
 ahash = "0.8"
 flate2 = "1"
 geo = "0.30"
+# NOTE: keep this version in sync with workspace.package.version when publishing
 geograph = { path = "crates/geograph", version = "0.2.0" }
 hex = "0.4"
 ndarray = { version = "0.15", features = ["rayon"] }
@@ -27,8 +28,8 @@ shapefile = "0.6"
 tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
-# PMTiles geometry storage (forked to remove zstd-sys for WASM compatibility)
-pmtiles2 = { path = "../pmtiles-rs", optional = true }
+# PMTiles geometry storage
+pmtiles2 = { version = "0.3.2", optional = true }
 # MVT encoding for PMTiles writing
 mvt = { version = "0.10", optional = true }
 

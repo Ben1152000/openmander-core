@@ -152,7 +152,7 @@ impl Partition {
 
         // Find subgraph of all but largest "dangling" piece if removing `node` splits the district.
         let mut subgraph = self.cut_subgraph_within_part(node);
-        if subgraph.len() == 0 { 
+        if subgraph.is_empty() {
             self.move_node(node, part, true);
         } else {
             subgraph.push(node);

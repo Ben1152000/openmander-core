@@ -159,6 +159,69 @@ impl Region {
         (0..self.num_units()).map(|i| UnitId(i as u32))
     }
 
+    /// Per-field heap memory breakdown.
+    ///
+    /// Returns a list of `(label, bytes)` pairs.  The total may slightly
+    /// undercount allocator overhead and `Vec` over-capacity.
+    pub fn heap_bytes_breakdown(&self) -> Vec<(&'static str, usize)> {
+        use std::mem::size_of;
+        use crate::dcel::{Face, HalfEdge, Vertex};
+
+        let dcel_bytes =
+            self.dcel.vertices.capacity()   * size_of::<Vertex<geo::Coord<f64>>>()
+            + self.dcel.half_edges.capacity() * size_of::<HalfEdge>()
+            + self.dcel.faces.capacity()      * size_of::<Face>();
+
+        let face_to_unit_bytes = self.face_to_unit.capacity() * size_of::<UnitId>();
+
+        // Count every coordinate stored across all MultiPolygon geometries.
+        let geom_coord_count: usize = self.geometries.iter()
+            .flat_map(|mp| mp.0.iter())
+            .map(|poly| {
+                poly.exterior().0.len()
+                + poly.interiors().iter().map(|r| r.0.len()).sum::<usize>()
+            })
+            .sum();
+        // 16 bytes per Coord<f64>; add Vec/LineString/Polygon/MultiPolygon header
+        // overhead as a rough 24-byte-per-entry estimate for the outer containers.
+        let geom_bytes = geom_coord_count * size_of::<geo::Coord<f64>>()
+            + self.geometries.capacity() * 24;
+
+        let scalars_bytes =
+            (self.area.capacity()
+             + self.perimeter.capacity()
+             + self.exterior_boundary_length.capacity()
+             + self.edge_length.capacity()) * size_of::<f64>()
+            + self.centroid.capacity() * size_of::<geo::Coord<f64>>()
+            + self.bounds.capacity() * size_of::<geo::Rect<f64>>()
+            + self.is_exterior.capacity() * size_of::<bool>();
+
+        let adj_bytes = self.adjacent.heap_bytes() + self.touching.heap_bytes();
+
+        // R-tree: each leaf node holds a UnitBBox (UnitId=4 + Rect=32 = ~40 bytes)
+        // plus internal tree node overhead (~64 bytes/node, ~n/9 nodes for 9-leaf pages).
+        let rtree_approx = self.geometries.len() * 48;
+
+        let unit_to_faces_bytes =
+            self.unit_to_faces_offsets.capacity() * size_of::<u32>()
+            + self.unit_to_faces_data.capacity() * size_of::<FaceId>();
+
+        // face_inner_cycles: sparse AHashMap; most entries have 1 HalfEdgeId.
+        let fic_bytes = self.face_inner_cycles.capacity() * 48
+            + self.face_inner_cycles.values().map(|v| v.capacity() * size_of::<HalfEdgeId>()).sum::<usize>();
+
+        vec![
+            ("dcel",              dcel_bytes),
+            ("face_to_unit",      face_to_unit_bytes),
+            ("geometries",        geom_bytes),
+            ("scalars",           scalars_bytes),
+            ("adjacency",         adj_bytes),
+            ("rtree",             rtree_approx),
+            ("unit_to_faces",     unit_to_faces_bytes),
+            ("face_inner_cycles", fic_bytes),
+        ]
+    }
+
     /// Returns the [`MultiPolygon`] geometry for `unit`.
     ///
     /// The geometry is reconstructed from the internal DCEL during construction, so

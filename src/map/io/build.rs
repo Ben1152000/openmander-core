@@ -94,7 +94,7 @@ impl MapLayer {
 
         // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64> and build Region.
         let multipolygons: Vec<geo::MultiPolygon<f64>> = shapes.into_iter()
-            .map(|shape| crate::io::shp::shape_to_multipolygon(shape))
+            .map(crate::io::shp::shape_to_multipolygon)
             .collect::<Result<Vec<_>>>()
             .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?;
 
@@ -369,9 +369,9 @@ impl Map {
         #[inline]
         fn map_from_crosswalk_df(df: &DataFrame, geo_types: (GeoType, GeoType), col_names: (&str, &str)) -> Result<HashMap<GeoId, GeoId>> {
             Ok(
-                df.column(col_names.0.into())?.str()?
+                df.column(col_names.0)?.str()?
                     .into_iter()
-                    .zip(df.column(col_names.1.into())?.str()?)
+                    .zip(df.column(col_names.1)?.str()?)
                     .filter_map(|(b, d)| Some((
                         GeoId::new(geo_types.0, b?),
                         GeoId::new(geo_types.1, &format!("{}{}", &b?[..5], d?)),

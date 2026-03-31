@@ -72,7 +72,7 @@ impl MapLayer {
             assert_eq!(lon_column.len(), self.len(), "Expected centroid_lon length {} to match number of entities {}", lon_column.len(), self.len());
             assert_eq!(lat_column.len(), self.len(), "Expected centroid_lat length {} to match number of entities {}", lat_column.len(), self.len());
 
-            return lon_column.into_iter().zip(lat_column.into_iter())
+            return lon_column.into_iter().zip(lat_column)
                 .map(|(lon, lat)| Point::new(lon.unwrap_or(f64::NAN), lat.unwrap_or(f64::NAN)))
                 .collect()
         }

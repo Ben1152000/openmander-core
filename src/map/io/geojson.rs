@@ -31,8 +31,7 @@ impl MapLayer {
             (0..self.len()).collect()
         };
 
-        let mut features = Vec::new();
-        features.reserve(indices.len().min(10000)); // Cap initial capacity
+        let mut features = Vec::with_capacity(indices.len().min(10000)); // Cap initial capacity
 
         for idx in indices {
             let mp = region.geometry(geograph::UnitId(idx as u32));
@@ -47,7 +46,7 @@ impl MapLayer {
             // This is especially important for higher-level layers (county, vtd) that are used for zoomed-out views
             let essential_columns = ["name", "TOTPOP", "T_20_CENS_Total"];
             for col_name in essential_columns.iter() {
-                if let Ok(col) = self.unit_data.column(*col_name) {
+                if let Ok(col) = self.unit_data.column(col_name) {
                     let json_val = match col.dtype() {
                         polars::prelude::DataType::String => {
                             if let Ok(s) = col.str() {
@@ -90,7 +89,7 @@ impl MapLayer {
             
             // Create hash based on geo_id (for now, just use geo_id as hash)
             // This will be extended to include district/color in the districts version
-            let feature_hash = format!("{}", geo_id_str);
+            let feature_hash = geo_id_str.to_string();
             
             // Add hash to properties
             properties.insert("_hash".to_string(), json!(feature_hash));
@@ -145,8 +144,7 @@ impl MapLayer {
             (0..num_entities).collect()
         };
 
-        let mut features = Vec::new();
-        features.reserve(indices.len().min(10000)); // Cap initial capacity
+        let mut features = Vec::with_capacity(indices.len().min(10000)); // Cap initial capacity
 
         for idx in indices {
             let mp = region.geometry(geograph::UnitId(idx as u32));
@@ -178,7 +176,7 @@ impl MapLayer {
             // Only add a few key columns instead of all columns
             let key_columns = ["name", "TOTPOP", "T_20_CENS_Total"];
             for col_name in key_columns.iter() {
-                if let Ok(col) = self.unit_data.column(*col_name) {
+                if let Ok(col) = self.unit_data.column(col_name) {
                     let json_val = match col.dtype() {
                         polars::prelude::DataType::String => {
                             if let Ok(s) = col.str() {

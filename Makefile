@@ -57,7 +57,7 @@ WASM_OUT        := $(WASM_BINDINGS_DIR)/pkg
 
 .PHONY: all venv python-deps python-dev python-wheel python-test python-otool \
         wasm wasm-copy wasm-clean \
-        test openmander-test geograph geograph-test \
+        test clippy openmander-test geograph geograph-test \
         clean clean-all print-vars help prepare-target check-wasm-pack
 
 # ============================================================================
@@ -73,8 +73,12 @@ all: python-dev wasm-copy
 # ============================================================================
 
 # Run all Rust tests across the workspace
-test:
+test: clippy
 	cargo test --all-features --workspace
+
+# Run clippy lints across the workspace
+clippy:
+	cargo clippy --all-features --all-targets -- -D warnings
 
 # Per-crate test targets
 openmander-test:
@@ -197,7 +201,8 @@ help:
 	@echo '  Legacy aliases: deps, dev, wheel, otool (same as python-*)'
 	@echo ''
 	@echo 'Rust Tests:'
-	@echo '  test               Run all Rust tests (workspace-wide)'
+	@echo '  test               Run clippy then all Rust tests (workspace-wide)'
+	@echo '  clippy             Run clippy lints across the workspace'
 	@echo '  openmander-test    Run tests for the openmander crate'
 	@echo '  geograph-test      Run tests for the geograph crate'
 	@echo ''

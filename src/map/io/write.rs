@@ -32,7 +32,7 @@ impl MapLayer {
     /// Prepare entity data (with parent refs) for writing to a pack file.
     fn pack_data(&self) -> Result<DataFrame> {
         /// Helper to extract parent IDs as strings
-        fn get_parents(parents: &Vec<ParentRefs>, ty: GeoType) -> Vec<Option<&str>> {
+        fn get_parents(parents: &[ParentRefs], ty: GeoType) -> Vec<Option<&str>> {
             parents.iter()
                 .map(|parents| parents.get(ty).map(|geo_id| geo_id.id()))
                 .collect()
@@ -47,9 +47,9 @@ impl MapLayer {
             "parent_vtd" => get_parents(&self.parents, GeoType::VTD),
         ]?;
 
-        Ok(self.unit_data
+        self.unit_data
             .inner_join(&parents_df, ["geo_id"], ["geo_id"])
-            .context("inner_join on 'geo_id' failed when preparing parquet")?)
+            .context("inner_join on 'geo_id' failed when preparing parquet")
     }
 
     fn write_to_pack_sink_with_formats(
@@ -68,13 +68,13 @@ impl MapLayer {
         };
         let data_file = format!("data/{layer_name}.{data_ext}");
 
-        counts.insert(layer_name.into(), self.geo_ids.len());
+        counts.insert(layer_name, self.geo_ids.len());
 
         // data (parquet or csv)
         let data_bytes = match formats.data.as_str() {
             #[cfg(feature = "parquet")]
-            "parquet" => crate::io::parquet::write_parquet_bytes(&mut self.pack_data()?)?,
-            "csv" => crate::io::csv::write_csv_bytes(&mut self.pack_data()?)?,
+            "parquet" => crate::io::parquet::write_parquet_bytes(&self.pack_data()?)?,
+            "csv" => crate::io::csv::write_csv_bytes(&self.pack_data()?)?,
             #[cfg(not(feature = "parquet"))]
             "parquet" => return Err(anyhow::anyhow!("Parquet format requires 'parquet' feature to be enabled")),
             _ => return Err(anyhow::anyhow!("Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data)),
@@ -87,7 +87,7 @@ impl MapLayer {
         let mut region_bytes: Vec<u8> = Vec::new();
         {
             let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
-            geograph::io::write(&*self.region, &mut gz)
+            geograph::io::write(&self.region, &mut gz)
                 .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
             gz.finish().context("Failed to finish gzip encoding for region")?;
         }
@@ -161,10 +161,10 @@ impl Map {
             let layer_name = layer.ty().to_str();
             let data_file = format!("data/{layer_name}.csv");
 
-            counts.insert(layer_name.into(), layer.geo_ids.len());
+            counts.insert(layer_name, layer.geo_ids.len());
 
             // Write data file
-            let data_bytes = crate::io::csv::write_csv_bytes(&mut layer.pack_data()?)?;
+            let data_bytes = crate::io::csv::write_csv_bytes(&layer.pack_data()?)?;
             sink.put(&data_file, &data_bytes)?;
             file_hashes.insert(data_file.clone(), FileHash { sha256: sha256_bytes(&data_bytes) });
 
@@ -173,7 +173,7 @@ impl Map {
             let mut region_bytes: Vec<u8> = Vec::new();
             {
                 let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
-                geograph::io::write(&*layer.region, &mut gz)
+                geograph::io::write(&layer.region, &mut gz)
                     .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
                 gz.finish().context("Failed to finish gzip encoding for region")?;
             }

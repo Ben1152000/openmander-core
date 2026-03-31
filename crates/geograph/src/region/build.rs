@@ -205,8 +205,7 @@ fn build_dcel(
                 let mut vids = Vec::with_capacity(ring.len());
                 for &c in ring {
                     let key = CoordKey::from(c);
-                    let vid = *vertex_map
-                        .entry(key)
+                    let vid = *vertex_map.entry(key)
                         .or_insert_with(|| dcel.add_vertex(c));
                     vids.push(vid);
                 }
@@ -387,8 +386,8 @@ fn build_dcel(
                     .or_else(|| hole_edge_face.get(&pack_edge(b, a)).copied())
                     .unwrap_or(OUTER_FACE);
 
-                let (he_ab, _he_ba) = dcel.add_edge(a, b, face_ab, face_ba);
-                seen_edges.insert(pack_edge(a, b), he_ab);
+                let (ab, _ba) = dcel.add_edge(a, b, face_ab, face_ba);
+                seen_edges.insert(pack_edge(a, b), ab);
             }
         }
     }
@@ -569,8 +568,7 @@ fn build_dcel(
 
     if outer_cycles.len() > 1 {
         // Find the true outer boundary (most negative signed area = largest CW cycle).
-        let outer_idx = outer_cycles.iter()
-            .enumerate()
+        let outer_idx = outer_cycles.iter().enumerate()
             .min_by(|(_, (_, a)), (_, (_, b))| a.partial_cmp(b).unwrap())
             .map(|(i, _)| i)
             .unwrap();

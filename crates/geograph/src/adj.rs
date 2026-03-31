@@ -217,6 +217,13 @@ impl AdjacencyMatrix {
         Self::from_directed_pairs_weighted(nu, triples)
     }
 
+    /// Approximate heap bytes consumed by this matrix.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.offsets.capacity()   * std::mem::size_of::<u32>()
+        + self.neighbors.capacity() * std::mem::size_of::<UnitId>()
+        + self.weights.as_ref().map_or(0, |w| w.capacity() * std::mem::size_of::<f64>())
+    }
+
     /// Slice of weights for `unit`'s neighbors, aligned to `neighbors(unit)`.
     ///
     /// Returns an empty slice if no weights are stored.

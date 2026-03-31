@@ -4,8 +4,6 @@ A Rust crate for representing and querying **planar geographic maps**: complete 
 
 Built as the geometric foundation for [openmander](https://github.com/bdarnell/openmander).
 
----
-
 ## Overview
 
 The central type is [`Region`]: a planar map of geographic units backed by a half-edge DCEL, with pre-cached geometry metrics and CSR adjacency matrices. Build one from a `Vec<MultiPolygon<f64>>` (one geometry per unit); query it for area, adjacency, topology, and boundary geometry.
@@ -31,8 +29,6 @@ let contiguous = region.is_contiguous([UnitId(0), UnitId(1), UnitId(2)]);
 let enclaves   = region.enclaves([UnitId(0), UnitId(1)]);
 ```
 
----
-
 ## Features
 
 **Adjacency**
@@ -57,13 +53,9 @@ let enclaves   = region.enclaves([UnitId(0), UnitId(1)]);
 **Serialization**
 - Compact binary format via `geograph::io::{read, write}`
 
----
-
 ## Coordinate system
 
 Input geometries must use unprojected lon/lat (EPSG:4326). Area and length results are returned in **m²** and **m** via a per-edge `cos(φ_mid)` correction applied at construction time.
-
----
 
 ## Snap tolerance
 
@@ -74,8 +66,6 @@ Pass `snap_tol: Some(tol)` to repair near-coincident shared-boundary vertices be
 | TIGER/Line GeoParquet | `None`          |
 | Other GeoParquet  | `Some(1e-7)`        |
 | PMTiles-quantised | `Some(1e-4)`        |
-
----
 
 ## Performance
 
@@ -92,8 +82,6 @@ Pass `snap_tol: Some(tol)` to repair near-coincident shared-boundary vertices be
 | `enclaves`, `has_holes` | O(n) |
 
 k = subset size, n = total units.
-
----
 
 ## Internals
 

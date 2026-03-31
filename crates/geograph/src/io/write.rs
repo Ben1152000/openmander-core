@@ -14,14 +14,24 @@ fn write_i32(w: &mut impl Write, v: i32) -> std::io::Result<()> { w.write_all(&v
 fn write_f64(w: &mut impl Write, v: f64) -> std::io::Result<()> { w.write_all(&v.to_bits().to_le_bytes()) }
 fn encode_coord(v: f64) -> i32 { (v * COORD_SCALE).round() as i32 }
 
-/// Serialise `region` to `writer` using the geograph binary format.
+/// Serialise a [`Region`] to `writer` using the geograph binary format.
 ///
-/// See §8 (Serialisation) of DESIGN.md for the full file layout.
+/// The counterpart to [`crate::io::read`]. Writes DCEL topology, adjacency
+/// CSRs (neighbor pairs only, not weights), and pre-cached
+/// `area`/`perimeter`/edge-lengths; other cached fields (centroids, bounds,
+/// `is_exterior`, `exterior_boundary_length`, rook adjacency weights) are
+/// recomputed on load.
+///
+/// See the [`crate::io`] module for the full file format.
+///
+/// # Errors
+///
+/// Returns [`IoError`] if an I/O error occurs while writing.
 pub fn write(region: &Region, writer: &mut impl Write) -> Result<(), IoError> {
-    let num_vertices  = region.dcel.num_vertices()   as u32;
+    let num_vertices   = region.dcel.num_vertices() as u32;
     let num_half_edges = region.dcel.num_half_edges() as u32;
-    let num_faces  = region.dcel.num_faces()      as u32;
-    let nu  = region.num_units()           as u32;
+    let num_faces      = region.dcel.num_faces() as u32;
+    let num_units      = region.num_units() as u32;
 
     // ---- Header ----
     writer.write_all(MAGIC)?;
@@ -29,7 +39,7 @@ pub fn write(region: &Region, writer: &mut impl Write) -> Result<(), IoError> {
     write_u32(writer, num_vertices)?;
     write_u32(writer, num_half_edges)?;
     write_u32(writer, num_faces)?;
-    write_u32(writer, nu)?;
+    write_u32(writer, num_units)?;
 
     // ---- Vertices ----
     for v in 0..num_vertices as usize {
@@ -61,7 +71,7 @@ pub fn write(region: &Region, writer: &mut impl Write) -> Result<(), IoError> {
     }
 
     // ---- UnitCache (area, perimeter per unit) ----
-    for u in 0..nu as usize {
+    for u in 0..num_units as usize {
         write_f64(writer, region.area[u])?;
         write_f64(writer, region.perimeter[u])?;
     }

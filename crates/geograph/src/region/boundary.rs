@@ -150,7 +150,7 @@ impl Region {
         MultiPolygon(polys)
     }
 
-    /// Faster variant of [`union_of`] for use when the caller knows which units
+    /// Faster variant of [`Region::union_of`] for use when the caller knows which units
     /// are on the district boundary (frontier).
     ///
     /// Instead of scanning all DCEL half-edges, this only examines the faces
@@ -244,8 +244,7 @@ impl Region {
             }
             outers[best].1.push(LineString(hole));
         }
-        let polys: Vec<Polygon<f64>> = outers
-            .into_iter()
+        let polys: Vec<Polygon<f64>> = outers.into_iter()
             .map(|(ring, holes)| Polygon::new(LineString(ring), holes))
             .collect();
         MultiPolygon(polys)

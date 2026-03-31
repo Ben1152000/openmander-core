@@ -1,3 +1,5 @@
+//! [`Region`] — a DCEL-based planar map of geographic units.
+
 pub(crate) mod adj;
 pub(crate) mod build;
 mod boundary;
@@ -8,9 +10,16 @@ mod simplify;
 mod topo;
 mod validate;
 
-pub use build::RegionError;
-
 use geo::{Coord, LineString, MultiPolygon, Rect};
+
+/// Errors that can occur when constructing or validating a [`Region`].
+#[derive(Debug)]
+pub enum RegionError {
+    /// One or more input geometries are invalid or empty.
+    InvalidGeometry(String),
+    /// A structural invariant was violated (see [`Region::validate`]).
+    ValidationError(String),
+}
 
 /// A closed coordinate sequence (outer ring or hole), before wrapping in `LineString`.
 pub(crate) type Ring = Vec<Coord<f64>>;

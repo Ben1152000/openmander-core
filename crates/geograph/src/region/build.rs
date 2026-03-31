@@ -7,18 +7,10 @@ use crate::rtree::SpatialIndex;
 use super::snap::snap_vertices;
 use crate::unit::UnitId;
 
-use super::{Region, Ring};
+use super::{Region, RegionError, Ring};
 use super::adj::{build_adjacent, build_touching};
 use super::cache::{CacheData, compute_caches};
 
-/// Errors that can occur when constructing or validating a `Region`.
-#[derive(Debug)]
-pub enum RegionError {
-    /// One or more input geometries are invalid or empty.
-    InvalidGeometry(String),
-    /// A structural invariant was violated (see `Region::validate()`).
-    ValidationError(String),
-}
 
 impl Region {
     /// Build a `Region` from a vector of `MultiPolygon` geometries (one per
@@ -338,8 +330,7 @@ fn build_dcel(
                     // of unit u.  The enclosing face is the outer ring's face.
                     let (_pi, _) = ring_info[u][ri];
                     // Find the outer ring face for this polygon of unit u.
-                    let outer_face = ring_info[u].iter()
-                        .enumerate()
+                    let outer_face = ring_info[u].iter().enumerate()
                         .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
                         .and_then(|(ri2, _)| ring_face[u][ri2])
                         .unwrap_or(OUTER_FACE);
@@ -350,8 +341,7 @@ fn build_dcel(
                     // We'll create gap faces later during the gap detection pass.
                     // For now, mark with OUTER_FACE.
                     let (_pi, _) = ring_info[u][ri];
-                    let outer_face = ring_info[u].iter()
-                        .enumerate()
+                    let outer_face = ring_info[u].iter().enumerate()
                         .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
                         .and_then(|(ri2, _)| ring_face[u][ri2])
                         .unwrap_or(OUTER_FACE);

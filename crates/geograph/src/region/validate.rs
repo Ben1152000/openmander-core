@@ -1,7 +1,6 @@
 use crate::dcel::HalfEdgeId;
 
-use super::Region;
-use super::build::RegionError;
+use super::{Region, RegionError};
 
 impl Region {
     /// Checks structural invariants of the `Region` and returns an error if any are violated.

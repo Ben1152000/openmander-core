@@ -1,3 +1,40 @@
+//! Binary serialisation and deserialisation for [`crate::Region`].
+//!
+//! Use [`crate::io::write`] to serialise a [`crate::Region`] to any [`std::io::Write`] and
+//! [`crate::io::read`] to deserialise it back. The format is a compact little-endian
+//! binary encoding of the DCEL topology and pre-cached metrics.
+//!
+//! # File format
+//!
+//! ```text
+//! [Header]
+//!   magic:           4 bytes ("OMRP")
+//!   version:         1 byte
+//!   reserved:        3 bytes
+//!   num_vertices:    u32
+//!   num_half_edges:  u32  (always even)
+//!   num_faces:       u32
+//!   num_units:       u32
+//!
+//! [Vertices]              num_vertices        × (i32 lon, i32 lat)              8 B each
+//!                           coordinates quantised to 1×10⁻⁷ degrees (~1 cm)
+//! [HalfEdges]             num_half_edges      × (u32 origin, u32 next,
+//!                                                u32 prev,   u32 face)         16 B each
+//! [Faces]                 num_faces           × u32 half_edge                   4 B each
+//!                           (0xFFFFFFFF = no boundary / outer face)
+//! [FaceToUnit]            num_faces           × u32                             4 B each
+//!                           (0xFFFFFFFF = UnitId::EXTERIOR)
+//! [UnitCache]             num_units           × (f64 area_m2, f64 perimeter_m) 16 B each
+//! [EdgeLengths]           num_half_edges / 2  × f64                             8 B each
+//! [RookAdj offsets]       num_units + 1       × u32                             4 B each
+//! [RookAdj neighbors]     num_rook_edges      × u32                             4 B each
+//! [TouchingAdj offsets]   num_units + 1       × u32                             4 B each
+//! [TouchingAdj neighbors] num_touching_edges  × u32                             4 B each
+//! ```
+//!
+//! Fields not stored (centroids, bounds, `is_exterior`, `exterior_boundary_length`)
+//! are recomputed from the DCEL on load.
+
 mod read;
 mod write;
 

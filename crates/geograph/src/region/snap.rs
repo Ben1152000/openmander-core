@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use geo::Coord;
 
+use super::Ring;
+
 /// Snap near-coincident vertices along shared polygon edges to a canonical
 /// position, repairing floating-point artefacts common in TIGER/Line and
 /// quantised geodata.
@@ -17,7 +19,7 @@ use geo::Coord;
 /// `tolerance` is the maximum distance (in degrees) at which two vertices are
 /// considered coincident.  A value of `1e-7` (~1 cm) is appropriate for
 /// full-precision GeoParquet data; coarser inputs may require up to `1e-4`.
-pub(crate) fn snap_vertices(rings: &mut [Vec<Vec<Coord<f64>>>], tolerance: f64) {
+pub(crate) fn snap_vertices(rings: &mut [Vec<Ring>], tolerance: f64) {
     if rings.is_empty() { return; }
 
     // -----------------------------------------------------------------------

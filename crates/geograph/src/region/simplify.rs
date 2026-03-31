@@ -19,7 +19,7 @@
 use geo::{Coord, LineString, MultiPolygon, Polygon};
 
 use crate::dcel::{Dcel, HalfEdgeId};
-use super::Region;
+use super::{Region, Ring};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -189,7 +189,7 @@ fn collect_ring(
     arc_fwd:       &[bool],
     arc_store:     &[Vec<Coord<f64>>],
     arc_by_start:  &[usize],
-) -> Vec<Coord<f64>> {
+) -> Ring {
     let mut coords = Vec::new();
     let mut cur    = start;
 

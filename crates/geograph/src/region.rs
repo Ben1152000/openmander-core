@@ -1,5 +1,8 @@
 pub(crate) mod adj;
 pub(crate) mod build;
+mod boundary;
+mod cache;
+mod snap;
 mod geom;
 mod simplify;
 mod topo;
@@ -7,7 +10,13 @@ mod validate;
 
 pub use build::RegionError;
 
-use geo::{Coord, MultiPolygon, Rect};
+use geo::{Coord, LineString, MultiPolygon, Rect};
+
+/// A closed coordinate sequence (outer ring or hole), before wrapping in `LineString`.
+pub(crate) type Ring = Vec<Coord<f64>>;
+
+/// A collection of interior hole rings, matching `geo`'s `Polygon::new(exterior, interiors)`.
+pub(crate) type Interiors = Vec<LineString<f64>>;
 
 use crate::adj::AdjacencyMatrix;
 use crate::dcel::{Dcel, FaceId, HalfEdgeId};

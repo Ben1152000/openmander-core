@@ -1,14 +1,15 @@
 use ahash::AHashMap;
 
-use geo::{Coord, LineString, MultiPolygon, Polygon, Rect};
+use geo::{Coord, LineString, MultiPolygon, Polygon};
 
 use crate::dcel::{Dcel, FaceId, HalfEdgeId, VertexId, OUTER_FACE};
 use crate::rtree::SpatialIndex;
-use crate::snap::snap_vertices;
+use super::snap::snap_vertices;
 use crate::unit::UnitId;
 
-use super::Region;
+use super::{Region, Ring};
 use super::adj::{build_adjacent, build_touching};
+use super::cache::{CacheData, compute_caches};
 
 /// Errors that can occur when constructing or validating a `Region`.
 #[derive(Debug)]
@@ -18,9 +19,6 @@ pub enum RegionError {
     /// A structural invariant was violated (see `Region::validate()`).
     ValidationError(String),
 }
-
-/// Metres per degree of latitude (WGS-84 mean).
-const M_PER_DEG: f64 = 111_320.0;
 
 impl Region {
     /// Build a `Region` from a vector of `MultiPolygon` geometries (one per
@@ -44,647 +42,21 @@ impl Region {
         // -----------------------------------------------------------------
         // 1. Extract rings and (optionally) snap vertices
         // -----------------------------------------------------------------
-        // rings[unit] = vec of rings (outer + holes), each ring = vec of coords.
-        // Convention: outer rings are CCW, hole rings are CW (GeoJSON / geo crate).
-        let mut rings: Vec<Vec<Vec<Coord<f64>>>> = Vec::with_capacity(num_units);
-        // ring_info[unit][ring_idx] = (polygon_idx, is_outer)
-        let mut ring_info: Vec<Vec<(usize, bool)>> = Vec::with_capacity(num_units);
-
-        for mp in &polys {
-            let mut unit_rings = Vec::new();
-            let mut unit_info = Vec::new();
-            for (pi, poly) in mp.0.iter().enumerate() {
-                let outer = poly.exterior().0.clone();
-                if outer.len() < 4 {
-                    return Err(RegionError::InvalidGeometry(
-                        "polygon ring must have at least 4 coordinates (including closing)".into(),
-                    ));
-                }
-                unit_rings.push(outer);
-                unit_info.push((pi, true));
-                for hole in poly.interiors() {
-                    unit_rings.push(hole.0.clone());
-                    unit_info.push((pi, false));
-                }
-            }
-            rings.push(unit_rings);
-            ring_info.push(unit_info);
-        }
-
-        // Free input geometries — rings now owns all coordinate data.
-        drop(polys);
-
-        // Normalize winding order: exterior rings → CCW (positive signed area),
-        // hole rings → CW (negative signed area).  TIGER/Shapefile data and some
-        // GeoParquet exports use ESRI convention (CW exterior), which inverts the
-        // face assignments and produces incorrect face cycles.
-        for (u, unit_rings) in rings.iter_mut().enumerate() {
-            for (ri, ring) in unit_rings.iter_mut().enumerate() {
-                let sa = ring_signed_area(ring);
-                let is_outer = ring_info[u][ri].1;
-                let needs_reverse = if is_outer { sa < 0.0 } else { sa > 0.0 };
-                if needs_reverse {
-                    ring.reverse();
-                }
-            }
-        }
-
-        eprintln!("[region::new] 1. rings extracted in {:.2?}", t0.elapsed());
-
-        if let Some(tol) = snap_tol {
-            snap_vertices(&mut rings, tol);
-            eprintln!("[region::new] 1. snap done in {:.2?}", t0.elapsed());
-        }
+        let (rings, ring_info) = extract_rings(polys, snap_tol, num_units, t0)?;
 
         // -----------------------------------------------------------------
-        // 2. Build DCEL
+        // 2-3. Build DCEL (vertex dedup, half-edge construction, gap detection)
         // -----------------------------------------------------------------
-        let mut dcel: Dcel<Coord<f64>> = Dcel::new();
-
-        // 2a. Deduplicate vertices by exact coordinate (post-snap).
-        // ring_vids[unit][ring_idx][pos] = VertexId
-        let mut ring_vids: Vec<Vec<Vec<VertexId>>> = Vec::with_capacity(num_units);
-        {
-            let mut vertex_map: AHashMap<CoordKey, VertexId> = AHashMap::new();
-            for unit_rings in &rings {
-                let mut unit_vids = Vec::with_capacity(unit_rings.len());
-                for ring in unit_rings {
-                    let mut vids = Vec::with_capacity(ring.len());
-                    for &c in ring {
-                        let key = CoordKey::from(c);
-                        let vid = *vertex_map
-                            .entry(key)
-                            .or_insert_with(|| dcel.add_vertex(c));
-                        vids.push(vid);
-                    }
-                    unit_vids.push(vids);
-                }
-                ring_vids.push(unit_vids);
-            }
-            // vertex_map dropped here — no longer needed after deduplication.
-        }
-        // rings dropped here — coordinates now live in the DCEL vertices.
-        drop(rings);
-
-        // 2b. Create faces: one DCEL face per outer ring of each unit.
-        //     Hole rings share the face of whatever unit fills them (determined
-        //     by edge matching), or become EXTERIOR gap faces.
-        //
-        //     face_owner[face_id] = UnitId that owns this face.
-        //     For outer rings: the unit itself.
-        //     For faces created later (gaps): EXTERIOR.
-        //
-        //     Strategy: only create faces for outer rings now.  Hole ring edges
-        //     will match against some other unit's outer ring edges (or become
-        //     OUTER_FACE edges if unmatched).
-
-        eprintln!("[region::new] 2a. vertices deduped: {} verts in {:.2?}", dcel.num_vertices(), t0.elapsed());
-
-        // ring_face[unit][ring_idx] = FaceId (only meaningful for outer rings)
-        let mut ring_face: Vec<Vec<Option<FaceId>>> = Vec::with_capacity(num_units);
-        let mut face_to_unit_vec: Vec<UnitId> = vec![UnitId::EXTERIOR]; // slot 0 = OUTER_FACE
-
-        for (u, infos) in ring_info.iter().enumerate() {
-            let mut unit_faces = Vec::with_capacity(infos.len());
-            for &(_pi, is_outer) in infos {
-                if is_outer {
-                    let fid = dcel.add_face();
-                    face_to_unit_vec.push(UnitId(u as u32));
-                    unit_faces.push(Some(fid));
-                } else {
-                    unit_faces.push(None); // hole — face determined later
-                }
-            }
-            ring_face.push(unit_faces);
-        }
-
-        // 2c. Collect all directed edges from all rings.
-        //     For each directed edge (a→b) from an outer ring, we know its face.
-        //     For each directed edge from a hole ring, the face to its left is
-        //     the interior of the hole — we'll figure that out via matching.
-        //
-        //     edge_table: (a, b) → (unit, ring_idx, face_on_left)
-        //     We only insert edges from outer rings.  When matching, the twin's
-        //     face comes from the table; unmatched outer edges get OUTER_FACE.
-
-        eprintln!("[region::new] 2b. faces created: {} faces in {:.2?}", dcel.num_faces(), t0.elapsed());
-
-        // Map packed_edge(origin, dest) → FaceId for outer ring edges.
-        let mut edge_face: AHashMap<u64, FaceId> = AHashMap::new();
-
-        for (u, unit_rings) in ring_vids.iter().enumerate() {
-            for (ri, vids) in unit_rings.iter().enumerate() {
-                let face = match ring_face[u][ri] {
-                    Some(f) => f,
-                    None => continue, // skip hole rings in this pass
-                };
-                let n = vids.len();
-                if n < 2 { continue; }
-                // Skip the closing coordinate (last == first).
-                let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
-                for i in 0..edge_count {
-                    let a = vids[i];
-                    let b = vids[(i + 1) % n];
-                    if a == b { continue; } // degenerate edge
-                    edge_face.insert(pack_edge(a, b), face);
-                }
-            }
-        }
-
-        eprintln!("[region::new] 2c. edge_face map built: {} outer edges in {:.2?}", edge_face.len(), t0.elapsed());
-
-        // Also collect hole ring edges — their face is the interior of the hole.
-        // If another unit's outer ring provides the reverse edge, the hole
-        // interior is that unit's face.  Otherwise, it's a gap (EXTERIOR).
-        // We need these to find the correct face for the twin side of
-        // boundary edges that border a hole.
-        //
-        // hole_edges: (a, b) → (unit_idx, ring_idx)  [for reference only]
-        let mut hole_edge_face: AHashMap<u64, FaceId> = AHashMap::new();
-
-        for (u, unit_rings) in ring_vids.iter().enumerate() {
-            for (ri, vids) in unit_rings.iter().enumerate() {
-                if ring_face[u][ri].is_some() { continue; } // skip outer rings
-                let n = vids.len();
-                if n < 2 { continue; }
-                let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
-                for i in 0..edge_count {
-                    let a = vids[i];
-                    let b = vids[(i + 1) % n];
-                    if a == b { continue; }
-                    // The face to the left of a CW hole ring edge is the hole
-                    // interior.  Check if the reverse edge exists as an outer
-                    // ring edge — if so, the hole interior is that outer ring's
-                    // unit.
-                    if edge_face.contains_key(&pack_edge(b, a)) {
-                        // The reverse of this hole edge is an outer ring edge
-                        // with face `face`.  The hole interior edge (a→b) has
-                        // the hole's face on its left.  But we also know this
-                        // edge's reverse (b→a) has `face` on its left.  So
-                        // a→b is the twin of b→a: they share an edge.  We'll
-                        // handle this naturally during edge creation.
-                        //
-                        // But for the hole's own directed edge (a→b), the face
-                        // to its left is the enclosing unit's face (the unit
-                        // that has the hole).  We find that from ring_face:
-                        // The hole belongs to the same polygon as the outer ring
-                        // of unit u.  The enclosing face is the outer ring's face.
-                        let (_pi, _) = ring_info[u][ri];
-                        // Find the outer ring face for this polygon of unit u.
-                        let outer_face = ring_info[u].iter()
-                            .enumerate()
-                            .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
-                            .and_then(|(ri2, _)| ring_face[u][ri2])
-                            .unwrap_or(OUTER_FACE);
-                        hole_edge_face.insert(pack_edge(a, b), outer_face);
-                    } else {
-                        // No matching outer ring edge — this hole borders EXTERIOR.
-                        // The face to the left of the hole edge is some gap face.
-                        // We'll create gap faces later during the gap detection pass.
-                        // For now, mark with OUTER_FACE.
-                        let (_pi, _) = ring_info[u][ri];
-                        let outer_face = ring_info[u].iter()
-                            .enumerate()
-                            .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
-                            .and_then(|(ri2, _)| ring_face[u][ri2])
-                            .unwrap_or(OUTER_FACE);
-                        hole_edge_face.insert(pack_edge(a, b), outer_face);
-                    }
-                }
-            }
-        }
-
-        eprintln!("[region::new] 2c. hole_edge_face built: {} hole edges in {:.2?}", hole_edge_face.len(), t0.elapsed());
-
-        // 2d. Create half-edge pairs in the DCEL.
-        //     For each undirected edge {a, b}, determine face_left (face of a→b)
-        //     and face_right (face of b→a).
-        //
-        //     Collect all unique undirected edges from the edge tables.
-
-        let mut seen_edges: AHashMap<u64, HalfEdgeId> = AHashMap::new();
-
-        // Process outer ring edges.
-        for (u, unit_rings) in ring_vids.iter().enumerate() {
-            for (ri, vids) in unit_rings.iter().enumerate() {
-                let n = vids.len();
-                if n < 2 { continue; }
-                let is_outer = ring_face[u][ri].is_some();
-                let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
-                for i in 0..edge_count {
-                    let a = vids[i];
-                    let b = vids[(i + 1) % n];
-                    if a == b { continue; }
-
-                    // Skip if this directed edge or its reverse already created.
-                    if seen_edges.contains_key(&pack_edge(a, b)) || seen_edges.contains_key(&pack_edge(b, a)) {
-                        continue;
-                    }
-
-                    // Determine faces on each side.
-                    let face_ab = if is_outer {
-                        ring_face[u][ri].unwrap()
-                    } else {
-                        *hole_edge_face.get(&pack_edge(a, b)).unwrap_or(&OUTER_FACE)
-                    };
-
-                    let face_ba = edge_face.get(&pack_edge(b, a)).copied()
-                        .or_else(|| hole_edge_face.get(&pack_edge(b, a)).copied())
-                        .unwrap_or(OUTER_FACE);
-
-                    let (he_ab, _he_ba) = dcel.add_edge(a, b, face_ab, face_ba);
-                    seen_edges.insert(pack_edge(a, b), he_ab);
-                }
-            }
-        }
-
-        // Process hole ring edges that haven't been created yet.
-        for unit_rings in &ring_vids {
-            for vids in unit_rings {
-                let n = vids.len();
-                if n < 2 { continue; }
-                let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
-                for i in 0..edge_count {
-                    let a = vids[i];
-                    let b = vids[(i + 1) % n];
-                    if a == b { continue; }
-                    if seen_edges.contains_key(&pack_edge(a, b)) || seen_edges.contains_key(&pack_edge(b, a)) {
-                        continue;
-                    }
-
-                    let face_ab = hole_edge_face.get(&pack_edge(a, b)).copied()
-                        .unwrap_or(OUTER_FACE);
-                    let face_ba = edge_face.get(&pack_edge(b, a)).copied()
-                        .or_else(|| hole_edge_face.get(&pack_edge(b, a)).copied())
-                        .unwrap_or(OUTER_FACE);
-
-                    let (he_ab, _he_ba) = dcel.add_edge(a, b, face_ab, face_ba);
-                    seen_edges.insert(pack_edge(a, b), he_ab);
-                }
-            }
-        }
-
-        // Free edge lookup maps — no longer needed now that all half-edges are in the DCEL.
-        drop(edge_face);
-        drop(hole_edge_face);
-
-        eprintln!("[region::new] 2d. half-edges created: {} half-edges in {:.2?}", dcel.num_half_edges(), t0.elapsed());
-
-        // 2e-pre: Assign face.half_edge for every outer-ring face to an outer-ring
-        // half-edge BEFORE step 2f has a chance to assign a hole-ring half-edge.
-        //
-        // For a donut unit (outer ring + hole ring), the face has TWO disconnected
-        // cycles: the CCW outer ring and the CW hole ring.  step 2f picks the first
-        // half-edge by index, which can be a hole-ring edge if the enclave unit
-        // (whose outer ring creates the hole twins) has a lower unit index.  This
-        // pass guarantees face.half_edge always points into the outer ring cycle.
-        for (u, unit_rings) in ring_vids.iter().enumerate() {
-            for (ri, vids) in unit_rings.iter().enumerate() {
-                let face = match ring_face[u][ri] {
-                    Some(f) => f,
-                    None => continue, // hole rings have no dedicated face
-                };
-                if dcel.face(face).half_edge.is_some() { continue; }
-                let n = vids.len();
-                if n < 2 { continue; }
-                let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
-                'find_outer: for i in 0..edge_count {
-                    let a = vids[i];
-                    let b = vids[(i + 1) % n];
-                    if a == b { continue; }
-                    // Try the forward direction (outer ring processed this unit first).
-                    if let Some(&he) = seen_edges.get(&pack_edge(a, b))
-                        && dcel.half_edge(he).face == face {
-                            dcel.face_mut(face).half_edge = Some(he);
-                            break 'find_outer;
-                        }
-                    // Try the reverse direction (another unit processed b→a first;
-                    // the twin a→b belongs to this face).
-                    if let Some(&he_ba) = seen_edges.get(&pack_edge(b, a)) {
-                        let he = he_ba.twin();
-                        if dcel.half_edge(he).face == face {
-                            dcel.face_mut(face).half_edge = Some(he);
-                            break 'find_outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Free ring topology data — no longer needed after face pointers are anchored.
-        drop(seen_edges);
-        drop(ring_vids);
-        drop(ring_face);
-        drop(ring_info);
-
-        eprintln!("[region::new] 2e-pre. outer face.half_edge assigned in {:.2?}", t0.elapsed());
-
-        // 2e. Set next/prev links using the CCW rotation rule at each vertex.
-        //
-        //     At vertex v with outgoing half-edges h_0, h_1, ..., h_{k-1}
-        //     sorted CCW by angle to destination:
-        //       h_i.twin.next = h_{(i-1) mod k}
-        //       h_{(i-1) mod k}.prev = h_i.twin
-        //
-        //     This correctly links all face cycles (both interior and outer).
-
-        // Collect outgoing half-edges per vertex using a flat CSR layout.
-        // This avoids one heap allocation per vertex (num_vertices small Vecs).
-        let num_vertices = dcel.num_vertices();
-        let num_half_edges = dcel.num_half_edges();
-
-        // Pass 1: count outgoing half-edges per vertex → degree array → offsets.
-        let offsets: Vec<u32> = {
-            let mut degree = vec![0u32; num_vertices];
-            for e in 0..num_half_edges {
-                let origin = dcel.half_edge(HalfEdgeId(e as u32)).origin.0 as usize;
-                degree[origin] += 1;
-            }
-            let mut off = vec![0u32; num_vertices + 1];
-            for i in 0..num_vertices {
-                off[i + 1] = off[i] + degree[i];
-            }
-            off
-            // degree dropped here
-        };
-
-        // Pass 2: fill flat outgoing array.
-        let mut outgoing_data: Vec<HalfEdgeId> = vec![HalfEdgeId(0); num_half_edges];
-        {
-            let mut cursor = offsets[..num_vertices].to_vec(); // working write positions
-            for e in 0..num_half_edges {
-                let origin = dcel.half_edge(HalfEdgeId(e as u32)).origin.0 as usize;
-                outgoing_data[cursor[origin] as usize] = HalfEdgeId(e as u32);
-                cursor[origin] += 1;
-            }
-            // cursor dropped here
-        }
-
-        // Sort outgoing half-edges CCW at each vertex by angle to destination.
-        for v in 0..num_vertices {
-            let start = offsets[v] as usize;
-            let end   = offsets[v + 1] as usize;
-            if end <= start + 1 { continue; }
-            let vc = dcel.vertex(VertexId(v as u32)).coords;
-            outgoing_data[start..end].sort_by(|&a, &b| {
-                let da = dcel.vertex(dcel.dest(a)).coords;
-                let db = dcel.vertex(dcel.dest(b)).coords;
-                let angle_a = (da.y - vc.y).atan2(da.x - vc.x);
-                let angle_b = (db.y - vc.y).atan2(db.x - vc.x);
-                angle_a.partial_cmp(&angle_b).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-
-        eprintln!("[region::new] 2e. outgoing sorted in {:.2?}", t0.elapsed());
-
-        // Apply rotation rule: h_i.twin.next = h_{(i-1) mod k}
-        for v in 0..num_vertices {
-            let start = offsets[v] as usize;
-            let k     = (offsets[v + 1] - offsets[v]) as usize;
-            if k == 0 { continue; }
-            for i in 0..k {
-                let h_i    = outgoing_data[start + i];
-                let h_prev = outgoing_data[start + (i + k - 1) % k];
-                dcel.set_next(h_i.twin(), h_prev);
-            }
-        }
-
-        // Free outgoing structures — next/prev links are now in the DCEL.
-        drop(outgoing_data);
-        drop(offsets);
-
-        eprintln!("[region::new] 2e. rotation rule applied in {:.2?}", t0.elapsed());
-
-        // 2f. Set face.half_edge pointers.
-        for e in 0..num_half_edges {
-            let face = dcel.half_edge(HalfEdgeId(e as u32)).face;
-            if dcel.face(face).half_edge.is_none() {
-                dcel.face_mut(face).half_edge = Some(HalfEdgeId(e as u32));
-            }
-        }
-
-        eprintln!("[region::new] 2f. face.half_edge pointers set in {:.2?}", t0.elapsed());
-
-        // -----------------------------------------------------------------
-        // 3. Gap detection: identify bounded OUTER_FACE cycles as gap faces
-        // -----------------------------------------------------------------
-        //     After linking, OUTER_FACE may contain multiple cycles:
-        //     - The outer boundary of the region (unbounded, largest)
-        //     - Interior gap cycles (bounded holes with no assigned unit)
-        //
-        //     Find all cycles on OUTER_FACE. The one with the most negative
-        //     signed area (largest CW polygon) is the true outer boundary;
-        //     all others become new EXTERIOR-assigned faces.
-
-        let mut visited_he = vec![false; num_half_edges];
-        let mut outer_cycles: Vec<(Vec<HalfEdgeId>, f64)> = Vec::new();
-
-        for e in 0..num_half_edges {
-            if visited_he[e] { continue; }
-            if dcel.half_edge(HalfEdgeId(e as u32)).face != OUTER_FACE { continue; }
-
-            let mut cycle = Vec::new();
-            let mut cur = HalfEdgeId(e as u32);
-            loop {
-                if visited_he[cur.0 as usize] { break; }
-                visited_he[cur.0 as usize] = true;
-                cycle.push(cur);
-                cur = dcel.half_edge(cur).next;
-                if cur == HalfEdgeId(e as u32) { break; }
-            }
-
-            // Compute signed area of this cycle (shoelace, in degrees²).
-            let signed_area = signed_area_deg(&dcel, &cycle);
-            outer_cycles.push((cycle, signed_area));
-        }
-
-        if outer_cycles.len() > 1 {
-            // Find the true outer boundary (most negative signed area = largest CW cycle).
-            let outer_idx = outer_cycles.iter()
-                .enumerate()
-                .min_by(|(_, (_, a)), (_, (_, b))| a.partial_cmp(b).unwrap())
-                .map(|(i, _)| i)
-                .unwrap();
-
-            // All other cycles are gap faces.
-            for (idx, (cycle, _)) in outer_cycles.iter().enumerate() {
-                if idx == outer_idx { continue; }
-                let gap_face = dcel.add_face();
-                face_to_unit_vec.push(UnitId::EXTERIOR);
-                for &he in cycle {
-                    dcel.half_edge_mut(he).face = gap_face;
-                }
-                dcel.face_mut(gap_face).half_edge = Some(cycle[0]);
-            }
-        }
-
-        drop(visited_he);
-        drop(outer_cycles);
-        let face_to_unit = face_to_unit_vec;
-
-        eprintln!("[region::new] 3. gap detection done: {} faces, {} gap faces in {:.2?}",
-            dcel.num_faces(),
-            dcel.num_faces().saturating_sub(num_units + 1),
-            t0.elapsed());
+        let (dcel, face_to_unit) = build_dcel(rings, ring_info, num_units, t0);
 
         // -----------------------------------------------------------------
         // 4. Cache pre-computation
         // -----------------------------------------------------------------
+        let CacheData {
+            edge_length, area, perimeter, exterior_boundary_length,
+            centroid, bounds, bounds_all, is_exterior,
+        } = compute_caches(&dcel, &face_to_unit, num_units, t0);
 
-        // 4a. Edge lengths (one per undirected edge, indexed by he.0 / 2).
-        let num_edges = num_half_edges / 2;
-        let edge_length: Vec<f64> = (0..num_edges)
-            .map(|e| {
-                let half_edge = dcel.half_edge(HalfEdgeId((e * 2) as u32));
-                let c0 = dcel.vertex(half_edge.origin).coords;
-                let c1 = dcel.vertex(dcel.dest(HalfEdgeId((e * 2) as u32))).coords;
-                edge_length_m(c0, c1)
-            })
-            .collect();
-
-        eprintln!("[region::new] 4a. edge lengths computed in {:.2?}", t0.elapsed());
-
-        // 4b. Per-unit area (shoelace with cos(φ_mid) correction).
-        let mut area: Vec<f64> = vec![0.0; num_units];
-        for (f, &unit) in face_to_unit.iter().enumerate() {
-            if unit == UnitId::EXTERIOR { continue; }
-            let start = match dcel.face(FaceId(f as u32)).half_edge {
-                Some(he) => he,
-                None => continue,
-            };
-            let mut face_area = 0.0;
-            for he in dcel.face_cycle(start) {
-                let c0 = dcel.vertex(dcel.half_edge(he).origin).coords;
-                let c1 = dcel.vertex(dcel.dest(he)).coords;
-                let phi_mid = (c0.y + c1.y) / 2.0 * std::f64::consts::PI / 180.0;
-                let shoelace = c0.x * c1.y - c1.x * c0.y;
-                face_area += shoelace * phi_mid.cos();
-            }
-            face_area = face_area.abs() / 2.0 * M_PER_DEG * M_PER_DEG;
-            area[unit.0 as usize] += face_area;
-        }
-
-        eprintln!("[region::new] 4b. area computed in {:.2?}", t0.elapsed());
-
-        // 4c. Per-unit perimeter (sum of edge lengths for all boundary edges).
-        let mut perimeter = vec![0.0f64; num_units];
-        for f in 0..dcel.num_faces() {
-            let unit = face_to_unit[f];
-            if unit == UnitId::EXTERIOR { continue; }
-            let start = match dcel.face(FaceId(f as u32)).half_edge {
-                Some(he) => he,
-                None => continue,
-            };
-            for he in dcel.face_cycle(start) {
-                let twin_face = dcel.half_edge(he.twin()).face;
-                let twin_unit = face_to_unit[twin_face.0 as usize];
-                if twin_unit != unit {
-                    perimeter[unit.0 as usize] += edge_length[he.0 as usize / 2];
-                }
-            }
-        }
-
-        eprintln!("[region::new] 4c. perimeter computed in {:.2?}", t0.elapsed());
-
-        // 4d. Exterior boundary length.
-        let mut exterior_boundary_length = vec![0.0f64; num_units];
-        for e in 0..num_half_edges {
-            let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-            let unit = face_to_unit[half_edge.face.0 as usize];
-            if unit == UnitId::EXTERIOR { continue; }
-            if face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize] == UnitId::EXTERIOR {
-                exterior_boundary_length[unit.0 as usize] += edge_length[e / 2];
-            }
-        }
-
-        eprintln!("[region::new] 4d. exterior_boundary_length computed in {:.2?}", t0.elapsed());
-
-        // 4e. Centroid (vertex-average of each unit's half-edge origins).
-        let mut sum_x: Vec<f64> = vec![0.0; num_units];
-        let mut sum_y: Vec<f64> = vec![0.0; num_units];
-        let mut count: Vec<u32> = vec![0; num_units];
-        for e in 0..num_half_edges {
-            let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-            let unit = face_to_unit[half_edge.face.0 as usize];
-            if unit == UnitId::EXTERIOR { continue; }
-            let c = dcel.vertex(half_edge.origin).coords;
-            let u = unit.0 as usize;
-            sum_x[u] += c.x;
-            sum_y[u] += c.y;
-            count[u] += 1;
-        }
-        let centroid: Vec<Coord<f64>> = (0..num_units).map(|u| {
-            if count[u] == 0 {
-                Coord { x: 0.0, y: 0.0 }
-            } else {
-                Coord {
-                    x: sum_x[u] / count[u] as f64,
-                    y: sum_y[u] / count[u] as f64,
-                }
-            }
-        }).collect();
-        drop(sum_x); drop(sum_y); drop(count);
-
-        eprintln!("[region::new] 4e. centroid computed in {:.2?}", t0.elapsed());
-
-        // 4f. Bounds (axis-aligned bounding box per unit).
-        let inf = f64::INFINITY;
-        let mut min_x = vec![ inf; num_units];
-        let mut min_y = vec![ inf; num_units];
-        let mut max_x = vec![-inf; num_units];
-        let mut max_y = vec![-inf; num_units];
-        for e in 0..num_half_edges {
-            let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-            let unit = face_to_unit[half_edge.face.0 as usize];
-            if unit == UnitId::EXTERIOR { continue; }
-            let c = dcel.vertex(half_edge.origin).coords;
-            let u = unit.0 as usize;
-            if c.x < min_x[u] { min_x[u] = c.x; }
-            if c.y < min_y[u] { min_y[u] = c.y; }
-            if c.x > max_x[u] { max_x[u] = c.x; }
-            if c.y > max_y[u] { max_y[u] = c.y; }
-        }
-        let bounds: Vec<Rect<f64>> = (0..num_units).map(|u| {
-            let (mnx, mny) = if min_x[u].is_finite() { (min_x[u], min_y[u]) } else { (0.0, 0.0) };
-            let (mxx, mxy) = if max_x[u].is_finite() { (max_x[u], max_y[u]) } else { (0.0, 0.0) };
-            Rect::new(Coord { x: mnx, y: mny }, Coord { x: mxx, y: mxy })
-        }).collect();
-        drop(min_x); drop(min_y); drop(max_x); drop(max_y);
-
-        eprintln!("[region::new] 4f. bounds computed in {:.2?}", t0.elapsed());
-
-        // 4g. Region-wide bounding box.
-        let bounds_all = {
-            let mut rect = bounds[0];
-            for b in &bounds[1..] {
-                rect = Rect::new(
-                    Coord {
-                        x: rect.min().x.min(b.min().x),
-                        y: rect.min().y.min(b.min().y),
-                    },
-                    Coord {
-                        x: rect.max().x.max(b.max().x),
-                        y: rect.max().y.max(b.max().y),
-                    },
-                );
-            }
-            rect
-        };
-
-        eprintln!("[region::new] 4g. bounds_all computed in {:.2?}", t0.elapsed());
-
-        // 4h. is_exterior flag.
-        let mut is_exterior = vec![false; num_units];
-        for e in 0..num_half_edges {
-            let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-            let unit = face_to_unit[half_edge.face.0 as usize];
-            if unit == UnitId::EXTERIOR { continue; }
-            if face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize] == UnitId::EXTERIOR {
-                is_exterior[unit.0 as usize] = true;
-            }
-        }
-
-        eprintln!("[region::new] 4h. is_exterior computed in {:.2?}", t0.elapsed());
 
         // -----------------------------------------------------------------
         // 5. Build adjacency matrices
@@ -761,6 +133,511 @@ impl Region {
 }
 
 // ---------------------------------------------------------------------------
+// Region construction helpers
+// ---------------------------------------------------------------------------
+
+/// Per-ring metadata: `(polygon_index, is_outer)`.
+type RingInfo = Vec<(usize, bool)>;
+
+fn extract_rings(
+    polys: Vec<MultiPolygon<f64>>,
+    snap_tol: Option<f64>,
+    num_units: usize,
+    t0: std::time::Instant,
+) -> Result<(Vec<Vec<Ring>>, Vec<RingInfo>), RegionError> {
+    // rings[unit] = vec of rings (outer + holes), each ring = vec of coords.
+    // Convention: outer rings are CCW, hole rings are CW (GeoJSON / geo crate).
+    let mut rings: Vec<Vec<Ring>> = Vec::with_capacity(num_units);
+    // ring_info[unit][ring_idx] = (polygon_idx, is_outer)
+    let mut ring_info: Vec<RingInfo> = Vec::with_capacity(num_units);
+
+    for mp in &polys {
+        let mut unit_rings = Vec::new();
+        let mut unit_info = Vec::new();
+        for (pi, poly) in mp.0.iter().enumerate() {
+            let outer = poly.exterior().0.clone();
+            if outer.len() < 4 {
+                return Err(RegionError::InvalidGeometry(
+                    "polygon ring must have at least 4 coordinates (including closing)".into(),
+                ));
+            }
+            unit_rings.push(outer);
+            unit_info.push((pi, true));
+            for hole in poly.interiors() {
+                unit_rings.push(hole.0.clone());
+                unit_info.push((pi, false));
+            }
+        }
+        rings.push(unit_rings);
+        ring_info.push(unit_info);
+    }
+
+    // Free input geometries — rings now owns all coordinate data.
+    drop(polys);
+
+    // Normalize winding order: exterior rings → CCW (positive signed area),
+    // hole rings → CW (negative signed area).  TIGER/Shapefile data and some
+    // GeoParquet exports use ESRI convention (CW exterior), which inverts the
+    // face assignments and produces incorrect face cycles.
+    for (u, unit_rings) in rings.iter_mut().enumerate() {
+        for (ri, ring) in unit_rings.iter_mut().enumerate() {
+            let sa = ring_signed_area(ring);
+            let is_outer = ring_info[u][ri].1;
+            let needs_reverse = if is_outer { sa < 0.0 } else { sa > 0.0 };
+            if needs_reverse {
+                ring.reverse();
+            }
+        }
+    }
+
+    eprintln!("[region::new] 1. rings extracted in {:.2?}", t0.elapsed());
+
+    if let Some(tol) = snap_tol {
+        snap_vertices(&mut rings, tol);
+        eprintln!("[region::new] 1. snap done in {:.2?}", t0.elapsed());
+    }
+
+    Ok((rings, ring_info))
+}
+
+fn build_dcel(
+    rings: Vec<Vec<Ring>>,
+    ring_info: Vec<RingInfo>,
+    num_units: usize,
+    t0: std::time::Instant,
+) -> (Dcel<Coord<f64>>, Vec<UnitId>) {
+    let mut dcel: Dcel<Coord<f64>> = Dcel::new();
+
+    // 2a. Deduplicate vertices by exact coordinate (post-snap).
+    // ring_vids[unit][ring_idx][pos] = VertexId
+    let mut ring_vids: Vec<Vec<Vec<VertexId>>> = Vec::with_capacity(num_units);
+    {
+        let mut vertex_map: AHashMap<CoordKey, VertexId> = AHashMap::new();
+        for unit_rings in &rings {
+            let mut unit_vids = Vec::with_capacity(unit_rings.len());
+            for ring in unit_rings {
+                let mut vids = Vec::with_capacity(ring.len());
+                for &c in ring {
+                    let key = CoordKey::from(c);
+                    let vid = *vertex_map
+                        .entry(key)
+                        .or_insert_with(|| dcel.add_vertex(c));
+                    vids.push(vid);
+                }
+                unit_vids.push(vids);
+            }
+            ring_vids.push(unit_vids);
+        }
+        // vertex_map dropped here — no longer needed after deduplication.
+    }
+    // rings dropped here — coordinates now live in the DCEL vertices.
+    drop(rings);
+
+    // 2b. Create faces: one DCEL face per outer ring of each unit.
+    //     Hole rings share the face of whatever unit fills them (determined
+    //     by edge matching), or become EXTERIOR gap faces.
+    //
+    //     face_owner[face_id] = UnitId that owns this face.
+    //     For outer rings: the unit itself.
+    //     For faces created later (gaps): EXTERIOR.
+    //
+    //     Strategy: only create faces for outer rings now.  Hole ring edges
+    //     will match against some other unit's outer ring edges (or become
+    //     OUTER_FACE edges if unmatched).
+
+    eprintln!("[region::new] 2a. vertices deduped: {} verts in {:.2?}", dcel.num_vertices(), t0.elapsed());
+
+    // ring_face[unit][ring_idx] = FaceId (only meaningful for outer rings)
+    let mut ring_face: Vec<Vec<Option<FaceId>>> = Vec::with_capacity(num_units);
+    let mut face_to_unit_vec: Vec<UnitId> = vec![UnitId::EXTERIOR]; // slot 0 = OUTER_FACE
+
+    for (u, infos) in ring_info.iter().enumerate() {
+        let mut unit_faces = Vec::with_capacity(infos.len());
+        for &(_pi, is_outer) in infos {
+            if is_outer {
+                let fid = dcel.add_face();
+                face_to_unit_vec.push(UnitId(u as u32));
+                unit_faces.push(Some(fid));
+            } else {
+                unit_faces.push(None); // hole — face determined later
+            }
+        }
+        ring_face.push(unit_faces);
+    }
+
+    // 2c. Collect all directed edges from all rings.
+    //     For each directed edge (a→b) from an outer ring, we know its face.
+    //     For each directed edge from a hole ring, the face to its left is
+    //     the interior of the hole — we'll figure that out via matching.
+    //
+    //     edge_table: (a, b) → (unit, ring_idx, face_on_left)
+    //     We only insert edges from outer rings.  When matching, the twin's
+    //     face comes from the table; unmatched outer edges get OUTER_FACE.
+
+    eprintln!("[region::new] 2b. faces created: {} faces in {:.2?}", dcel.num_faces(), t0.elapsed());
+
+    // Map packed_edge(origin, dest) → FaceId for outer ring edges.
+    let mut edge_face: AHashMap<u64, FaceId> = AHashMap::new();
+
+    for (u, unit_rings) in ring_vids.iter().enumerate() {
+        for (ri, vids) in unit_rings.iter().enumerate() {
+            let face = match ring_face[u][ri] {
+                Some(f) => f,
+                None => continue, // skip hole rings in this pass
+            };
+            let n = vids.len();
+            if n < 2 { continue; }
+            // Skip the closing coordinate (last == first).
+            let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
+            for i in 0..edge_count {
+                let a = vids[i];
+                let b = vids[(i + 1) % n];
+                if a == b { continue; } // degenerate edge
+                edge_face.insert(pack_edge(a, b), face);
+            }
+        }
+    }
+
+    eprintln!("[region::new] 2c. edge_face map built: {} outer edges in {:.2?}", edge_face.len(), t0.elapsed());
+
+    // Also collect hole ring edges — their face is the interior of the hole.
+    // If another unit's outer ring provides the reverse edge, the hole
+    // interior is that unit's face.  Otherwise, it's a gap (EXTERIOR).
+    // We need these to find the correct face for the twin side of
+    // boundary edges that border a hole.
+    //
+    // hole_edges: (a, b) → (unit_idx, ring_idx)  [for reference only]
+    let mut hole_edge_face: AHashMap<u64, FaceId> = AHashMap::new();
+
+    for (u, unit_rings) in ring_vids.iter().enumerate() {
+        for (ri, vids) in unit_rings.iter().enumerate() {
+            if ring_face[u][ri].is_some() { continue; } // skip outer rings
+            let n = vids.len();
+            if n < 2 { continue; }
+            let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
+            for i in 0..edge_count {
+                let a = vids[i];
+                let b = vids[(i + 1) % n];
+                if a == b { continue; }
+                // The face to the left of a CW hole ring edge is the hole
+                // interior.  Check if the reverse edge exists as an outer
+                // ring edge — if so, the hole interior is that outer ring's
+                // unit.
+                if edge_face.contains_key(&pack_edge(b, a)) {
+                    // The reverse of this hole edge is an outer ring edge
+                    // with face `face`.  The hole interior edge (a→b) has
+                    // the hole's face on its left.  But we also know this
+                    // edge's reverse (b→a) has `face` on its left.  So
+                    // a→b is the twin of b→a: they share an edge.  We'll
+                    // handle this naturally during edge creation.
+                    //
+                    // But for the hole's own directed edge (a→b), the face
+                    // to its left is the enclosing unit's face (the unit
+                    // that has the hole).  We find that from ring_face:
+                    // The hole belongs to the same polygon as the outer ring
+                    // of unit u.  The enclosing face is the outer ring's face.
+                    let (_pi, _) = ring_info[u][ri];
+                    // Find the outer ring face for this polygon of unit u.
+                    let outer_face = ring_info[u].iter()
+                        .enumerate()
+                        .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
+                        .and_then(|(ri2, _)| ring_face[u][ri2])
+                        .unwrap_or(OUTER_FACE);
+                    hole_edge_face.insert(pack_edge(a, b), outer_face);
+                } else {
+                    // No matching outer ring edge — this hole borders EXTERIOR.
+                    // The face to the left of the hole edge is some gap face.
+                    // We'll create gap faces later during the gap detection pass.
+                    // For now, mark with OUTER_FACE.
+                    let (_pi, _) = ring_info[u][ri];
+                    let outer_face = ring_info[u].iter()
+                        .enumerate()
+                        .find(|&(_, &(pi2, is_outer))| pi2 == _pi && is_outer)
+                        .and_then(|(ri2, _)| ring_face[u][ri2])
+                        .unwrap_or(OUTER_FACE);
+                    hole_edge_face.insert(pack_edge(a, b), outer_face);
+                }
+            }
+        }
+    }
+
+    eprintln!("[region::new] 2c. hole_edge_face built: {} hole edges in {:.2?}", hole_edge_face.len(), t0.elapsed());
+
+    // 2d. Create half-edge pairs in the DCEL.
+    //     For each undirected edge {a, b}, determine face_left (face of a→b)
+    //     and face_right (face of b→a).
+    //
+    //     Collect all unique undirected edges from the edge tables.
+
+    let mut seen_edges: AHashMap<u64, HalfEdgeId> = AHashMap::new();
+
+    // Process outer ring edges.
+    for (u, unit_rings) in ring_vids.iter().enumerate() {
+        for (ri, vids) in unit_rings.iter().enumerate() {
+            let n = vids.len();
+            if n < 2 { continue; }
+            let is_outer = ring_face[u][ri].is_some();
+            let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
+            for i in 0..edge_count {
+                let a = vids[i];
+                let b = vids[(i + 1) % n];
+                if a == b { continue; }
+
+                // Skip if this directed edge or its reverse already created.
+                if seen_edges.contains_key(&pack_edge(a, b)) || seen_edges.contains_key(&pack_edge(b, a)) {
+                    continue;
+                }
+
+                // Determine faces on each side.
+                let face_ab = if is_outer {
+                    ring_face[u][ri].unwrap()
+                } else {
+                    *hole_edge_face.get(&pack_edge(a, b)).unwrap_or(&OUTER_FACE)
+                };
+
+                let face_ba = edge_face.get(&pack_edge(b, a)).copied()
+                    .or_else(|| hole_edge_face.get(&pack_edge(b, a)).copied())
+                    .unwrap_or(OUTER_FACE);
+
+                let (he_ab, _he_ba) = dcel.add_edge(a, b, face_ab, face_ba);
+                seen_edges.insert(pack_edge(a, b), he_ab);
+            }
+        }
+    }
+
+    // Process hole ring edges that haven't been created yet.
+    for unit_rings in &ring_vids {
+        for vids in unit_rings {
+            let n = vids.len();
+            if n < 2 { continue; }
+            let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
+            for i in 0..edge_count {
+                let a = vids[i];
+                let b = vids[(i + 1) % n];
+                if a == b { continue; }
+                if seen_edges.contains_key(&pack_edge(a, b)) || seen_edges.contains_key(&pack_edge(b, a)) {
+                    continue;
+                }
+
+                let face_ab = hole_edge_face.get(&pack_edge(a, b)).copied()
+                    .unwrap_or(OUTER_FACE);
+                let face_ba = edge_face.get(&pack_edge(b, a)).copied()
+                    .or_else(|| hole_edge_face.get(&pack_edge(b, a)).copied())
+                    .unwrap_or(OUTER_FACE);
+
+                let (he_ab, _he_ba) = dcel.add_edge(a, b, face_ab, face_ba);
+                seen_edges.insert(pack_edge(a, b), he_ab);
+            }
+        }
+    }
+
+    // Free edge lookup maps — no longer needed now that all half-edges are in the DCEL.
+    drop(edge_face);
+    drop(hole_edge_face);
+
+    eprintln!("[region::new] 2d. half-edges created: {} half-edges in {:.2?}", dcel.num_half_edges(), t0.elapsed());
+
+    // 2e-pre: Assign face.half_edge for every outer-ring face to an outer-ring
+    // half-edge BEFORE step 2f has a chance to assign a hole-ring half-edge.
+    //
+    // For a donut unit (outer ring + hole ring), the face has TWO disconnected
+    // cycles: the CCW outer ring and the CW hole ring.  step 2f picks the first
+    // half-edge by index, which can be a hole-ring edge if the enclave unit
+    // (whose outer ring creates the hole twins) has a lower unit index.  This
+    // pass guarantees face.half_edge always points into the outer ring cycle.
+    for (u, unit_rings) in ring_vids.iter().enumerate() {
+        for (ri, vids) in unit_rings.iter().enumerate() {
+            let face = match ring_face[u][ri] {
+                Some(f) => f,
+                None => continue, // hole rings have no dedicated face
+            };
+            if dcel.face(face).half_edge.is_some() { continue; }
+            let n = vids.len();
+            if n < 2 { continue; }
+            let edge_count = if vids[0] == vids[n - 1] { n - 1 } else { n };
+            'find_outer: for i in 0..edge_count {
+                let a = vids[i];
+                let b = vids[(i + 1) % n];
+                if a == b { continue; }
+                // Try the forward direction (outer ring processed this unit first).
+                if let Some(&he) = seen_edges.get(&pack_edge(a, b))
+                    && dcel.half_edge(he).face == face {
+                        dcel.face_mut(face).half_edge = Some(he);
+                        break 'find_outer;
+                    }
+                // Try the reverse direction (another unit processed b→a first;
+                // the twin a→b belongs to this face).
+                if let Some(&he_ba) = seen_edges.get(&pack_edge(b, a)) {
+                    let he = he_ba.twin();
+                    if dcel.half_edge(he).face == face {
+                        dcel.face_mut(face).half_edge = Some(he);
+                        break 'find_outer;
+                    }
+                }
+            }
+        }
+    }
+
+    // Free ring topology data — no longer needed after face pointers are anchored.
+    drop(seen_edges);
+    drop(ring_vids);
+    drop(ring_face);
+    drop(ring_info);
+
+    eprintln!("[region::new] 2e-pre. outer face.half_edge assigned in {:.2?}", t0.elapsed());
+
+    // 2e. Set next/prev links using the CCW rotation rule at each vertex.
+    //
+    //     At vertex v with outgoing half-edges h_0, h_1, ..., h_{k-1}
+    //     sorted CCW by angle to destination:
+    //       h_i.twin.next = h_{(i-1) mod k}
+    //       h_{(i-1) mod k}.prev = h_i.twin
+    //
+    //     This correctly links all face cycles (both interior and outer).
+
+    // Collect outgoing half-edges per vertex using a flat CSR layout.
+    // This avoids one heap allocation per vertex (num_vertices small Vecs).
+    let num_vertices = dcel.num_vertices();
+    let num_half_edges = dcel.num_half_edges();
+
+    // Pass 1: count outgoing half-edges per vertex → degree array → offsets.
+    let offsets: Vec<u32> = {
+        let mut degree = vec![0u32; num_vertices];
+        for e in 0..num_half_edges {
+            let origin = dcel.half_edge(HalfEdgeId(e as u32)).origin.0 as usize;
+            degree[origin] += 1;
+        }
+        let mut off = vec![0u32; num_vertices + 1];
+        for i in 0..num_vertices {
+            off[i + 1] = off[i] + degree[i];
+        }
+        off
+        // degree dropped here
+    };
+
+    // Pass 2: fill flat outgoing array.
+    let mut outgoing_data: Vec<HalfEdgeId> = vec![HalfEdgeId(0); num_half_edges];
+    {
+        let mut cursor = offsets[..num_vertices].to_vec(); // working write positions
+        for e in 0..num_half_edges {
+            let origin = dcel.half_edge(HalfEdgeId(e as u32)).origin.0 as usize;
+            outgoing_data[cursor[origin] as usize] = HalfEdgeId(e as u32);
+            cursor[origin] += 1;
+        }
+        // cursor dropped here
+    }
+
+    // Sort outgoing half-edges CCW at each vertex by angle to destination.
+    for v in 0..num_vertices {
+        let start = offsets[v] as usize;
+        let end   = offsets[v + 1] as usize;
+        if end <= start + 1 { continue; }
+        let vc = dcel.vertex(VertexId(v as u32)).coords;
+        outgoing_data[start..end].sort_by(|&a, &b| {
+            let da = dcel.vertex(dcel.dest(a)).coords;
+            let db = dcel.vertex(dcel.dest(b)).coords;
+            let angle_a = (da.y - vc.y).atan2(da.x - vc.x);
+            let angle_b = (db.y - vc.y).atan2(db.x - vc.x);
+            angle_a.partial_cmp(&angle_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    eprintln!("[region::new] 2e. outgoing sorted in {:.2?}", t0.elapsed());
+
+    // Apply rotation rule: h_i.twin.next = h_{(i-1) mod k}
+    for v in 0..num_vertices {
+        let start = offsets[v] as usize;
+        let k     = (offsets[v + 1] - offsets[v]) as usize;
+        if k == 0 { continue; }
+        for i in 0..k {
+            let h_i    = outgoing_data[start + i];
+            let h_prev = outgoing_data[start + (i + k - 1) % k];
+            dcel.set_next(h_i.twin(), h_prev);
+        }
+    }
+
+    // Free outgoing structures — next/prev links are now in the DCEL.
+    drop(outgoing_data);
+    drop(offsets);
+
+    eprintln!("[region::new] 2e. rotation rule applied in {:.2?}", t0.elapsed());
+
+    // 2f. Set face.half_edge pointers.
+    for e in 0..num_half_edges {
+        let face = dcel.half_edge(HalfEdgeId(e as u32)).face;
+        if dcel.face(face).half_edge.is_none() {
+            dcel.face_mut(face).half_edge = Some(HalfEdgeId(e as u32));
+        }
+    }
+
+    eprintln!("[region::new] 2f. face.half_edge pointers set in {:.2?}", t0.elapsed());
+
+    // -----------------------------------------------------------------
+    // 3. Gap detection: identify bounded OUTER_FACE cycles as gap faces
+    // -----------------------------------------------------------------
+    //     After linking, OUTER_FACE may contain multiple cycles:
+    //     - The outer boundary of the region (unbounded, largest)
+    //     - Interior gap cycles (bounded holes with no assigned unit)
+    //
+    //     Find all cycles on OUTER_FACE. The one with the most negative
+    //     signed area (largest CW polygon) is the true outer boundary;
+    //     all others become new EXTERIOR-assigned faces.
+
+    let mut visited_he = vec![false; num_half_edges];
+    let mut outer_cycles: Vec<(Vec<HalfEdgeId>, f64)> = Vec::new();
+
+    for e in 0..num_half_edges {
+        if visited_he[e] { continue; }
+        if dcel.half_edge(HalfEdgeId(e as u32)).face != OUTER_FACE { continue; }
+
+        let mut cycle = Vec::new();
+        let mut cur = HalfEdgeId(e as u32);
+        loop {
+            if visited_he[cur.0 as usize] { break; }
+            visited_he[cur.0 as usize] = true;
+            cycle.push(cur);
+            cur = dcel.half_edge(cur).next;
+            if cur == HalfEdgeId(e as u32) { break; }
+        }
+
+        // Compute signed area of this cycle (shoelace, in degrees²).
+        let signed_area = signed_area_deg(&dcel, &cycle);
+        outer_cycles.push((cycle, signed_area));
+    }
+
+    if outer_cycles.len() > 1 {
+        // Find the true outer boundary (most negative signed area = largest CW cycle).
+        let outer_idx = outer_cycles.iter()
+            .enumerate()
+            .min_by(|(_, (_, a)), (_, (_, b))| a.partial_cmp(b).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+
+        // All other cycles are gap faces.
+        for (idx, (cycle, _)) in outer_cycles.iter().enumerate() {
+            if idx == outer_idx { continue; }
+            let gap_face = dcel.add_face();
+            face_to_unit_vec.push(UnitId::EXTERIOR);
+            for &he in cycle {
+                dcel.half_edge_mut(he).face = gap_face;
+            }
+            dcel.face_mut(gap_face).half_edge = Some(cycle[0]);
+        }
+    }
+
+    drop(visited_he);
+    drop(outer_cycles);
+    let face_to_unit = face_to_unit_vec;
+
+    eprintln!("[region::new] 3. gap detection done: {} faces, {} gap faces in {:.2?}",
+        dcel.num_faces(),
+        dcel.num_faces().saturating_sub(num_units + 1),
+        t0.elapsed());
+
+    (dcel, face_to_unit)
+}
+
+// ---------------------------------------------------------------------------
 // Coordinate key for exact deduplication (post-snap)
 // ---------------------------------------------------------------------------
 
@@ -780,21 +657,6 @@ impl From<Coord<f64>> for CoordKey {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Metric helpers
-// ---------------------------------------------------------------------------
-
-/// Edge length in metres using the per-edge cos(φ_mid) correction.
-///
-/// Formula: `√(Δlat² + (Δlon·cos(φ_mid))²) × 111_320`
-#[inline]
-fn edge_length_m(c0: Coord<f64>, c1: Coord<f64>) -> f64 {
-    let dlat = c1.y - c0.y;
-    let dlon = c1.x - c0.x;
-    let phi_mid = (c0.y + c1.y) / 2.0 * std::f64::consts::PI / 180.0;
-    let dx = dlon * phi_mid.cos();
-    (dlat * dlat + dx * dx).sqrt() * M_PER_DEG
-}
 
 /// Pack two `VertexId`s into a single `u64` for use as a HashMap key.
 /// Requires vertex count < 2^32 (guaranteed for any realistic dataset).
@@ -805,7 +667,7 @@ fn pack_edge(a: VertexId, b: VertexId) -> u64 {
 
 /// Signed area of a coordinate ring (shoelace, degrees²).
 /// Positive = CCW, Negative = CW.
-fn ring_signed_area(coords: &[Coord<f64>]) -> f64 {
+fn ring_signed_area(coords: &Ring) -> f64 {
     let n = coords.len();
     if n < 3 { return 0.0; }
     let edge_count = if coords[0] == coords[n - 1] { n - 1 } else { n };
@@ -849,13 +711,13 @@ pub(crate) fn reconstruct_geometries(
 
     // Trace every half-edge cycle and group by face.
     let mut visited = vec![false; num_half_edges];
-    let mut face_cycles: Vec<Vec<(Vec<Coord<f64>>, f64)>> = vec![Vec::new(); num_faces];
+    let mut face_cycles: Vec<Vec<(Ring, f64)>> = vec![Vec::new(); num_faces];
 
     for e in 0..num_half_edges {
         if visited[e] { continue; }
         let face_id = dcel.half_edge(HalfEdgeId(e as u32)).face.0 as usize;
 
-        let mut coords: Vec<Coord<f64>> = Vec::new();
+        let mut coords: Ring = Vec::new();
         let mut signed_area = 0.0;
         let mut cur = HalfEdgeId(e as u32);
         loop {

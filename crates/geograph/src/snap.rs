@@ -131,8 +131,8 @@ pub(crate) fn snap_vertices(rings: &mut [Vec<Vec<Coord<f64>>>], tolerance: f64) 
     };
 
     let mut vertex_grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    for vi in 0..n {
-        vertex_grid.entry(cell_of(coords[vi])).or_default().push(vi);
+    for (vi, &coord) in coords.iter().enumerate() {
+        vertex_grid.entry(cell_of(coord)).or_default().push(vi);
     }
 
     // 4c. Edge adjacency lookups: vertex → outgoing / incoming edge indices.

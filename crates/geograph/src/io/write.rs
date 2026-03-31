@@ -18,43 +18,43 @@ fn encode_coord(v: f64) -> i32 { (v * COORD_SCALE).round() as i32 }
 ///
 /// See §8 (Serialisation) of DESIGN.md for the full file layout.
 pub fn write(region: &Region, writer: &mut impl Write) -> Result<(), IoError> {
-    let nv  = region.dcel.num_vertices()   as u32;
-    let nhe = region.dcel.num_half_edges() as u32;
-    let nf  = region.dcel.num_faces()      as u32;
+    let num_vertices  = region.dcel.num_vertices()   as u32;
+    let num_half_edges = region.dcel.num_half_edges() as u32;
+    let num_faces  = region.dcel.num_faces()      as u32;
     let nu  = region.num_units()           as u32;
 
     // ---- Header ----
     writer.write_all(MAGIC)?;
     writer.write_all(&[VERSION, 0, 0, 0])?; // version + 3 reserved bytes
-    write_u32(writer, nv)?;
-    write_u32(writer, nhe)?;
-    write_u32(writer, nf)?;
+    write_u32(writer, num_vertices)?;
+    write_u32(writer, num_half_edges)?;
+    write_u32(writer, num_faces)?;
     write_u32(writer, nu)?;
 
     // ---- Vertices ----
-    for v in 0..nv as usize {
-        let c = region.dcel.vertex(VertexId(v)).coords;
+    for v in 0..num_vertices as usize {
+        let c = region.dcel.vertex(VertexId(v as u32)).coords;
         write_i32(writer, encode_coord(c.x))?;
         write_i32(writer, encode_coord(c.y))?;
     }
 
     // ---- HalfEdges (no twin field — derived as id ^ 1) ----
-    for h in 0..nhe as usize {
-        let he = region.dcel.half_edge(HalfEdgeId(h));
-        write_u32(writer, he.origin.0 as u32)?;
-        write_u32(writer, he.next.0   as u32)?;
-        write_u32(writer, he.prev.0   as u32)?;
-        write_u32(writer, he.face.0   as u32)?;
+    for e in 0..num_half_edges as usize {
+        let half_edge = region.dcel.half_edge(HalfEdgeId(e as u32));
+        write_u32(writer, half_edge.origin.0)?;
+        write_u32(writer, half_edge.next.0)?;
+        write_u32(writer, half_edge.prev.0)?;
+        write_u32(writer, half_edge.face.0)?;
     }
 
     // ---- Faces ----
-    for f in 0..nf as usize {
-        let he_opt = region.dcel.face(FaceId(f)).half_edge;
-        write_u32(writer, he_opt.map_or(NONE_U32, |h| h.0 as u32))?;
+    for f in 0..num_faces as usize {
+        let he_opt = region.dcel.face(FaceId(f as u32)).half_edge;
+        write_u32(writer, he_opt.map_or(NONE_U32, |h| h.0))?;
     }
 
     // ---- FaceToUnit ----
-    for f in 0..nf as usize {
+    for f in 0..num_faces as usize {
         let uid = region.face_to_unit[f];
         use crate::unit::UnitId;
         write_u32(writer, if uid == UnitId::EXTERIOR { NONE_U32 } else { uid.0 })?;

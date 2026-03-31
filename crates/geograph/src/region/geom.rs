@@ -57,7 +57,7 @@ impl Region {
         let mut lines = Vec::new();
         for f in 0..self.dcel.num_faces() {
             if self.face_to_unit[f] != unit { continue; }
-            let start = match self.dcel.face(FaceId(f)).half_edge {
+            let start = match self.dcel.face(FaceId(f as u32)).half_edge {
                 Some(he) => he,
                 None => continue,
             };
@@ -97,14 +97,14 @@ impl Region {
         for f in 0..self.dcel.num_faces() {
             let unit = self.face_to_unit[f];
             if !set.contains(&unit) { continue; }
-            let start = match self.dcel.face(FaceId(f)).half_edge {
+            let start = match self.dcel.face(FaceId(f as u32)).half_edge {
                 Some(he) => he,
                 None => continue,
             };
             for he in self.dcel.face_cycle(start) {
-                let twin_face = self.dcel.half_edge(self.dcel.half_edge(he).twin).face;
-                if !set.contains(&self.face_to_unit[twin_face.0]) {
-                    total += self.edge_length[he.0 / 2];
+                let twin_face = self.dcel.half_edge(he.twin()).face;
+                if !set.contains(&self.face_to_unit[twin_face.0 as usize]) {
+                    total += self.edge_length[he.0 as usize / 2];
                 }
             }
         }
@@ -172,42 +172,39 @@ impl Region {
     /// Outer boundaries are CCW; hole boundaries are CW.
     pub fn boundary_of(&self, units: impl IntoIterator<Item = UnitId>) -> MultiLineString<f64> {
         let set: HashSet<UnitId> = units.into_iter().collect();
-        let nhe = self.dcel.num_half_edges();
+        let num_half_edges = self.dcel.num_half_edges();
 
         // Mark boundary half-edges: face in set, twin face outside set.
-        let mut is_boundary = vec![false; nhe];
-        for h in 0..nhe {
-            let he = self.dcel.half_edge(HalfEdgeId(h));
-            let unit = self.face_to_unit[he.face.0];
-            if !set.contains(&unit) { continue; }
-            let twin_face = self.dcel.half_edge(he.twin).face;
-            if !set.contains(&self.face_to_unit[twin_face.0]) {
-                is_boundary[h] = true;
-            }
-        }
+        let is_boundary: Vec<bool> = (0..num_half_edges).map(|e| {
+            let half_edge = self.dcel.half_edge(HalfEdgeId(e as u32));
+            let unit = self.face_to_unit[half_edge.face.0 as usize];
+            if !set.contains(&unit) { return false; }
+            let twin_face = self.dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face;
+            !set.contains(&self.face_to_unit[twin_face.0 as usize])
+        }).collect();
 
         // Trace boundary cycles.
-        let mut visited = vec![false; nhe];
+        let mut visited = vec![false; num_half_edges];
         let mut lines = Vec::new();
 
-        for h in 0..nhe {
-            if !is_boundary[h] || visited[h] { continue; }
+        for e in 0..num_half_edges {
+            if !is_boundary[e] || visited[e] { continue; }
 
             let mut coords = Vec::new();
-            let mut cur = HalfEdgeId(h);
+            let mut cur = HalfEdgeId(e as u32);
             loop {
-                visited[cur.0] = true;
+                visited[cur.0 as usize] = true;
                 coords.push(self.dcel.vertex(self.dcel.half_edge(cur).origin).coords);
 
                 // Find next boundary edge: from dest(cur), scan CCW around the
                 // vertex until we find the next half-edge that is also boundary.
                 let mut next = self.dcel.half_edge(cur).next;
-                while !is_boundary[next.0] {
-                    next = self.dcel.half_edge(self.dcel.half_edge(next).twin).next;
+                while !is_boundary[next.0 as usize] {
+                    next = self.dcel.half_edge(next.twin()).next;
                 }
                 cur = next;
 
-                if cur == HalfEdgeId(h) { break; }
+                if cur == HalfEdgeId(e as u32) { break; }
             }
 
             // Close the ring.
@@ -236,32 +233,29 @@ impl Region {
     /// area), and matches holes to their enclosing outer ring.
     pub fn union_of(&self, units: impl IntoIterator<Item = UnitId>) -> MultiPolygon<f64> {
         let set: HashSet<UnitId> = units.into_iter().collect();
-        let nhe = self.dcel.num_half_edges();
+        let num_half_edges = self.dcel.num_half_edges();
 
         // Mark boundary half-edges: face in set, twin face outside set.
-        let mut is_boundary = vec![false; nhe];
-        for h in 0..nhe {
-            let he = self.dcel.half_edge(HalfEdgeId(h));
-            let unit = self.face_to_unit[he.face.0];
-            if !set.contains(&unit) { continue; }
-            let twin_face = self.dcel.half_edge(he.twin).face;
-            if !set.contains(&self.face_to_unit[twin_face.0]) {
-                is_boundary[h] = true;
-            }
-        }
+        let is_boundary: Vec<bool> = (0..num_half_edges).map(|e| {
+            let half_edge = self.dcel.half_edge(HalfEdgeId(e as u32));
+            let unit = self.face_to_unit[half_edge.face.0 as usize];
+            if !set.contains(&unit) { return false; }
+            let twin_face = self.dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face;
+            !set.contains(&self.face_to_unit[twin_face.0 as usize])
+        }).collect();
 
         // Trace boundary cycles and compute signed area for each.
-        let mut visited = vec![false; nhe];
+        let mut visited = vec![false; num_half_edges];
         let mut cycles: Vec<(Vec<Coord<f64>>, f64)> = Vec::new();
 
-        for h in 0..nhe {
-            if !is_boundary[h] || visited[h] { continue; }
+        for e in 0..num_half_edges {
+            if !is_boundary[e] || visited[e] { continue; }
 
             let mut coords = Vec::new();
             let mut signed_area = 0.0;
-            let mut cur = HalfEdgeId(h);
+            let mut cur = HalfEdgeId(e as u32);
             loop {
-                visited[cur.0] = true;
+                visited[cur.0 as usize] = true;
                 let c0 = self.dcel.vertex(self.dcel.half_edge(cur).origin).coords;
                 coords.push(c0);
 
@@ -271,12 +265,12 @@ impl Region {
 
                 // Find next boundary edge.
                 let mut next = self.dcel.half_edge(cur).next;
-                while !is_boundary[next.0] {
-                    next = self.dcel.half_edge(self.dcel.half_edge(next).twin).next;
+                while !is_boundary[next.0 as usize] {
+                    next = self.dcel.half_edge(next.twin()).next;
                 }
                 cur = next;
 
-                if cur == HalfEdgeId(h) { break; }
+                if cur == HalfEdgeId(e as u32) { break; }
             }
             signed_area /= 2.0;
 
@@ -288,6 +282,7 @@ impl Region {
         }
 
         // Partition into outer rings (positive area = CCW) and holes (negative = CW).
+        #[allow(clippy::type_complexity)]
         let mut outers: Vec<(Vec<Coord<f64>>, Vec<LineString<f64>>)> = Vec::new();
         let mut holes: Vec<Vec<Coord<f64>>> = Vec::new();
 
@@ -336,7 +331,7 @@ impl Region {
         is_in_district: impl Fn(UnitId) -> bool,
     ) -> MultiPolygon<f64> {
         // Collect boundary half-edges by walking only frontier unit faces.
-        let mut boundary: Vec<usize> = Vec::new();
+        let mut boundary: Vec<u32> = Vec::new();
         for unit in frontier_units {
             for &face_id in &self.unit_to_faces[unit.0 as usize] {
                 // Primary cycle (outer ring).
@@ -344,34 +339,34 @@ impl Region {
                     Some(he) => he,
                     None => continue,
                 };
-                let mut h = start;
+                let mut cur = start;
                 loop {
-                    let he = self.dcel.half_edge(h);
-                    let twin_unit = self.face_to_unit[self.dcel.half_edge(he.twin).face.0];
+                    let half_edge = self.dcel.half_edge(cur);
+                    let twin_unit = self.face_to_unit[self.dcel.half_edge(cur.twin()).face.0 as usize];
                     if twin_unit == UnitId::EXTERIOR || !is_in_district(twin_unit) {
-                        boundary.push(h.0);
+                        boundary.push(cur.0);
                     }
-                    h = he.next;
-                    if h == start { break; }
+                    cur = half_edge.next;
+                    if cur == start { break; }
                 }
                 // Inner ring cycles (holes in donut-shaped units).
-                for &inner_start in &self.face_inner_cycles[face_id.0] {
-                    let mut h = inner_start;
+                for &inner_start in &self.face_inner_cycles[face_id.0 as usize] {
+                    let mut cur = inner_start;
                     loop {
-                        let he = self.dcel.half_edge(h);
-                        let twin_unit = self.face_to_unit[self.dcel.half_edge(he.twin).face.0];
+                        let half_edge = self.dcel.half_edge(cur);
+                        let twin_unit = self.face_to_unit[self.dcel.half_edge(cur.twin()).face.0 as usize];
                         if twin_unit == UnitId::EXTERIOR || !is_in_district(twin_unit) {
-                            boundary.push(h.0);
+                            boundary.push(cur.0);
                         }
-                        h = he.next;
-                        if h == inner_start { break; }
+                        cur = half_edge.next;
+                        if cur == inner_start { break; }
                     }
                 }
             }
         }
 
-        let boundary_set: HashSet<usize> = boundary.iter().copied().collect();
-        let mut visited: HashSet<usize> = HashSet::new();
+        let boundary_set: HashSet<u32> = boundary.iter().copied().collect();
+        let mut visited: HashSet<u32> = HashSet::new();
         let mut cycles: Vec<(Vec<Coord<f64>>, f64)> = Vec::new();
 
         for &start_h in &boundary {
@@ -390,7 +385,7 @@ impl Region {
 
                 let mut next = self.dcel.half_edge(cur).next;
                 while !boundary_set.contains(&next.0) {
-                    next = self.dcel.half_edge(self.dcel.half_edge(next).twin).next;
+                    next = self.dcel.half_edge(next.twin()).next;
                 }
                 cur = next;
 
@@ -402,6 +397,7 @@ impl Region {
         }
 
         // Same hole-matching logic as union_of.
+        #[allow(clippy::type_complexity)]
         let mut outers: Vec<(Vec<Coord<f64>>, Vec<LineString<f64>>)> = Vec::new();
         let mut holes: Vec<Vec<Coord<f64>>> = Vec::new();
         for (coords, area) in cycles {
@@ -433,6 +429,16 @@ impl Region {
         self.sum_edge_lengths_between(a, b)
     }
 
+    /// Shared boundary length in metres at a CSR index in the rook adjacency matrix.
+    ///
+    /// This is an O(1) alternative to [`Region::shared_boundary_length`] for callers
+    /// that are already iterating the rook adjacency matrix and have a CSR index at hand.
+    /// Both return the same value.
+    #[inline]
+    pub fn shared_boundary_length_at(&self, csr_idx: usize) -> f64 {
+        self.adjacent.weight_at(csr_idx)
+    }
+
     /// Total length of the boundary between `units` and `other`, in m.
     pub fn boundary_length_with(
         &self,
@@ -446,14 +452,14 @@ impl Region {
         for f in 0..self.dcel.num_faces() {
             let unit = self.face_to_unit[f];
             if !unit_set.contains(&unit) { continue; }
-            let start = match self.dcel.face(FaceId(f)).half_edge {
+            let start = match self.dcel.face(FaceId(f as u32)).half_edge {
                 Some(he) => he,
                 None => continue,
             };
             for he in self.dcel.face_cycle(start) {
-                let twin_face = self.dcel.half_edge(self.dcel.half_edge(he).twin).face;
-                if other_set.contains(&self.face_to_unit[twin_face.0]) {
-                    total += self.edge_length[he.0 / 2];
+                let twin_face = self.dcel.half_edge(he.twin()).face;
+                if other_set.contains(&self.face_to_unit[twin_face.0 as usize]) {
+                    total += self.edge_length[he.0 as usize / 2];
                 }
             }
         }
@@ -471,12 +477,8 @@ impl Region {
     /// point-in-polygon tests on candidates.
     pub fn unit_at(&self, point: Coord<f64>) -> Option<UnitId> {
         let geo_point = geo::Point::from(point);
-        for uid in self.rtree.query_point([point.x, point.y]) {
-            if self.geometries[uid.0 as usize].contains(&geo_point) {
-                return Some(uid);
-            }
-        }
-        None
+        self.rtree.query_point([point.x, point.y])
+            .find(|&uid| self.geometries[uid.0 as usize].contains(&geo_point))
     }
 
     /// Return all `UnitId`s whose bounding box intersects `envelope`.
@@ -501,14 +503,14 @@ impl Region {
         let mut total = 0.0;
         for f in 0..self.dcel.num_faces() {
             if self.face_to_unit[f] != unit_a { continue; }
-            let start = match self.dcel.face(FaceId(f)).half_edge {
+            let start = match self.dcel.face(FaceId(f as u32)).half_edge {
                 Some(he) => he,
                 None => continue,
             };
             for he in self.dcel.face_cycle(start) {
-                let twin_face = self.dcel.half_edge(self.dcel.half_edge(he).twin).face;
-                if self.face_to_unit[twin_face.0] == unit_b {
-                    total += self.edge_length[he.0 / 2];
+                let twin_face = self.dcel.half_edge(he.twin()).face;
+                if self.face_to_unit[twin_face.0 as usize] == unit_b {
+                    total += self.edge_length[he.0 as usize / 2];
                 }
             }
         }

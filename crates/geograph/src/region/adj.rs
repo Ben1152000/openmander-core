@@ -53,12 +53,12 @@ pub(crate) fn build_adjacent(
 ) -> AdjacencyMatrix {
     let mut triples = Vec::<(UnitId, UnitId, f64)>::new();
 
-    for h in 0..dcel.num_half_edges() {
-        let he = dcel.half_edge(HalfEdgeId(h));
-        let unit  = face_to_unit[he.face.0];
-        let other = face_to_unit[dcel.half_edge(he.twin).face.0];
+    for e in 0..dcel.num_half_edges() {
+        let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
+        let unit  = face_to_unit[half_edge.face.0 as usize];
+        let other = face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize];
         if unit != other {
-            triples.push((unit, other, edge_length[h / 2]));
+            triples.push((unit, other, edge_length[e / 2]));
         }
     }
 
@@ -70,20 +70,17 @@ pub(crate) fn build_touching(dcel: &Dcel<Coord<f64>>, face_to_unit: &[UnitId], n
     let mut pairs = Vec::<(UnitId, UnitId)>::new();
 
     for v in 0..dcel.num_vertices() {
-        let start = match dcel.vertex(VertexId(v)).half_edge {
-            Some(he) => he,
+        let start = match dcel.vertex(VertexId(v as u32)).half_edge {
+            Some(edge) => edge,
             None => continue,
         };
-        let units: Vec<UnitId> = dcel
-            .vertex_star(start)
-            .map(|he| face_to_unit[dcel.half_edge(he).face.0])
+        let units: Vec<UnitId> = dcel.vertex_star(start)
+            .map(|he| face_to_unit[dcel.half_edge(he).face.0 as usize])
             .collect();
 
         for &a in &units {
             for &b in &units {
-                if a != b {
-                    pairs.push((a, b));
-                }
+                if a != b { pairs.push((a, b)) }
             }
         }
     }
@@ -196,14 +193,14 @@ mod tests {
     }
 
     #[test]
-    fn edge_weight_at_matches_shared_boundary_length() {
+    fn shared_boundary_length_at_matches_shared_boundary_length() {
         let r = make_two_unit_region();
         // For each pair of Rook-adjacent units, the CSR weight should
         // equal the shared_boundary_length computed from the DCEL.
         for uid in r.unit_ids() {
             let offset = r.adjacency().offset(uid);
             for (i, &nb) in r.neighbors(uid).iter().enumerate() {
-                let csr_weight = r.edge_weight_at(offset + i);
+                let csr_weight = r.shared_boundary_length_at(offset + i);
                 let dcel_weight = r.shared_boundary_length(uid, nb);
                 assert!(
                     (csr_weight - dcel_weight).abs() < 1e-9,

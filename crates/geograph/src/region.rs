@@ -3,6 +3,7 @@ pub(crate) mod build;
 mod geom;
 mod simplify;
 mod topo;
+mod validate;
 
 pub use build::RegionError;
 
@@ -17,11 +18,32 @@ use crate::unit::UnitId;
 // Region
 // ---------------------------------------------------------------------------
 
-/// A planar map: a complete subdivision of a geographic region into
-/// non-overlapping `Unit`s.
+/// A planar subdivision of a geographic region into non-overlapping [`UnitId`]-indexed units.
 ///
-/// See DESIGN.md for a full description of the internal representation and
-/// the public API contract.
+/// Encodes a complete planar map — typically census blocks, precincts, or similar units —
+/// and provides efficient access to geometry, adjacency, and topology.
+///
+/// Build from a [`Vec`] of [`geo::MultiPolygon`] geometries (one per unit) using
+/// [`Region::new`]. Each geometry becomes a unit assigned a [`UnitId`] in input order.
+/// [`UnitId::EXTERIOR`] represents the area outside the region and interior gaps.
+///
+/// # Capabilities
+///
+/// - **Geometry** — area, perimeter, centroid, bounds, boundary, convex hull, union,
+///   compactness. See [`Region::area`], [`Region::boundary_of`], [`Region::union_of`],
+///   [`Region::compactness_of`].
+/// - **Adjacency** — rook (shared edge) and queen (shared point) neighbors, shared boundary
+///   lengths. See [`Region::neighbors`], [`Region::touching`],
+///   [`Region::shared_boundary_length`].
+/// - **Topology** — contiguity, connected components, holes, enclaves.
+///   See [`Region::is_contiguous`], [`Region::connected_components`],
+///   [`Region::has_holes`], [`Region::enclaves`].
+/// - **Spatial queries** — point lookup and envelope queries via R-tree.
+///   See [`Region::unit_at`], [`Region::units_in_envelope`].
+/// - **Simplification** — topology-preserving Douglas–Peucker with shared boundaries
+///   simplified identically to avoid gaps. See [`Region::simplified_geometries`].
+///
+/// Serialise and deserialise with [`crate::io::write`] and [`crate::io::read`].
 #[derive(Clone)]
 pub struct Region {
     /// The half-edge data structure encoding the full planar embedding.
@@ -75,13 +97,11 @@ pub struct Region {
     /// Indexed by `UnitId.0`; most units have exactly one face.
     pub(crate) unit_to_faces: Vec<Vec<FaceId>>,
 
-    /// Starting half-edges for non-primary face cycles, indexed by `FaceId.0`.
+    /// Starting half-edges for inner boundary cycles of each face, indexed by `FaceId.0`.
     ///
-    /// Most faces have a single boundary cycle (reachable from `face.half_edge`),
-    /// so most entries are empty.  Donut-shaped units have one face with two
-    /// disconnected boundary cycles: the outer ring (primary, pointed to by
-    /// `face.half_edge`) and the inner ring (hole).  The inner-ring starting
-    /// half-edge is stored here so that `union_of_frontier` can traverse it.
+    /// Populated only for faces containing enclaves — one entry per enclave pocket,
+    /// pointing to the start of its inner ring cycle, which is otherwise unreachable
+    /// via `face.half_edge`.
     pub(crate) face_inner_cycles: Vec<Vec<HalfEdgeId>>,
 }
 
@@ -90,99 +110,30 @@ impl Region {
     // Unit access
     // -----------------------------------------------------------------------
 
-    /// Number of units (excluding `UnitId::EXTERIOR`).
+    /// Returns the number of units in the region, excluding [`UnitId::EXTERIOR`].
     #[inline]
     pub fn num_units(&self) -> usize { self.geometries.len() }
 
-    /// Iterate over all valid `UnitId`s (excluding `UnitId::EXTERIOR`).
+    /// Returns an iterator over all [`UnitId`]s in the region, excluding [`UnitId::EXTERIOR`].
+    ///
+    /// IDs are yielded in input order: `UnitId(0)`, `UnitId(1)`, …, `UnitId(n-1)`.
     #[inline]
     pub fn unit_ids(&self) -> impl Iterator<Item = UnitId> + '_ {
         (0..self.num_units()).map(|i| UnitId(i as u32))
     }
 
-    /// The original `MultiPolygon` geometry for `unit`.
+    /// Returns the [`MultiPolygon`] geometry for `unit`.
+    ///
+    /// The geometry is reconstructed from the internal DCEL during construction, so
+    /// hole rings for donut-shaped units (e.g. a block surrounding an enclave) are
+    /// correctly included even if the original input polygon did not encode them.
+    ///
+    /// <div class="warning">Panics if <code>unit</code> is <a href="UnitId::EXTERIOR"><code>UnitId::EXTERIOR</code></a> or out of range.</div>
     #[inline]
     pub fn geometry(&self, unit: UnitId) -> &MultiPolygon<f64> {
         &self.geometries[unit.0 as usize]
     }
 
-    /// Edge weight (shared boundary length in m) at a CSR edge index in the
-    /// Rook adjacency matrix.
-    ///
-    /// Returns `0.0` if the adjacency matrix has no weights.
-    #[inline]
-    pub fn edge_weight_at(&self, csr_idx: usize) -> f64 {
-        self.adjacent.weight_at(csr_idx)
-    }
-
-    // -----------------------------------------------------------------------
-    // Validation
-    // -----------------------------------------------------------------------
-
-    /// Check structural invariants of the `Region`.
-    ///
-    /// This is called automatically under `debug_assertions` at the end of
-    /// `Region::new()`.  It can also be called explicitly after
-    /// deserialisation (`io::read`) to verify data integrity.
-    ///
-    /// Checks:
-    /// - Every half-edge's twin-of-twin is itself.
-    /// - Every half-edge's `next.prev` and `prev.next` are itself.
-    /// - Every bounded face has at least one half-edge.
-    /// - Every unit has non-negative area.
-    pub fn validate(&self) -> Result<(), RegionError> {
-        use crate::dcel::HalfEdgeId;
-
-        let nhe = self.dcel.num_half_edges();
-
-        // Twin consistency: twin(twin(h)) == h
-        for h in 0..nhe {
-            let twin = self.dcel.half_edge(HalfEdgeId(h)).twin;
-            let twin_twin = self.dcel.half_edge(twin).twin;
-            if twin_twin != HalfEdgeId(h) {
-                return Err(RegionError::ValidationError(
-                    format!("half-edge {h}: twin(twin) = {} != {h}", twin_twin.0),
-                ));
-            }
-        }
-
-        // Next/prev consistency: next(h).prev == h and prev(h).next == h
-        for h in 0..nhe {
-            let he = self.dcel.half_edge(HalfEdgeId(h));
-            let next_prev = self.dcel.half_edge(he.next).prev;
-            if next_prev != HalfEdgeId(h) {
-                return Err(RegionError::ValidationError(
-                    format!("half-edge {h}: next({}).prev = {} != {h}", he.next.0, next_prev.0),
-                ));
-            }
-            let prev_next = self.dcel.half_edge(he.prev).next;
-            if prev_next != HalfEdgeId(h) {
-                return Err(RegionError::ValidationError(
-                    format!("half-edge {h}: prev({}).next = {} != {h}", he.prev.0, prev_next.0),
-                ));
-            }
-        }
-
-        // Every bounded face (FaceId >= 1) has a half-edge.
-        for f in 1..self.dcel.num_faces() {
-            if self.dcel.face(crate::dcel::FaceId(f)).half_edge.is_none() {
-                return Err(RegionError::ValidationError(
-                    format!("face {f}: bounded face has no half-edge"),
-                ));
-            }
-        }
-
-        // Non-negative areas.
-        for u in 0..self.num_units() {
-            if self.area[u] < 0.0 {
-                return Err(RegionError::ValidationError(
-                    format!("unit {u}: negative area {}", self.area[u]),
-                ));
-            }
-        }
-
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -227,13 +178,13 @@ pub(crate) mod test_helpers {
 
         // HE indices: ab=0, ba=1, be=2, eb=3, ed=4, de=5,
         //             da=6, ad=7, bc=8, cb=9, cf=10, fc=11, fe=12, ef=13
-        let (ab, ba) = dcel.add_edge(a, b, left,      OUTER_FACE);
-        let (be, eb) = dcel.add_edge(b, e, left,      right     );
-        let (ed, de) = dcel.add_edge(e, d, left,      OUTER_FACE);
-        let (da, ad) = dcel.add_edge(d, a, left,      OUTER_FACE);
-        let (bc, cb) = dcel.add_edge(b, c, right,     OUTER_FACE);
-        let (cf, fc) = dcel.add_edge(c, f, right,     OUTER_FACE);
-        let (fe, ef) = dcel.add_edge(f, e, right,     OUTER_FACE);
+        let (ab, ba) = dcel.add_edge(a, b, left, OUTER_FACE);
+        let (be, eb) = dcel.add_edge(b, e, left, right);
+        let (ed, de) = dcel.add_edge(e, d, left, OUTER_FACE);
+        let (da, ad) = dcel.add_edge(d, a, left, OUTER_FACE);
+        let (bc, cb) = dcel.add_edge(b, c, right, OUTER_FACE);
+        let (cf, fc) = dcel.add_edge(c, f, right, OUTER_FACE);
+        let (fe, ef) = dcel.add_edge(f, e, right, OUTER_FACE);
 
         // Left face: A→B→E→D→A
         dcel.set_next(ab, be); dcel.set_next(be, ed);

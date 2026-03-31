@@ -147,8 +147,8 @@ mod tests {
         let r  = make_two_unit_region();
         let r2 = round_trip(&r);
         for v in 0..r.dcel.num_vertices() {
-            let c1 = r .dcel.vertex(VertexId(v)).coords;
-            let c2 = r2.dcel.vertex(VertexId(v)).coords;
+            let c1 = r .dcel.vertex(VertexId(v as u32)).coords;
+            let c2 = r2.dcel.vertex(VertexId(v as u32)).coords;
             assert!((c1.x - c2.x).abs() < 1e-7 && (c1.y - c2.y).abs() < 1e-7,
                 "vertex {v}: ({:.9},{:.9}) → ({:.9},{:.9})", c1.x, c1.y, c2.x, c2.y);
         }

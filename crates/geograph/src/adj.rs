@@ -69,12 +69,11 @@ impl AdjacencyMatrix {
         // Merge duplicates: sum weights for identical (row, col).
         let mut merged: Vec<(UnitId, UnitId, f64)> = Vec::with_capacity(triples.len());
         for (u, v, w) in triples {
-            if let Some(last) = merged.last_mut() {
-                if last.0 == u && last.1 == v {
+            if let Some(last) = merged.last_mut()
+                && last.0 == u && last.1 == v {
                     last.2 += w;
                     continue;
                 }
-            }
             merged.push((u, v, w));
         }
 

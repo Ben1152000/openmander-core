@@ -27,7 +27,7 @@ use std::fmt;
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct VertexId(pub(crate) usize);
+pub(crate) struct VertexId(pub(crate) u32);
 
 impl fmt::Display for VertexId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -36,7 +36,13 @@ impl fmt::Display for VertexId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct HalfEdgeId(pub(crate) usize);
+pub(crate) struct HalfEdgeId(pub(crate) u32);
+
+impl HalfEdgeId {
+    /// The twin of this half-edge: always `id ^ 1` by DCEL construction.
+    #[inline]
+    pub(crate) fn twin(self) -> HalfEdgeId { HalfEdgeId(self.0 ^ 1) }
+}
 
 impl fmt::Display for HalfEdgeId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -45,7 +51,7 @@ impl fmt::Display for HalfEdgeId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct FaceId(pub(crate) usize);
+pub(crate) struct FaceId(pub(crate) u32);
 
 impl fmt::Display for FaceId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -70,12 +76,13 @@ pub(crate) struct Vertex<C> {
 }
 
 /// A directed half-edge.
+///
+/// The twin is always `HalfEdgeId(self_id ^ 1)` by construction and is
+/// computed on-demand via [`HalfEdgeId::twin`] rather than stored here.
 #[derive(Clone, Debug)]
 pub(crate) struct HalfEdge {
     /// Vertex this half-edge leaves from.
     pub(crate) origin: VertexId,
-    /// The other half-edge of the same undirected edge (opposite direction).
-    pub(crate) twin: HalfEdgeId,
     /// Next half-edge around `face` in CCW order.
     pub(crate) next: HalfEdgeId,
     /// Previous half-edge around `face` in CCW order.
@@ -135,13 +142,13 @@ impl<C> Dcel<C> {
     // Accessors
     // -----------------------------------------------------------------------
 
-    #[inline] pub(crate) fn vertex(&self, id: VertexId) -> &Vertex<C> { &self.vertices[id.0] }
+    #[inline] pub(crate) fn vertex(&self, id: VertexId) -> &Vertex<C> { &self.vertices[id.0 as usize] }
 
-    #[inline] pub(crate) fn half_edge(&self, id: HalfEdgeId) -> &HalfEdge { &self.half_edges[id.0] }
-    #[inline] pub(crate) fn half_edge_mut(&mut self, id: HalfEdgeId) -> &mut HalfEdge { &mut self.half_edges[id.0] }
+    #[inline] pub(crate) fn half_edge(&self, id: HalfEdgeId) -> &HalfEdge { &self.half_edges[id.0 as usize] }
+    #[inline] pub(crate) fn half_edge_mut(&mut self, id: HalfEdgeId) -> &mut HalfEdge { &mut self.half_edges[id.0 as usize] }
 
-    #[inline] pub(crate) fn face(&self, id: FaceId) -> &Face { &self.faces[id.0] }
-    #[inline] pub(crate) fn face_mut(&mut self, id: FaceId) -> &mut Face { &mut self.faces[id.0] }
+    #[inline] pub(crate) fn face(&self, id: FaceId) -> &Face { &self.faces[id.0 as usize] }
+    #[inline] pub(crate) fn face_mut(&mut self, id: FaceId) -> &mut Face { &mut self.faces[id.0 as usize] }
 
     // -----------------------------------------------------------------------
     // Builders
@@ -150,7 +157,7 @@ impl<C> Dcel<C> {
     /// Add an isolated vertex with the given coordinates.
     #[inline]
     pub(crate) fn add_vertex(&mut self, coords: C) -> VertexId {
-        let id = VertexId(self.vertices.len());
+        let id = VertexId(self.vertices.len() as u32);
         self.vertices.push(Vertex { coords, half_edge: None });
         id
     }
@@ -158,7 +165,7 @@ impl<C> Dcel<C> {
     /// Add a new bounded face (returns its id).
     #[inline]
     pub(crate) fn add_face(&mut self) -> FaceId {
-        let id = FaceId(self.faces.len());
+        let id = FaceId(self.faces.len() as u32);
         self.faces.push(Face { half_edge: None });
         id
     }
@@ -178,16 +185,17 @@ impl<C> Dcel<C> {
         face_left: FaceId,
         face_right: FaceId,
     ) -> (HalfEdgeId, HalfEdgeId) {
-        let uv = HalfEdgeId(self.half_edges.len());
-        let vu = HalfEdgeId(self.half_edges.len() + 1);
+        let uv = HalfEdgeId(self.half_edges.len() as u32);
+        let vu = HalfEdgeId(self.half_edges.len() as u32 + 1);
 
         // Placeholder next/prev; caller must fix up.
-        self.half_edges.push(HalfEdge { origin: u, twin: vu, next: uv, prev: uv, face: face_left  });
-        self.half_edges.push(HalfEdge { origin: v, twin: uv, next: vu, prev: vu, face: face_right });
+        // Twin is not stored — it is always `id ^ 1` and computed via HalfEdgeId::twin().
+        self.half_edges.push(HalfEdge { origin: u, next: uv, prev: uv, face: face_left  });
+        self.half_edges.push(HalfEdge { origin: v, next: vu, prev: vu, face: face_right });
 
         // Point vertices at these half-edges if they have none yet.
-        if self.vertices[u.0].half_edge.is_none() { self.vertices[u.0].half_edge = Some(uv); }
-        if self.vertices[v.0].half_edge.is_none() { self.vertices[v.0].half_edge = Some(vu); }
+        if self.vertices[u.0 as usize].half_edge.is_none() { self.vertices[u.0 as usize].half_edge = Some(uv); }
+        if self.vertices[v.0 as usize].half_edge.is_none() { self.vertices[v.0 as usize].half_edge = Some(vu); }
 
         (uv, vu)
     }
@@ -195,8 +203,8 @@ impl<C> Dcel<C> {
     /// Set `he.next = next` and `next.prev = he`.
     #[inline]
     pub(crate) fn set_next(&mut self, he: HalfEdgeId, next: HalfEdgeId) {
-        self.half_edges[he.0].next = next;
-        self.half_edges[next.0].prev = he;
+        self.half_edges[he.0 as usize].next = next;
+        self.half_edges[next.0 as usize].prev = he;
     }
 
     // -----------------------------------------------------------------------
@@ -224,7 +232,7 @@ impl<C> Dcel<C> {
     /// The vertex at the head (destination) of a half-edge.
     #[inline]
     pub(crate) fn dest(&self, he: HalfEdgeId) -> VertexId {
-        self.half_edges[self.half_edges[he.0].twin.0].origin
+        self.half_edges[he.twin().0 as usize].origin
     }
 }
 
@@ -247,7 +255,7 @@ impl<'a, C> Iterator for FaceCycle<'a, C> {
     fn next(&mut self) -> Option<HalfEdgeId> {
         if self.done { return None; }
         let he = self.current;
-        self.current = self.dcel.half_edges[he.0].next;
+        self.current = self.dcel.half_edges[he.0 as usize].next;
         if self.current == self.start { self.done = true; }
         Some(he)
     }
@@ -268,8 +276,7 @@ impl<'a, C> Iterator for VertexStar<'a, C> {
     fn next(&mut self) -> Option<HalfEdgeId> {
         if self.done { return None; }
         let he = self.current;
-        let twin = self.dcel.half_edges[he.0].twin;
-        self.current = self.dcel.half_edges[twin.0].next;
+        self.current = self.dcel.half_edges[he.twin().0 as usize].next;
         if self.current == self.start { self.done = true; }
         Some(he)
     }
@@ -624,8 +631,8 @@ mod tests {
         let u = d.add_vertex((0.0, 0.0));
         let v = d.add_vertex((1.0, 0.0));
         let (uv, vu) = d.add_edge(u, v, OUTER_FACE, OUTER_FACE);
-        assert_eq!(d.half_edge(uv).twin, vu);
-        assert_eq!(d.half_edge(vu).twin, uv);
+        assert_eq!(uv.twin(), vu);
+        assert_eq!(vu.twin(), uv);
     }
 
     #[test]

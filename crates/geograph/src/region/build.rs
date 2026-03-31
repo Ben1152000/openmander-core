@@ -32,12 +32,14 @@ impl Region {
     /// topologically clean data such as TIGER/Line GeoParquet (the shared
     /// boundary coordinates are already exactly equal, so snapping is a no-op
     /// and skipping it avoids the O(E) overhead).
-    pub fn new(geometries: Vec<MultiPolygon<f64>>, snap_tol: Option<f64>) -> Result<Self, RegionError> {
-        if geometries.is_empty() {
+    pub fn new(polys: Vec<MultiPolygon<f64>>, snap_tol: Option<f64>) -> Result<Self, RegionError> {
+        if polys.is_empty() {
             return Err(RegionError::InvalidGeometry("no geometries provided".into()));
         }
 
-        let num_units = geometries.len();
+        let num_units = polys.len();
+        let t0 = std::time::Instant::now();
+        eprintln!("[region::new] start: {} units", num_units);
 
         // -----------------------------------------------------------------
         // 1. Extract rings and (optionally) snap vertices
@@ -48,7 +50,7 @@ impl Region {
         // ring_info[unit][ring_idx] = (polygon_idx, is_outer)
         let mut ring_info: Vec<Vec<(usize, bool)>> = Vec::with_capacity(num_units);
 
-        for mp in &geometries {
+        for mp in &polys {
             let mut unit_rings = Vec::new();
             let mut unit_info = Vec::new();
             for (pi, poly) in mp.0.iter().enumerate() {
@@ -69,6 +71,9 @@ impl Region {
             ring_info.push(unit_info);
         }
 
+        // Free input geometries — rings now owns all coordinate data.
+        drop(polys);
+
         // Normalize winding order: exterior rings → CCW (positive signed area),
         // hole rings → CW (negative signed area).  TIGER/Shapefile data and some
         // GeoParquet exports use ESRI convention (CW exterior), which inverts the
@@ -84,8 +89,11 @@ impl Region {
             }
         }
 
+        eprintln!("[region::new] 1. rings extracted in {:.2?}", t0.elapsed());
+
         if let Some(tol) = snap_tol {
             snap_vertices(&mut rings, tol);
+            eprintln!("[region::new] 1. snap done in {:.2?}", t0.elapsed());
         }
 
         // -----------------------------------------------------------------
@@ -94,25 +102,29 @@ impl Region {
         let mut dcel: Dcel<Coord<f64>> = Dcel::new();
 
         // 2a. Deduplicate vertices by exact coordinate (post-snap).
-        let mut vertex_map: AHashMap<CoordKey, VertexId> = AHashMap::new();
         // ring_vids[unit][ring_idx][pos] = VertexId
         let mut ring_vids: Vec<Vec<Vec<VertexId>>> = Vec::with_capacity(num_units);
-
-        for unit_rings in &rings {
-            let mut unit_vids = Vec::with_capacity(unit_rings.len());
-            for ring in unit_rings {
-                let mut vids = Vec::with_capacity(ring.len());
-                for &c in ring {
-                    let key = CoordKey::from(c);
-                    let vid = *vertex_map
-                        .entry(key)
-                        .or_insert_with(|| dcel.add_vertex(c));
-                    vids.push(vid);
+        {
+            let mut vertex_map: AHashMap<CoordKey, VertexId> = AHashMap::new();
+            for unit_rings in &rings {
+                let mut unit_vids = Vec::with_capacity(unit_rings.len());
+                for ring in unit_rings {
+                    let mut vids = Vec::with_capacity(ring.len());
+                    for &c in ring {
+                        let key = CoordKey::from(c);
+                        let vid = *vertex_map
+                            .entry(key)
+                            .or_insert_with(|| dcel.add_vertex(c));
+                        vids.push(vid);
+                    }
+                    unit_vids.push(vids);
                 }
-                unit_vids.push(vids);
+                ring_vids.push(unit_vids);
             }
-            ring_vids.push(unit_vids);
+            // vertex_map dropped here — no longer needed after deduplication.
         }
+        // rings dropped here — coordinates now live in the DCEL vertices.
+        drop(rings);
 
         // 2b. Create faces: one DCEL face per outer ring of each unit.
         //     Hole rings share the face of whatever unit fills them (determined
@@ -125,6 +137,8 @@ impl Region {
         //     Strategy: only create faces for outer rings now.  Hole ring edges
         //     will match against some other unit's outer ring edges (or become
         //     OUTER_FACE edges if unmatched).
+
+        eprintln!("[region::new] 2a. vertices deduped: {} verts in {:.2?}", dcel.num_vertices(), t0.elapsed());
 
         // ring_face[unit][ring_idx] = FaceId (only meaningful for outer rings)
         let mut ring_face: Vec<Vec<Option<FaceId>>> = Vec::with_capacity(num_units);
@@ -153,6 +167,8 @@ impl Region {
         //     We only insert edges from outer rings.  When matching, the twin's
         //     face comes from the table; unmatched outer edges get OUTER_FACE.
 
+        eprintln!("[region::new] 2b. faces created: {} faces in {:.2?}", dcel.num_faces(), t0.elapsed());
+
         // Map packed_edge(origin, dest) → FaceId for outer ring edges.
         let mut edge_face: AHashMap<u64, FaceId> = AHashMap::new();
 
@@ -174,6 +190,8 @@ impl Region {
                 }
             }
         }
+
+        eprintln!("[region::new] 2c. edge_face map built: {} outer edges in {:.2?}", edge_face.len(), t0.elapsed());
 
         // Also collect hole ring edges — their face is the interior of the hole.
         // If another unit's outer ring provides the reverse edge, the hole
@@ -235,6 +253,8 @@ impl Region {
                 }
             }
         }
+
+        eprintln!("[region::new] 2c. hole_edge_face built: {} hole edges in {:.2?}", hole_edge_face.len(), t0.elapsed());
 
         // 2d. Create half-edge pairs in the DCEL.
         //     For each undirected edge {a, b}, determine face_left (face of a→b)
@@ -304,6 +324,12 @@ impl Region {
             }
         }
 
+        // Free edge lookup maps — no longer needed now that all half-edges are in the DCEL.
+        drop(edge_face);
+        drop(hole_edge_face);
+
+        eprintln!("[region::new] 2d. half-edges created: {} half-edges in {:.2?}", dcel.num_half_edges(), t0.elapsed());
+
         // 2e-pre: Assign face.half_edge for every outer-ring face to an outer-ring
         // half-edge BEFORE step 2f has a chance to assign a hole-ring half-edge.
         //
@@ -327,16 +353,15 @@ impl Region {
                     let b = vids[(i + 1) % n];
                     if a == b { continue; }
                     // Try the forward direction (outer ring processed this unit first).
-                    if let Some(&he) = seen_edges.get(&pack_edge(a, b)) {
-                        if dcel.half_edge(he).face == face {
+                    if let Some(&he) = seen_edges.get(&pack_edge(a, b))
+                        && dcel.half_edge(he).face == face {
                             dcel.face_mut(face).half_edge = Some(he);
                             break 'find_outer;
                         }
-                    }
                     // Try the reverse direction (another unit processed b→a first;
                     // the twin a→b belongs to this face).
                     if let Some(&he_ba) = seen_edges.get(&pack_edge(b, a)) {
-                        let he = dcel.half_edge(he_ba).twin;
+                        let he = he_ba.twin();
                         if dcel.half_edge(he).face == face {
                             dcel.face_mut(face).half_edge = Some(he);
                             break 'find_outer;
@@ -345,6 +370,14 @@ impl Region {
                 }
             }
         }
+
+        // Free ring topology data — no longer needed after face pointers are anchored.
+        drop(seen_edges);
+        drop(ring_vids);
+        drop(ring_face);
+        drop(ring_info);
+
+        eprintln!("[region::new] 2e-pre. outer face.half_edge assigned in {:.2?}", t0.elapsed());
 
         // 2e. Set next/prev links using the CCW rotation rule at each vertex.
         //
@@ -355,20 +388,45 @@ impl Region {
         //
         //     This correctly links all face cycles (both interior and outer).
 
-        // Collect outgoing half-edges per vertex.
+        // Collect outgoing half-edges per vertex using a flat CSR layout.
+        // This avoids one heap allocation per vertex (num_vertices small Vecs).
         let num_vertices = dcel.num_vertices();
         let num_half_edges = dcel.num_half_edges();
-        let mut outgoing: Vec<Vec<HalfEdgeId>> = vec![Vec::new(); num_vertices];
 
-        for h in 0..num_half_edges {
-            let origin = dcel.half_edge(HalfEdgeId(h)).origin.0;
-            outgoing[origin].push(HalfEdgeId(h));
+        // Pass 1: count outgoing half-edges per vertex → degree array → offsets.
+        let offsets: Vec<u32> = {
+            let mut degree = vec![0u32; num_vertices];
+            for e in 0..num_half_edges {
+                let origin = dcel.half_edge(HalfEdgeId(e as u32)).origin.0 as usize;
+                degree[origin] += 1;
+            }
+            let mut off = vec![0u32; num_vertices + 1];
+            for i in 0..num_vertices {
+                off[i + 1] = off[i] + degree[i];
+            }
+            off
+            // degree dropped here
+        };
+
+        // Pass 2: fill flat outgoing array.
+        let mut outgoing_data: Vec<HalfEdgeId> = vec![HalfEdgeId(0); num_half_edges];
+        {
+            let mut cursor = offsets[..num_vertices].to_vec(); // working write positions
+            for e in 0..num_half_edges {
+                let origin = dcel.half_edge(HalfEdgeId(e as u32)).origin.0 as usize;
+                outgoing_data[cursor[origin] as usize] = HalfEdgeId(e as u32);
+                cursor[origin] += 1;
+            }
+            // cursor dropped here
         }
 
         // Sort outgoing half-edges CCW at each vertex by angle to destination.
         for v in 0..num_vertices {
-            let vc = dcel.vertex(VertexId(v)).coords;
-            outgoing[v].sort_by(|&a, &b| {
+            let start = offsets[v] as usize;
+            let end   = offsets[v + 1] as usize;
+            if end <= start + 1 { continue; }
+            let vc = dcel.vertex(VertexId(v as u32)).coords;
+            outgoing_data[start..end].sort_by(|&a, &b| {
                 let da = dcel.vertex(dcel.dest(a)).coords;
                 let db = dcel.vertex(dcel.dest(b)).coords;
                 let angle_a = (da.y - vc.y).atan2(da.x - vc.x);
@@ -377,25 +435,35 @@ impl Region {
             });
         }
 
+        eprintln!("[region::new] 2e. outgoing sorted in {:.2?}", t0.elapsed());
+
         // Apply rotation rule: h_i.twin.next = h_{(i-1) mod k}
         for v in 0..num_vertices {
-            let k = outgoing[v].len();
+            let start = offsets[v] as usize;
+            let k     = (offsets[v + 1] - offsets[v]) as usize;
             if k == 0 { continue; }
             for i in 0..k {
-                let h_i = outgoing[v][i];
-                let h_prev = outgoing[v][(i + k - 1) % k];
-                let twin_i = dcel.half_edge(h_i).twin;
-                dcel.set_next(twin_i, h_prev);
+                let h_i    = outgoing_data[start + i];
+                let h_prev = outgoing_data[start + (i + k - 1) % k];
+                dcel.set_next(h_i.twin(), h_prev);
             }
         }
 
+        // Free outgoing structures — next/prev links are now in the DCEL.
+        drop(outgoing_data);
+        drop(offsets);
+
+        eprintln!("[region::new] 2e. rotation rule applied in {:.2?}", t0.elapsed());
+
         // 2f. Set face.half_edge pointers.
-        for h in 0..num_half_edges {
-            let face = dcel.half_edge(HalfEdgeId(h)).face;
+        for e in 0..num_half_edges {
+            let face = dcel.half_edge(HalfEdgeId(e as u32)).face;
             if dcel.face(face).half_edge.is_none() {
-                dcel.face_mut(face).half_edge = Some(HalfEdgeId(h));
+                dcel.face_mut(face).half_edge = Some(HalfEdgeId(e as u32));
             }
         }
+
+        eprintln!("[region::new] 2f. face.half_edge pointers set in {:.2?}", t0.elapsed());
 
         // -----------------------------------------------------------------
         // 3. Gap detection: identify bounded OUTER_FACE cycles as gap faces
@@ -411,18 +479,18 @@ impl Region {
         let mut visited_he = vec![false; num_half_edges];
         let mut outer_cycles: Vec<(Vec<HalfEdgeId>, f64)> = Vec::new();
 
-        for h in 0..num_half_edges {
-            if visited_he[h] { continue; }
-            if dcel.half_edge(HalfEdgeId(h)).face != OUTER_FACE { continue; }
+        for e in 0..num_half_edges {
+            if visited_he[e] { continue; }
+            if dcel.half_edge(HalfEdgeId(e as u32)).face != OUTER_FACE { continue; }
 
             let mut cycle = Vec::new();
-            let mut cur = HalfEdgeId(h);
+            let mut cur = HalfEdgeId(e as u32);
             loop {
-                if visited_he[cur.0] { break; }
-                visited_he[cur.0] = true;
+                if visited_he[cur.0 as usize] { break; }
+                visited_he[cur.0 as usize] = true;
                 cycle.push(cur);
                 cur = dcel.half_edge(cur).next;
-                if cur == HalfEdgeId(h) { break; }
+                if cur == HalfEdgeId(e as u32) { break; }
             }
 
             // Compute signed area of this cycle (shoelace, in degrees²).
@@ -450,28 +518,37 @@ impl Region {
             }
         }
 
+        drop(visited_he);
+        drop(outer_cycles);
         let face_to_unit = face_to_unit_vec;
+
+        eprintln!("[region::new] 3. gap detection done: {} faces, {} gap faces in {:.2?}",
+            dcel.num_faces(),
+            dcel.num_faces().saturating_sub(num_units + 1),
+            t0.elapsed());
 
         // -----------------------------------------------------------------
         // 4. Cache pre-computation
         // -----------------------------------------------------------------
 
         // 4a. Edge lengths (one per undirected edge, indexed by he.0 / 2).
-        let n_edges = num_half_edges / 2;
-        let mut edge_length = vec![0.0f64; n_edges];
-        for e in 0..n_edges {
-            let he = dcel.half_edge(HalfEdgeId(e * 2));
-            let c0 = dcel.vertex(he.origin).coords;
-            let c1 = dcel.vertex(dcel.dest(HalfEdgeId(e * 2))).coords;
-            edge_length[e] = edge_length_m(c0, c1);
-        }
+        let num_edges = num_half_edges / 2;
+        let edge_length: Vec<f64> = (0..num_edges)
+            .map(|e| {
+                let half_edge = dcel.half_edge(HalfEdgeId((e * 2) as u32));
+                let c0 = dcel.vertex(half_edge.origin).coords;
+                let c1 = dcel.vertex(dcel.dest(HalfEdgeId((e * 2) as u32))).coords;
+                edge_length_m(c0, c1)
+            })
+            .collect();
+
+        eprintln!("[region::new] 4a. edge lengths computed in {:.2?}", t0.elapsed());
 
         // 4b. Per-unit area (shoelace with cos(φ_mid) correction).
-        let mut area = vec![0.0f64; num_units];
-        for f in 0..dcel.num_faces() {
-            let unit = face_to_unit[f];
+        let mut area: Vec<f64> = vec![0.0; num_units];
+        for (f, &unit) in face_to_unit.iter().enumerate() {
             if unit == UnitId::EXTERIOR { continue; }
-            let start = match dcel.face(FaceId(f)).half_edge {
+            let start = match dcel.face(FaceId(f as u32)).half_edge {
                 Some(he) => he,
                 None => continue,
             };
@@ -487,44 +564,50 @@ impl Region {
             area[unit.0 as usize] += face_area;
         }
 
+        eprintln!("[region::new] 4b. area computed in {:.2?}", t0.elapsed());
+
         // 4c. Per-unit perimeter (sum of edge lengths for all boundary edges).
         let mut perimeter = vec![0.0f64; num_units];
         for f in 0..dcel.num_faces() {
             let unit = face_to_unit[f];
             if unit == UnitId::EXTERIOR { continue; }
-            let start = match dcel.face(FaceId(f)).half_edge {
+            let start = match dcel.face(FaceId(f as u32)).half_edge {
                 Some(he) => he,
                 None => continue,
             };
             for he in dcel.face_cycle(start) {
-                let twin_face = dcel.half_edge(dcel.half_edge(he).twin).face;
-                let twin_unit = face_to_unit[twin_face.0];
+                let twin_face = dcel.half_edge(he.twin()).face;
+                let twin_unit = face_to_unit[twin_face.0 as usize];
                 if twin_unit != unit {
-                    perimeter[unit.0 as usize] += edge_length[he.0 / 2];
+                    perimeter[unit.0 as usize] += edge_length[he.0 as usize / 2];
                 }
             }
         }
 
+        eprintln!("[region::new] 4c. perimeter computed in {:.2?}", t0.elapsed());
+
         // 4d. Exterior boundary length.
         let mut exterior_boundary_length = vec![0.0f64; num_units];
-        for h in 0..num_half_edges {
-            let he = dcel.half_edge(HalfEdgeId(h));
-            let unit = face_to_unit[he.face.0];
+        for e in 0..num_half_edges {
+            let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
+            let unit = face_to_unit[half_edge.face.0 as usize];
             if unit == UnitId::EXTERIOR { continue; }
-            if face_to_unit[dcel.half_edge(he.twin).face.0] == UnitId::EXTERIOR {
-                exterior_boundary_length[unit.0 as usize] += edge_length[h / 2];
+            if face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize] == UnitId::EXTERIOR {
+                exterior_boundary_length[unit.0 as usize] += edge_length[e / 2];
             }
         }
 
+        eprintln!("[region::new] 4d. exterior_boundary_length computed in {:.2?}", t0.elapsed());
+
         // 4e. Centroid (vertex-average of each unit's half-edge origins).
-        let mut sum_x = vec![0.0f64; num_units];
-        let mut sum_y = vec![0.0f64; num_units];
-        let mut count = vec![0u32; num_units];
-        for h in 0..num_half_edges {
-            let he = dcel.half_edge(HalfEdgeId(h));
-            let unit = face_to_unit[he.face.0];
+        let mut sum_x: Vec<f64> = vec![0.0; num_units];
+        let mut sum_y: Vec<f64> = vec![0.0; num_units];
+        let mut count: Vec<u32> = vec![0; num_units];
+        for e in 0..num_half_edges {
+            let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
+            let unit = face_to_unit[half_edge.face.0 as usize];
             if unit == UnitId::EXTERIOR { continue; }
-            let c = dcel.vertex(he.origin).coords;
+            let c = dcel.vertex(half_edge.origin).coords;
             let u = unit.0 as usize;
             sum_x[u] += c.x;
             sum_y[u] += c.y;
@@ -540,6 +623,9 @@ impl Region {
                 }
             }
         }).collect();
+        drop(sum_x); drop(sum_y); drop(count);
+
+        eprintln!("[region::new] 4e. centroid computed in {:.2?}", t0.elapsed());
 
         // 4f. Bounds (axis-aligned bounding box per unit).
         let inf = f64::INFINITY;
@@ -547,11 +633,11 @@ impl Region {
         let mut min_y = vec![ inf; num_units];
         let mut max_x = vec![-inf; num_units];
         let mut max_y = vec![-inf; num_units];
-        for h in 0..num_half_edges {
-            let he = dcel.half_edge(HalfEdgeId(h));
-            let unit = face_to_unit[he.face.0];
+        for e in 0..num_half_edges {
+            let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
+            let unit = face_to_unit[half_edge.face.0 as usize];
             if unit == UnitId::EXTERIOR { continue; }
-            let c = dcel.vertex(he.origin).coords;
+            let c = dcel.vertex(half_edge.origin).coords;
             let u = unit.0 as usize;
             if c.x < min_x[u] { min_x[u] = c.x; }
             if c.y < min_y[u] { min_y[u] = c.y; }
@@ -563,6 +649,9 @@ impl Region {
             let (mxx, mxy) = if max_x[u].is_finite() { (max_x[u], max_y[u]) } else { (0.0, 0.0) };
             Rect::new(Coord { x: mnx, y: mny }, Coord { x: mxx, y: mxy })
         }).collect();
+        drop(min_x); drop(min_y); drop(max_x); drop(max_y);
+
+        eprintln!("[region::new] 4f. bounds computed in {:.2?}", t0.elapsed());
 
         // 4g. Region-wide bounding box.
         let bounds_all = {
@@ -582,29 +671,40 @@ impl Region {
             rect
         };
 
+        eprintln!("[region::new] 4g. bounds_all computed in {:.2?}", t0.elapsed());
+
         // 4h. is_exterior flag.
         let mut is_exterior = vec![false; num_units];
-        for h in 0..num_half_edges {
-            let he = dcel.half_edge(HalfEdgeId(h));
-            let unit = face_to_unit[he.face.0];
+        for e in 0..num_half_edges {
+            let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
+            let unit = face_to_unit[half_edge.face.0 as usize];
             if unit == UnitId::EXTERIOR { continue; }
-            if face_to_unit[dcel.half_edge(he.twin).face.0] == UnitId::EXTERIOR {
+            if face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize] == UnitId::EXTERIOR {
                 is_exterior[unit.0 as usize] = true;
             }
         }
+
+        eprintln!("[region::new] 4h. is_exterior computed in {:.2?}", t0.elapsed());
 
         // -----------------------------------------------------------------
         // 5. Build adjacency matrices
         // -----------------------------------------------------------------
         let adjacent = build_adjacent(&dcel, &face_to_unit, &edge_length, num_units);
+        eprintln!("[region::new] 5a. rook adjacency built in {:.2?}", t0.elapsed());
         let touching = build_touching(&dcel, &face_to_unit, num_units);
+        eprintln!("[region::new] 5b. queen adjacency built in {:.2?}", t0.elapsed());
         let rtree = SpatialIndex::new(&bounds);
+        eprintln!("[region::new] 5c. rtree built in {:.2?}", t0.elapsed());
         let unit_to_faces = compute_unit_to_faces(&face_to_unit, num_units);
+
+        eprintln!("[region::new] 5d. unit_to_faces built in {:.2?}", t0.elapsed());
 
         // Replace input geometries with DCEL-derived ones so that donut-shaped
         // units (blocks surrounding enclaves) have correct interior hole rings.
         let geometries = reconstruct_geometries(&dcel, &face_to_unit, num_units);
+        eprintln!("[region::new] 5e. geometries reconstructed in {:.2?}", t0.elapsed());
         let face_inner_cycles = compute_face_inner_cycles(&dcel);
+        eprintln!("[region::new] 5f. face_inner_cycles built in {:.2?}", t0.elapsed());
 
         let region = Region {
             dcel,
@@ -629,6 +729,9 @@ impl Region {
         region.validate().map_err(|e| RegionError::InvalidGeometry(
             format!("post-construction validation failed: {e:?}")
         ))?;
+
+        eprintln!("[region::new] done: {} units, {} verts, {} half-edges in {:.2?}",
+            num_units, region.dcel.num_vertices(), region.dcel.num_half_edges(), t0.elapsed());
 
         Ok(region)
     }
@@ -706,7 +809,7 @@ fn ring_signed_area(coords: &[Coord<f64>]) -> f64 {
     let n = coords.len();
     if n < 3 { return 0.0; }
     let edge_count = if coords[0] == coords[n - 1] { n - 1 } else { n };
-    let mut area = 0.0f64;
+    let mut area: f64 = 0.0;
     for i in 0..edge_count {
         let a = coords[i];
         let b = coords[(i + 1) % n];
@@ -719,9 +822,9 @@ fn ring_signed_area(coords: &[Coord<f64>]) -> f64 {
 /// Negative for CW cycles, positive for CCW.
 fn signed_area_deg(dcel: &Dcel<Coord<f64>>, cycle: &[HalfEdgeId]) -> f64 {
     let mut area = 0.0;
-    for &he in cycle {
-        let c0 = dcel.vertex(dcel.half_edge(he).origin).coords;
-        let c1 = dcel.vertex(dcel.dest(he)).coords;
+    for &edge in cycle {
+        let c0 = dcel.vertex(dcel.half_edge(edge).origin).coords;
+        let c1 = dcel.vertex(dcel.dest(edge)).coords;
         area += c0.x * c1.y - c1.x * c0.y;
     }
     area / 2.0
@@ -741,23 +844,23 @@ pub(crate) fn reconstruct_geometries(
     face_to_unit: &[UnitId],
     num_units: usize,
 ) -> Vec<MultiPolygon<f64>> {
-    let nhe = dcel.num_half_edges();
-    let nf  = dcel.num_faces();
+    let num_half_edges = dcel.num_half_edges();
+    let num_faces = dcel.num_faces();
 
     // Trace every half-edge cycle and group by face.
-    let mut visited = vec![false; nhe];
-    let mut face_cycles: Vec<Vec<(Vec<Coord<f64>>, f64)>> = vec![Vec::new(); nf];
+    let mut visited = vec![false; num_half_edges];
+    let mut face_cycles: Vec<Vec<(Vec<Coord<f64>>, f64)>> = vec![Vec::new(); num_faces];
 
-    for h in 0..nhe {
-        if visited[h] { continue; }
-        let face_id = dcel.half_edge(HalfEdgeId(h)).face.0;
+    for e in 0..num_half_edges {
+        if visited[e] { continue; }
+        let face_id = dcel.half_edge(HalfEdgeId(e as u32)).face.0 as usize;
 
         let mut coords: Vec<Coord<f64>> = Vec::new();
         let mut signed_area = 0.0;
-        let mut cur = HalfEdgeId(h);
+        let mut cur = HalfEdgeId(e as u32);
         loop {
-            if visited[cur.0] { break; }
-            visited[cur.0] = true;
+            if visited[cur.0 as usize] { break; }
+            visited[cur.0 as usize] = true;
             let c0 = dcel.vertex(dcel.half_edge(cur).origin).coords;
             let c1 = dcel.vertex(dcel.dest(cur)).coords;
             coords.push(c0);
@@ -774,7 +877,7 @@ pub(crate) fn reconstruct_geometries(
     // For each non-EXTERIOR face, partition cycles into outer ring + holes.
     let mut polys: Vec<Vec<Polygon<f64>>> = vec![Vec::new(); num_units];
 
-    for f in 0..nf {
+    for f in 0..num_faces {
         let unit = face_to_unit[f];
         if unit == UnitId::EXTERIOR { continue; }
 
@@ -806,7 +909,7 @@ pub(crate) fn compute_unit_to_faces(face_to_unit: &[UnitId], num_units: usize) -
     let mut unit_to_faces: Vec<Vec<FaceId>> = vec![Vec::new(); num_units];
     for (f, &unit) in face_to_unit.iter().enumerate() {
         if unit != UnitId::EXTERIOR {
-            unit_to_faces[unit.0 as usize].push(FaceId(f));
+            unit_to_faces[unit.0 as usize].push(FaceId(f as u32));
         }
     }
     unit_to_faces
@@ -821,37 +924,37 @@ pub(crate) fn compute_unit_to_faces(face_to_unit: &[UnitId], num_units: usize) -
 ///
 /// Shared with `io/read.rs` for deserialization.
 pub(crate) fn compute_face_inner_cycles(dcel: &Dcel<Coord<f64>>) -> Vec<Vec<HalfEdgeId>> {
-    let nf = dcel.num_faces();
-    let nhe = dcel.num_half_edges();
+    let num_faces = dcel.num_faces();
+    let num_half_edges = dcel.num_half_edges();
 
     // Mark all half-edges reachable from each face's primary cycle.
-    let mut visited = vec![false; nhe];
-    for f in 0..nf {
-        if let Some(start) = dcel.face(FaceId(f)).half_edge {
-            let mut h = start;
+    let mut visited = vec![false; num_half_edges];
+    for f in 0..num_faces {
+        if let Some(start) = dcel.face(FaceId(f as u32)).half_edge {
+            let mut cur = start;
             loop {
-                if visited[h.0] { break; }
-                visited[h.0] = true;
-                h = dcel.half_edge(h).next;
-                if h == start { break; }
+                if visited[cur.0 as usize] { break; }
+                visited[cur.0 as usize] = true;
+                cur = dcel.half_edge(cur).next;
+                if cur == start { break; }
             }
         }
     }
 
     // Any unvisited half-edge belongs to an inner (non-primary) cycle.
     // Record one start per inner cycle, grouped by face.
-    let mut face_inner_cycles: Vec<Vec<HalfEdgeId>> = vec![Vec::new(); nf];
-    for h in 0..nhe {
-        if visited[h] { continue; }
-        let face_id = dcel.half_edge(HalfEdgeId(h)).face.0;
-        face_inner_cycles[face_id].push(HalfEdgeId(h));
+    let mut face_inner_cycles: Vec<Vec<HalfEdgeId>> = vec![Vec::new(); num_faces];
+    for e in 0..num_half_edges {
+        if visited[e] { continue; }
+        let face_id = dcel.half_edge(HalfEdgeId(e as u32)).face.0 as usize;
+        face_inner_cycles[face_id].push(HalfEdgeId(e as u32));
         // Mark the entire cycle as visited so we only record one start per cycle.
-        let mut cur = HalfEdgeId(h);
+        let mut cur = HalfEdgeId(e as u32);
         loop {
-            if visited[cur.0] { break; }
-            visited[cur.0] = true;
+            if visited[cur.0 as usize] { break; }
+            visited[cur.0 as usize] = true;
             cur = dcel.half_edge(cur).next;
-            if cur == HalfEdgeId(h) { break; }
+            if cur == HalfEdgeId(e as u32) { break; }
         }
     }
 

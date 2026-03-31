@@ -393,7 +393,7 @@ region.validate()                          -> Result<(), RegionError>
 // Edge metrics
 region.shared_boundary_length(a, b)               -> f64
 region.boundary_length_with(units, other_units)   -> f64
-region.edge_weight_at(csr_idx)                    -> f64  // Rook CSR index → shared length in m
+region.shared_boundary_length_at(csr_idx)         -> f64  // O(1) alternative when iterating rook CSR
 
 // Topology — Rook adjacency throughout
 region.is_contiguous(units)          -> bool

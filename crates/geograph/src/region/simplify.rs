@@ -42,12 +42,12 @@ impl Region {
         }
 
         let dcel = &self.dcel;
-        let n_he = dcel.num_half_edges();
+        let num_half_edges = dcel.num_half_edges();
 
         // ── Step 1: vertex out-degree ─────────────────────────────────────────
         let mut out_degree: Vec<u32> = vec![0; dcel.num_vertices()];
-        for i in 0..n_he {
-            out_degree[dcel.half_edge(HalfEdgeId(i)).origin.0] += 1;
+        for i in 0..num_half_edges {
+            out_degree[dcel.half_edge(HalfEdgeId(i as u32)).origin.0 as usize] += 1;
         }
 
         // ── Step 2: walk arcs and simplify ────────────────────────────────────
@@ -56,39 +56,39 @@ impl Region {
         // arc_fwd[he]    = true if he is traversed forward in its canonical arc
         // arc_store      = simplified coords per arc (indexed by arc_store_idx)
         // arc_by_start   = arc_store_idx for a given canonical start he index
-        let mut arc_id:      Vec<usize> = vec![usize::MAX; n_he];
-        let mut arc_fwd:     Vec<bool>  = vec![true;        n_he];
+        let mut arc_id:      Vec<usize> = vec![usize::MAX; num_half_edges];
+        let mut arc_fwd:     Vec<bool>  = vec![true;        num_half_edges];
         let mut arc_store:   Vec<Vec<Coord<f64>>> = Vec::new();
-        let mut arc_by_start: Vec<usize> = vec![usize::MAX; n_he];
-        let mut visited:     Vec<bool>  = vec![false; n_he];
+        let mut arc_by_start: Vec<usize> = vec![usize::MAX; num_half_edges];
+        let mut visited:     Vec<bool>  = vec![false; num_half_edges];
 
         // Pass 1: arcs whose starting vertex is a junction (out-degree != 2).
-        for start_id in 0..n_he {
+        for start_id in 0..num_half_edges {
             if visited[start_id] { continue; }
-            let start  = HalfEdgeId(start_id);
+            let start  = HalfEdgeId(start_id as u32);
             let origin = dcel.half_edge(start).origin;
-            if out_degree[origin.0] == 2 { continue; } // not a junction start
+            if out_degree[origin.0 as usize] == 2 { continue; } // not a junction start
 
             let mut raw: Vec<Coord<f64>> = vec![dcel.vertex(origin).coords];
             let mut cur = start;
             loop {
-                let twin = dcel.half_edge(cur).twin;
+                let twin = cur.twin();
                 // Mark both the forward half-edge and its twin as visited.
                 // Without marking the twin, a twin whose origin is a junction
                 // vertex would later be mistaken for a new arc start, overwriting
                 // the arc_id/arc_fwd assignments made here and corrupting ring
                 // reconstruction for any face that traverses this arc in reverse.
-                visited[cur.0]  = true;
-                visited[twin.0] = true;
-                arc_id[cur.0]   = start_id;
-                arc_fwd[cur.0]  = true;
-                arc_id[twin.0]  = start_id;
-                arc_fwd[twin.0] = false;
+                visited[cur.0 as usize]  = true;
+                visited[twin.0 as usize] = true;
+                arc_id[cur.0 as usize]   = start_id;
+                arc_fwd[cur.0 as usize]  = true;
+                arc_id[twin.0 as usize]  = start_id;
+                arc_fwd[twin.0 as usize] = false;
 
                 let dest_v = dcel.dest(cur);
                 raw.push(dcel.vertex(dest_v).coords);
 
-                if out_degree[dest_v.0] != 2 { break; } // reached next junction
+                if out_degree[dest_v.0 as usize] != 2 { break; } // reached next junction
                 cur = dcel.half_edge(cur).next;
                 if cur == start { break; } // safety guard
             }
@@ -100,22 +100,22 @@ impl Region {
         }
 
         // Pass 2: isolated loop arcs (all vertices have out-degree 2).
-        for start_id in 0..n_he {
+        for start_id in 0..num_half_edges {
             if visited[start_id] { continue; }
 
             let mut raw: Vec<Coord<f64>> = Vec::new();
-            let mut cur = HalfEdgeId(start_id);
+            let mut cur = HalfEdgeId(start_id as u32);
             loop {
-                let twin = dcel.half_edge(cur).twin;
-                visited[cur.0]  = true;
-                visited[twin.0] = true; // same reason as pass 1
-                arc_id[cur.0]   = start_id;
-                arc_fwd[cur.0]  = true;
-                arc_id[twin.0]  = start_id;
-                arc_fwd[twin.0] = false;
+                let twin = cur.twin();
+                visited[cur.0 as usize]  = true;
+                visited[twin.0 as usize] = true; // same reason as pass 1
+                arc_id[cur.0 as usize]   = start_id;
+                arc_fwd[cur.0 as usize]  = true;
+                arc_id[twin.0 as usize]  = start_id;
+                arc_fwd[twin.0 as usize] = false;
                 raw.push(dcel.vertex(dcel.half_edge(cur).origin).coords);
                 cur = dcel.half_edge(cur).next;
-                if cur.0 == start_id { break; }
+                if cur.0 as usize == start_id { break; }
             }
 
             let simplified = dp_simplify_closed(&raw, tolerance);
@@ -139,7 +139,7 @@ impl Region {
 
                 // Primary outer cycle + inner hole cycles (for donut-shaped units).
                 let mut cycle_starts: Vec<HalfEdgeId> = vec![primary_start];
-                for &inner in &self.face_inner_cycles[face_id.0] {
+                for &inner in &self.face_inner_cycles[face_id.0 as usize] {
                     cycle_starts.push(inner);
                 }
 
@@ -194,14 +194,14 @@ fn collect_ring(
     let mut cur    = start;
 
     loop {
-        let this_arc = arc_id[cur.0];
-        let this_fwd = arc_fwd[cur.0];
+        let this_arc = arc_id[cur.0 as usize];
+        let this_fwd = arc_fwd[cur.0 as usize];
 
         // Only emit when this half-edge is the first of its arc run in this
         // face cycle, i.e. when the previous half-edge belongs to a different
         // arc or traversal direction.
         let prev_he  = dcel.half_edge(cur).prev;
-        if arc_id[prev_he.0] != this_arc || arc_fwd[prev_he.0] != this_fwd {
+        if arc_id[prev_he.0 as usize] != this_arc || arc_fwd[prev_he.0 as usize] != this_fwd {
             let idx = arc_by_start[this_arc];
             let all = &arc_store[idx];
             let n   = all.len();
@@ -231,8 +231,8 @@ fn collect_ring(
     // units where the embedded neighbour shares no junction vertices with the
     // surrounding unit.  Emit the arc once unconditionally from `start`.
     if coords.is_empty() {
-        let this_arc = arc_id[start.0];
-        let this_fwd = arc_fwd[start.0];
+        let this_arc = arc_id[start.0 as usize];
+        let this_fwd = arc_fwd[start.0 as usize];
         let idx = arc_by_start[this_arc];
         let all = &arc_store[idx];
         // Loop arcs have no "next arc" to emit the last vertex, so emit all n
@@ -293,6 +293,7 @@ fn dp_recurse(
     let p2 = coords[end];
     let mut max_dist = 0.0f64;
     let mut max_idx  = start;
+    #[allow(clippy::needless_range_loop)]
     for i in (start + 1)..end {
         let d = dist_to_segment(coords[i], p1, p2);
         if d > max_dist { max_dist = d; max_idx = i; }

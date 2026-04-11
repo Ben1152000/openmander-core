@@ -4,8 +4,8 @@ use anyhow::{anyhow, Result};
 use js_sys::{Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 
-pub(crate) fn js_err(e: impl ToString) -> JsValue {
-    JsValue::from_str(&e.to_string())
+pub(crate) fn js_err(e: impl std::fmt::Display) -> JsValue {
+    JsValue::from_str(&format!("{e:#}"))
 }
 
 /// Convert a JS object { "rel/path": Uint8Array, ... } to MemPack files.

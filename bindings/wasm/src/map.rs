@@ -79,6 +79,24 @@ impl WasmMap {
         Ok(parsed)
     }
 
+    /// Return geo_ids in index order for every layer, as a JSON string.
+    /// Shape: `{"block": ["geo1", "geo2", ...], "county": [...], ...}`
+    /// Used by the plan worker to populate geoIdByIndex immediately on ready,
+    /// without waiting for the metrics worker to parse the full CSV.
+    pub fn geo_id_index_json(&self) -> Result<String, JsValue> {
+        let mut map = serde_json::Map::new();
+        for ty in openmander_core::GeoType::ALL {
+            if let Some(lyr) = self.inner.layer(ty) {
+                let ids: Vec<&str> = lyr.geo_ids().iter().map(|g| g.id()).collect();
+                map.insert(
+                    ty.to_str().to_string(),
+                    serde_json::Value::Array(ids.into_iter().map(|s| serde_json::Value::String(s.to_string())).collect()),
+                );
+            }
+        }
+        serde_json::to_string(&map).map_err(|e| js_err(format!("geo_id_index_json: {e}")))
+    }
+
     /// Expose the internal Arc<Map> to create plans.
     /// (Not exported to JS; used by WasmPlan::new)
     pub(crate) fn inner_arc(&self) -> Arc<openmander_core::Map> { self.inner.clone() }

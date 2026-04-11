@@ -268,7 +268,10 @@ impl Partition {
 
     /// If removing `u` from its current part splits it, return the smaller component(s)
     /// of the *previous* part that become disconnected from the rest *without u*.
-    pub(crate) fn cut_subgraph_within_part(&self, node: usize) -> Vec<usize> {
+    ///
+    /// Uses `self.scratch_component` as a reusable node→component-index map to avoid
+    /// allocating a ~5 MB `Vec` on every call. All dirty entries are reset before returning.
+    pub(crate) fn cut_subgraph_within_part(&mut self, node: usize) -> Vec<usize> {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
 
         let part = self.assignment(node);
@@ -286,10 +289,10 @@ impl Partition {
             .map(|&u| vec![u])
             .collect::<Vec<_>>();
 
-        // Index of component that reached v, or usize::MAX if unvisited
-        let mut in_component = vec![usize::MAX; self.graph().node_count()];
-        in_component[node] = self.graph().node_count(); // mark removed
-        for i in 0..neighbors.len() { in_component[neighbors[i]] = i }
+        // Use the reusable scratch_component buffer (invariant: all entries are usize::MAX).
+        // We reset only the cells we touch before returning.
+        self.scratch_component[node] = usize::MAX.wrapping_sub(1); // mark removed (≠ MAX, ≠ any index)
+        for i in 0..neighbors.len() { self.scratch_component[neighbors[i]] = i }
 
         // One queue per component seed (each neighbor).
         let mut queues = neighbors.iter()
@@ -336,18 +339,26 @@ impl Partition {
             if active_roots.len() <= 1 { break }
 
             // If all components have merged, node is not an articulation point
-            if union_find.components == 1 { return vec![] }
+            if union_find.components == 1 {
+                self.reset_scratch_component(node, &components);
+                return vec![];
+            }
 
             for i in 0..neighbors.len() {
                 if let Some(u) = queues[i].pop_front() {
-                    for v in self.graph().edges(u).filter(|&v| v != node && self.assignment(v) == part) {
-                        if in_component[v] == usize::MAX {
-                            in_component[v] = i;
+                    // Collect adjacent same-part nodes before mutating scratch_component
+                    // (avoids a simultaneous immutable+mutable borrow of `self`).
+                    let adj: Vec<usize> = self.graph().edges(u)
+                        .filter(|&v| v != node && self.assignment(v) == part)
+                        .collect();
+                    for v in adj {
+                        if self.scratch_component[v] == usize::MAX {
+                            self.scratch_component[v] = i;
                             queues[i].push_back(v);
                             components[i].push(v);
-                        } else if in_component[v] < neighbors.len() && in_component[v] != i {
+                        } else if self.scratch_component[v] < neighbors.len() && self.scratch_component[v] != i {
                             // BFS encountered node from another component
-                            union_find.union(i, in_component[v]);
+                            union_find.union(i, self.scratch_component[v]);
                         }
                     }
                 }
@@ -369,9 +380,22 @@ impl Partition {
         });
 
         // Collect nodes from all non-main components.
-        components.into_iter().enumerate()
+        let result: Vec<usize> = components.iter().enumerate()
             .filter(|(i, _)| union_find.find(*i) != main_root)
-            .flat_map(|(_, component)| component)
-            .collect::<Vec<_>>()
+            .flat_map(|(_, component)| component.iter().copied())
+            .collect();
+
+        self.reset_scratch_component(node, &components);
+        result
+    }
+
+    /// Reset all scratch_component entries that were dirtied by cut_subgraph_within_part.
+    fn reset_scratch_component(&mut self, node: usize, components: &[Vec<usize>]) {
+        self.scratch_component[node] = usize::MAX;
+        for comp in components {
+            for &u in comp {
+                self.scratch_component[u] = usize::MAX;
+            }
+        }
     }
 }

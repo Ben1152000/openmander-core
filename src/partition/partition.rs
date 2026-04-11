@@ -12,9 +12,17 @@ pub(crate) struct Partition {
     pub(super) frontiers: MultiSet,          // Nodes on the boundary of each part
     pub(super) frontier_edges: FrontierEdgeList, // Half-edges on the boundary of each part
     pub(super) part_graph: PartGraph,        // Aggregated weights and perimeters for each part
-    unit_graph: UnitGraph,                   // Graph topology for basic units (census block)
+    pub(super) unit_graph: UnitGraph,        // Graph topology for basic units (census block)
     unit_weights: Arc<WeightMatrix>,         // Demographic/election weights for basic units
     region_weights: Arc<WeightMatrix>,       // Summed weights for the entire region (state totals)
+    // Reusable scratch buffers for contiguity checks (avoids per-call allocations).
+    // scratch_a[u] == scratch_gen → "is_neighbor" flag; scratch_b[u] == scratch_gen → "visited".
+    pub(super) scratch_a: Vec<u32>,
+    pub(super) scratch_b: Vec<u32>,
+    pub(super) scratch_gen: u32,
+    // Reusable component-index scratch for cut_subgraph_within_part.
+    // Invariant: all entries are usize::MAX between calls.
+    pub(super) scratch_component: Vec<usize>,
 }
 
 impl Partition {
@@ -34,14 +42,19 @@ impl Partition {
         // edge_count() returns total directed edges (each undirected edge counted twice)
         let num_directed_edges = unit_graph.edge_count();
 
+        let node_count = unit_graph.node_count();
         Self {
-            parts: PartitionSet::new(num_parts, unit_graph.node_count()),
-            frontiers: MultiSet::new(num_parts, unit_graph.node_count()),
+            parts: PartitionSet::new(num_parts, node_count),
+            frontiers: MultiSet::new(num_parts, node_count),
             frontier_edges: FrontierEdgeList::new(num_parts, num_directed_edges / 2),
             part_graph,
             unit_graph,
             unit_weights,
             region_weights,
+            scratch_a: vec![0u32; node_count],
+            scratch_b: vec![0u32; node_count],
+            scratch_gen: 0,
+            scratch_component: vec![usize::MAX; node_count],
         }
     }
 

@@ -207,12 +207,69 @@ impl MapLayer {
         parent_map: HashMap<GeoId, GeoId>,
     ) -> Result<()> {
         self.geo_ids.iter().enumerate()
-            .map(|(i, geo_id)| {
-                Ok(parent_map.get(geo_id)
+            .try_for_each(|(i, geo_id)| {
+                parent_map.get(geo_id)
                     .ok_or_else(|| anyhow!("No parent found for entity with geo_id: {:?}", geo_id))
-                    .map(|p| self.parents[i].set(parent_ty, Some(p.clone())))?)
+                    .map(|p| self.parents[i].set(parent_ty, Some(p.clone())))
             })
-            .collect::<Result<_>>()
+    }
+
+    /// Assign VTD parent references from a crosswalk map, with a spatial fallback for any
+    /// blocks absent from the crosswalk.
+    ///
+    /// The Census block/VTD crosswalk files are occasionally incomplete: some blocks have no
+    /// listed VTD.  For those blocks, this method finds the containing VTD by testing the
+    /// block's pre-cached centroid against the VTD layer's spatial index.
+    ///
+    /// `vtd_region` and `vtd_geo_ids` must be from the VTD `MapLayer` and indexed in the same
+    /// order (i.e. `vtd_geo_ids[uid.0]` is the geo_id for VTD unit `uid`).
+    fn assign_vtd_parents(
+        &mut self,
+        parent_map: HashMap<GeoId, GeoId>,
+        vtd_region: &geograph::Region,
+        vtd_geo_ids: &[GeoId],
+        verbose: u8,
+    ) -> Result<()> {
+        // Pre-locate the Census interior-point columns (INTPTLON20/INTPTLAT20 from the
+        // shapefile, stored as "centroid_lon"/"centroid_lat").  These are guaranteed to
+        // lie inside the polygon, unlike the DCEL centroid which is a vertex average.
+        let f64_names = self.unit_weights.f64_series_names();
+        let lon_col = f64_names.iter().position(|&n| n == "centroid_lon");
+        let lat_col = f64_names.iter().position(|&n| n == "centroid_lat");
+
+        let mut fallback_count = 0;
+        self.geo_ids.iter().enumerate()
+            .try_for_each(|(i, geo_id)| -> Result<()> {
+                if let Some(parent) = parent_map.get(geo_id) {
+                    self.parents[i].set(GeoType::VTD, Some(parent.clone()));
+                    return Ok(());
+                }
+                // Crosswalk miss: use the Census interior point if available, otherwise
+                // fall back to the DCEL centroid.
+                let probe = match (lon_col, lat_col) {
+                    (Some(li), Some(la)) => {
+                        let row = self.unit_weights.f64_row(i);
+                        geo::Coord { x: row[li], y: row[la] }
+                    }
+                    _ => self.region.centroid(geograph::UnitId(i as u32)),
+                };
+                let vtd_uid = vtd_region.unit_at(probe)
+                    .ok_or_else(|| anyhow!(
+                        "block {:?} missing from VTD crosswalk and interior point ({:.6}, {:.6}) \
+                         does not fall inside any VTD polygon",
+                        geo_id, probe.x, probe.y
+                    ))?;
+                self.parents[i].set(GeoType::VTD, Some(vtd_geo_ids[vtd_uid.0 as usize].clone()));
+                fallback_count += 1;
+                Ok(())
+            })?;
+        if verbose > 0 && fallback_count > 0 {
+            eprintln!(
+                "[build_pack] {} block(s) missing from VTD crosswalk — assigned by centroid fallback",
+                fallback_count
+            );
+        }
+        Ok(())
     }
 
     /// Bake manual island-bridge patches into the block Region.
@@ -459,8 +516,15 @@ impl Map {
                 "BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt"
             ));
             let parent_map = read_crosswalk_txt(&crosswalk_path)?;
-            if let Some(layer) = map.layer_mut(GeoType::Block) {
-                layer.assign_parents_from_map(GeoType::VTD, parent_map)?;
+            // Clone the VTD region Arc and geo_ids before taking a mutable borrow on block.
+            let vtd_region = map.layer(GeoType::VTD)
+                .map(|l| Arc::clone(&l.region));
+            let vtd_geo_ids = map.layer(GeoType::VTD)
+                .map(|l| l.geo_ids.clone());
+            if let (Some(layer), Some(vtd_region), Some(vtd_geo_ids)) =
+                (map.layer_mut(GeoType::Block), vtd_region, vtd_geo_ids)
+            {
+                layer.assign_vtd_parents(parent_map, &vtd_region, &vtd_geo_ids, verbose)?;
             }
         }
 

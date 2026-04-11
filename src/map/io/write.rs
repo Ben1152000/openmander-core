@@ -22,7 +22,7 @@ fn pmtiles_zoom_range_for_layer(ty: GeoType) -> (u8, u8) {
         GeoType::County =>  (4, 10),
         GeoType::Tract  =>  (4, 12),
         GeoType::VTD    =>  (4, 14),
-        GeoType::Group  =>  (8, 12),
+        GeoType::Group  =>  (4, 14),
         GeoType::Block  => (10, 14),
     }
 }

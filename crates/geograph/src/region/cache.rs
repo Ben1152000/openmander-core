@@ -20,7 +20,6 @@ pub(crate) fn compute_caches(
     dcel: &Dcel<Coord<f64>>,
     face_to_unit: &[UnitId],
     num_units: usize,
-    t0: std::time::Instant,
 ) -> CacheData {
     let num_half_edges = dcel.num_half_edges();
 
@@ -34,8 +33,6 @@ pub(crate) fn compute_caches(
             edge_length_m(c0, c1)
         })
         .collect();
-
-    eprintln!("[region::new] 4a. edge lengths computed in {:.2?}", t0.elapsed());
 
     // 4b. Per-unit area (shoelace with cos(φ_mid) correction).
     let mut area: Vec<f64> = vec![0.0; num_units];
@@ -57,8 +54,6 @@ pub(crate) fn compute_caches(
         area[unit.0 as usize] += face_area;
     }
 
-    eprintln!("[region::new] 4b. area computed in {:.2?}", t0.elapsed());
-
     // Pass A: single scan over all half-edges accumulates perimeter,
     // exterior_boundary_length, and is_exterior together.
     let mut perimeter               = vec![0.0f64; num_units];
@@ -77,8 +72,6 @@ pub(crate) fn compute_caches(
             }
         }
     }
-
-    eprintln!("[region::new] 4c-4h. perimeter/ext-boundary/is_exterior computed in {:.2?}", t0.elapsed());
 
     // Pass B: single scan over all half-edges accumulates centroid sums and bounds.
     let mut sum_x: Vec<f64> = vec![0.0; num_units];
@@ -119,8 +112,6 @@ pub(crate) fn compute_caches(
         Rect::new(Coord { x: mnx, y: mny }, Coord { x: mxx, y: mxy })
     }).collect();
 
-    eprintln!("[region::new] 4e-4f. centroid/bounds computed in {:.2?}", t0.elapsed());
-
     // 4g. Region-wide bounding box.
     let bounds_all = {
         let mut rect = bounds[0];
@@ -138,8 +129,6 @@ pub(crate) fn compute_caches(
         }
         rect
     };
-
-    eprintln!("[region::new] 4g. bounds_all computed in {:.2?}", t0.elapsed());
 
     CacheData { edge_length, area, perimeter, exterior_boundary_length, centroid, bounds, bounds_all, is_exterior }
 }

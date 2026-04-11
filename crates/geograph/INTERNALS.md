@@ -1,4 +1,4 @@
-# Geograph — Design Document
+# Geo-graph — Design Document
 
 ## 1. Purpose
 

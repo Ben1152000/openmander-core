@@ -10,6 +10,8 @@ mod simplify;
 mod topo;
 mod validate;
 
+use std::sync::OnceLock;
+
 use geo::{Coord, LineString, MultiPolygon, Rect};
 
 /// Errors that can occur when constructing or validating a [`Region`].
@@ -73,9 +75,15 @@ pub struct Region {
     /// `UnitId::EXTERIOR` for the unbounded face and any interior gaps.
     pub(crate) face_to_unit: Vec<UnitId>,
 
-    /// Original input geometries, indexed by `UnitId.0`.
-    /// `UnitId::EXTERIOR` has no entry here.
-    pub(crate) geometries: Vec<MultiPolygon<f64>>,
+    /// Number of units (excludes `UnitId::EXTERIOR`).
+    pub(crate) num_units: usize,
+
+    /// Per-unit geometries, reconstructed from the DCEL on first access.
+    ///
+    /// Set eagerly when building from input polygons (`Region::new`); left
+    /// uninitialised when deserialising (`io::read`) to avoid allocating the
+    /// ~600 MB geometry copy that duplicates the DCEL coordinates.
+    pub(crate) geometries: OnceLock<Vec<MultiPolygon<f64>>>,
 
     /// Pre-cached area in m² (per-edge cos(φ_mid) weighted shoelace).
     pub(crate) area: Vec<f64>,
@@ -135,7 +143,14 @@ impl Region {
 
     /// Returns the number of units in the region, excluding [`UnitId::EXTERIOR`].
     #[inline]
-    pub fn num_units(&self) -> usize { self.geometries.len() }
+    pub fn num_units(&self) -> usize { self.num_units }
+
+    /// Return all geometries, reconstructing lazily from the DCEL if needed.
+    fn all_geometries(&self) -> &Vec<MultiPolygon<f64>> {
+        self.geometries.get_or_init(|| {
+            build::reconstruct_geometries(&self.dcel, &self.face_to_unit, self.num_units)
+        })
+    }
 
     /// Returns the starting half-edges of inner (hole) cycles for `face`, if any.
     #[inline]
@@ -174,18 +189,19 @@ impl Region {
 
         let face_to_unit_bytes = self.face_to_unit.capacity() * size_of::<UnitId>();
 
-        // Count every coordinate stored across all MultiPolygon geometries.
-        let geom_coord_count: usize = self.geometries.iter()
-            .flat_map(|mp| mp.0.iter())
-            .map(|poly| {
-                poly.exterior().0.len()
-                + poly.interiors().iter().map(|r| r.0.len()).sum::<usize>()
-            })
-            .sum();
-        // 16 bytes per Coord<f64>; add Vec/LineString/Polygon/MultiPolygon header
-        // overhead as a rough 24-byte-per-entry estimate for the outer containers.
-        let geom_bytes = geom_coord_count * size_of::<geo::Coord<f64>>()
-            + self.geometries.capacity() * 24;
+        // Only count geometry memory if the OnceLock has been initialised.
+        let geom_bytes = if let Some(geoms) = self.geometries.get() {
+            let coord_count: usize = geoms.iter()
+                .flat_map(|mp| mp.0.iter())
+                .map(|poly| {
+                    poly.exterior().0.len()
+                    + poly.interiors().iter().map(|r| r.0.len()).sum::<usize>()
+                })
+                .sum();
+            coord_count * size_of::<geo::Coord<f64>>() + geoms.capacity() * 24
+        } else {
+            0
+        };
 
         let scalars_bytes =
             (self.area.capacity()
@@ -200,7 +216,7 @@ impl Region {
 
         // R-tree: each leaf node holds a UnitBBox (UnitId=4 + Rect=32 = ~40 bytes)
         // plus internal tree node overhead (~64 bytes/node, ~n/9 nodes for 9-leaf pages).
-        let rtree_approx = self.geometries.len() * 48;
+        let rtree_approx = self.num_units * 48;
 
         let unit_to_faces_bytes =
             self.unit_to_faces_offsets.capacity() * size_of::<u32>()
@@ -231,7 +247,7 @@ impl Region {
     /// <div class="warning">Panics if <code>unit</code> is <a href="UnitId::EXTERIOR"><code>UnitId::EXTERIOR</code></a> or out of range.</div>
     #[inline]
     pub fn geometry(&self, unit: UnitId) -> &MultiPolygon<f64> {
-        &self.geometries[unit.0 as usize]
+        &self.all_geometries()[unit.0 as usize]
     }
 
 }
@@ -254,6 +270,8 @@ impl Region {
 /// Pre-cached values are set directly rather than computed.
 #[cfg(test)]
 pub(crate) mod test_helpers {
+    use std::sync::OnceLock;
+
     use geo::{Coord, LineString, MultiPolygon, Polygon, Rect};
 
     use crate::dcel::{Dcel, OUTER_FACE};
@@ -330,13 +348,17 @@ pub(crate) mod test_helpers {
         let (unit_to_faces_offsets, unit_to_faces_data) = crate::region::build::compute_unit_to_faces(&face_to_unit, 2);
         let face_inner_cycles = crate::region::build::compute_face_inner_cycles(&dcel);
 
+        let geometries = OnceLock::new();
+        geometries.set(vec![
+            make_poly(&[(0.0,0.0),(1.0,0.0),(1.0,1.0),(0.0,1.0),(0.0,0.0)]),
+            make_poly(&[(1.0,0.0),(2.0,0.0),(2.0,1.0),(1.0,1.0),(1.0,0.0)]),
+        ]).ok();
+
         Region {
             dcel,
             face_to_unit,
-            geometries: vec![
-                make_poly(&[(0.0,0.0),(1.0,0.0),(1.0,1.0),(0.0,1.0),(0.0,0.0)]),
-                make_poly(&[(1.0,0.0),(2.0,0.0),(2.0,1.0),(1.0,1.0),(1.0,0.0)]),
-            ],
+            num_units: 2,
+            geometries,
             // All cached scalars set to known values for test assertions.
             area:                     vec![10.0, 20.0],
             perimeter:                vec![4.0,  4.0 ],

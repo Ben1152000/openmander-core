@@ -97,6 +97,20 @@ impl AdjacencyMatrix {
         Self { offsets, neighbors, weights: Some(weights) }
     }
 
+    /// Construct directly from pre-built CSR arrays.
+    ///
+    /// `offsets` must have length `num_units + 1` with `offsets[0] == 0`.
+    /// `neighbors` must be sorted within each row.  `weights`, if present, must
+    /// be aligned to `neighbors`.  Used by two-pass builders that avoid
+    /// intermediate triple-Vecs.
+    pub(crate) fn from_raw(
+        offsets: Vec<u32>,
+        neighbors: Vec<UnitId>,
+        weights: Option<Vec<f64>>,
+    ) -> Self {
+        Self { offsets, neighbors, weights }
+    }
+
     /// Number of units covered by this matrix.
     #[inline]
     pub fn num_units(&self) -> usize { self.offsets.len() - 1 }

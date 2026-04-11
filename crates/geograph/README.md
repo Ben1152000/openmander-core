@@ -1,4 +1,4 @@
-# geograph
+# Geo-graph
 
 A Rust crate for representing and querying **planar geographic maps**: complete subdivisions of a region into non-overlapping units such as census blocks or precincts.
 

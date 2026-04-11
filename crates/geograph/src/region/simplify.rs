@@ -38,7 +38,7 @@ impl Region {
     /// represented by an empty `MultiPolygon`.
     pub fn simplified_geometries(&self, tolerance: f64) -> Vec<MultiPolygon<f64>> {
         if tolerance == 0.0 {
-            return self.geometries.clone();
+            return self.all_geometries().clone();
         }
 
         let dcel = &self.dcel;

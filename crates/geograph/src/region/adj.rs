@@ -45,24 +45,101 @@ impl Region {
 
 /// Walk every half-edge; when the two faces on either side belong to different
 /// non-EXTERIOR units, emit both directed pairs with edge lengths as weights.
+///
+/// Uses a two-pass CSR construction to avoid the ~1 GB intermediate `triples`
+/// Vec that the naive approach allocates for large states (e.g. TX with 38M
+/// half-edges).  Peak extra memory is two DCEL-scan passes plus the pre-dedup
+/// flat buffer, which is at most `num_half_edges / 2 * 12` bytes (~228 MB for TX)
+/// and shrinks further once rows are sorted and deduplicated in-place.
 pub(crate) fn build_adjacent(
     dcel: &Dcel<Coord<f64>>,
     face_to_unit: &[UnitId],
     edge_length: &[f64],
     num_units: usize,
 ) -> AdjacencyMatrix {
-    let mut triples = Vec::<(UnitId, UnitId, f64)>::new();
-
+    // --- Pass 1: count raw boundary directed half-edges per source unit -------
+    let mut degree = vec![0u32; num_units];
     for e in 0..dcel.num_half_edges() {
-        let half_edge = dcel.half_edge(HalfEdgeId(e as u32));
-        let unit  = face_to_unit[half_edge.face.0 as usize];
+        let unit  = face_to_unit[dcel.half_edge(HalfEdgeId(e as u32)).face.0 as usize];
         let other = face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize];
-        if unit != other {
-            triples.push((unit, other, edge_length[e / 2]));
+        if unit != other && unit != UnitId::EXTERIOR && other != UnitId::EXTERIOR {
+            degree[unit.0 as usize] += 1;
         }
     }
 
-    AdjacencyMatrix::from_directed_pairs_weighted(num_units, triples)
+    // Prefix-sum → row start offsets for the pre-dedup buffer.
+    let mut offsets = vec![0u32; num_units + 1];
+    for i in 0..num_units { offsets[i + 1] = offsets[i] + degree[i]; }
+    let total_raw = offsets[num_units] as usize;
+    drop(degree); // no longer needed; free before the large allocations below
+
+    // Allocate flat (neighbor, weight) arrays — will be sorted+deduped in-place.
+    let mut neighbors = vec![UnitId(0); total_raw];
+    let mut weights   = vec![0.0f64;   total_raw];
+    let mut cursors: Vec<u32> = offsets[..num_units].to_vec();
+
+    // --- Pass 2: fill ---------------------------------------------------------
+    for e in 0..dcel.num_half_edges() {
+        let unit  = face_to_unit[dcel.half_edge(HalfEdgeId(e as u32)).face.0 as usize];
+        let other = face_to_unit[dcel.half_edge(HalfEdgeId(e as u32 ^ 1)).face.0 as usize];
+        if unit != other && unit != UnitId::EXTERIOR && other != UnitId::EXTERIOR {
+            let pos = cursors[unit.0 as usize] as usize;
+            neighbors[pos] = other;
+            weights[pos]   = edge_length[e / 2];
+            cursors[unit.0 as usize] += 1;
+        }
+    }
+    drop(cursors);
+
+    // --- Per-row: sort by neighbor, then merge duplicate (unit→nb) entries ----
+    // We compact in-place: `compact_end` always ≤ current row_start, so reads
+    // never overlap writes.
+    let mut compact_end = 0usize;
+    let mut new_offsets = vec![0u32; num_units + 1];
+
+    for u in 0..num_units {
+        let row_start = offsets[u]     as usize;
+        let row_end   = offsets[u + 1] as usize;
+        new_offsets[u] = compact_end as u32;
+        if row_start == row_end { continue; }
+
+        // Insertion-sort this row by neighbor ID (rows are small: typically 4–30
+        // entries for census blocks), carrying weights alongside.
+        for i in (row_start + 1)..row_end {
+            let nb_i = neighbors[i];
+            let w_i  = weights[i];
+            let mut j = i;
+            while j > row_start && neighbors[j - 1] > nb_i {
+                neighbors[j] = neighbors[j - 1];
+                weights[j]   = weights[j - 1];
+                j -= 1;
+            }
+            neighbors[j] = nb_i;
+            weights[j]   = w_i;
+        }
+
+        // Compact (dedup + sum) into the head of the output buffer.
+        for i in row_start..row_end {
+            let nb = neighbors[i];
+            let w  = weights[i];
+            if compact_end > new_offsets[u] as usize
+                && neighbors[compact_end - 1] == nb
+            {
+                weights[compact_end - 1] += w;
+            } else {
+                neighbors[compact_end] = nb;
+                weights[compact_end]   = w;
+                compact_end += 1;
+            }
+        }
+    }
+    new_offsets[num_units] = compact_end as u32;
+    neighbors.truncate(compact_end);
+    weights.truncate(compact_end);
+    neighbors.shrink_to_fit();
+    weights.shrink_to_fit();
+
+    AdjacencyMatrix::from_raw(new_offsets, neighbors, Some(weights))
 }
 
 /// Start from Rook pairs, then add all unit-pairs that share a vertex star.

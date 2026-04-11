@@ -84,7 +84,7 @@ impl Region {
     /// Convex hull of `unit` in lon/lat.
     #[inline]
     pub fn convex_hull(&self, unit: UnitId) -> Polygon<f64> {
-        self.geometries[unit.0 as usize].convex_hull()
+        self.geometry(unit).convex_hull()
     }
 
     // -----------------------------------------------------------------------
@@ -174,7 +174,7 @@ impl Region {
     pub fn convex_hull_of(&self, units: impl IntoIterator<Item = UnitId>) -> Polygon<f64> {
         let combined: MultiPolygon<f64> = MultiPolygon(
             units.into_iter()
-                .flat_map(|u| self.geometries[u.0 as usize].0.iter().cloned())
+                .flat_map(|u| self.geometry(u).0.iter().cloned())
                 .collect(),
         );
         combined.convex_hull()
@@ -256,7 +256,7 @@ impl Region {
     pub fn unit_at(&self, point: Coord<f64>) -> Option<UnitId> {
         let geo_point = geo::Point::from(point);
         self.rtree.query_point([point.x, point.y])
-            .find(|&uid| self.geometries[uid.0 as usize].contains(&geo_point))
+            .find(|&uid| self.geometry(uid).contains(&geo_point))
     }
 
     /// Return all `UnitId`s whose bounding box intersects `envelope`.

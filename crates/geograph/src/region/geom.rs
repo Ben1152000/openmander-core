@@ -92,6 +92,7 @@ impl Region {
     // -----------------------------------------------------------------------
 
     /// Sum of areas of all units in `units`, in m².
+    #[inline]
     pub fn area_of(&self, units: impl IntoIterator<Item = UnitId>) -> f64 {
         units.into_iter().map(|u| self.area[u.0 as usize]).sum()
     }
@@ -129,6 +130,7 @@ impl Region {
 
     /// Total length of the subset boundary that touches the region exterior,
     /// in m.
+    #[inline]
     pub fn exterior_boundary_length_of(&self, units: impl IntoIterator<Item = UnitId>) -> f64 {
         units.into_iter()
             .map(|u| self.exterior_boundary_length[u.0 as usize])
@@ -187,10 +189,9 @@ impl Region {
     /// includes all boundary edges per unit individually).  For a single-unit
     /// subset the two agree; for multi-unit subsets only inter-subset edges
     /// count, giving the compactness of the merged shape.
-    pub fn compactness_of(&self, units: impl IntoIterator<Item = UnitId>) -> f64 {
-        let units: Vec<UnitId> = units.into_iter().collect();
-        let a = self.area_of(units.iter().copied());
-        let p = self.perimeter_of(units.iter().copied());
+    pub fn compactness_of(&self, units: impl IntoIterator<Item = UnitId> + Clone) -> f64 {
+        let a = self.area_of(units.clone());
+        let p = self.perimeter_of(units);
         if p == 0.0 { return 0.0; }
         4.0 * std::f64::consts::PI * a / (p * p)
     }

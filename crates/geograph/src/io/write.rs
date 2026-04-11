@@ -12,7 +12,10 @@ const COORD_SCALE: f64 = 1e7;
 fn write_u32(w: &mut impl Write, v: u32) -> std::io::Result<()> { w.write_all(&v.to_le_bytes()) }
 fn write_i32(w: &mut impl Write, v: i32) -> std::io::Result<()> { w.write_all(&v.to_le_bytes()) }
 fn write_f64(w: &mut impl Write, v: f64) -> std::io::Result<()> { w.write_all(&v.to_bits().to_le_bytes()) }
-fn encode_coord(v: f64) -> i32 { (v * COORD_SCALE).round() as i32 }
+fn encode_coord(v: f64) -> i32 {
+    debug_assert!(v.abs() <= 180.0, "coordinate {v} is outside WGS-84 range ±180°");
+    (v * COORD_SCALE).round() as i32
+}
 
 /// Serialise a [`Region`] to `writer` using the geograph binary format.
 ///

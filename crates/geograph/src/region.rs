@@ -146,7 +146,7 @@ impl Region {
     pub fn num_units(&self) -> usize { self.num_units }
 
     /// Return all geometries, reconstructing lazily from the DCEL if needed.
-    fn all_geometries(&self) -> &Vec<MultiPolygon<f64>> {
+    fn all_geometries(&self) -> &[MultiPolygon<f64>] {
         self.geometries.get_or_init(|| {
             build::reconstruct_geometries(&self.dcel, &self.face_to_unit, self.num_units)
         })

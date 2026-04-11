@@ -338,6 +338,11 @@ fn build_dcel(
                 let face_ab = if is_outer {
                     ring_face[u][ri].unwrap()
                 } else {
+                    // This is a hole-ring edge.  `hole_edge_face` was populated in step 2c
+                    // by looking up the enclosing outer-ring face for every hole edge.
+                    // If the edge is absent from the map, no enclosing outer face was found,
+                    // meaning the hole ring borders the region exterior — OUTER_FACE is
+                    // correct and will make he_ab a boundary half-edge with no interior face.
                     *hole_edge_face.get(&pack_edge(a, b)).unwrap_or(&OUTER_FACE)
                 };
 

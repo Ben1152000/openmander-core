@@ -22,40 +22,30 @@ use crate::dcel::{Dcel, HalfEdgeId};
 use super::{Region, Ring};
 
 // ---------------------------------------------------------------------------
-// Public API
+// Arc data (Steps 1–2)
 // ---------------------------------------------------------------------------
 
-impl Region {
-    /// Return simplified geometries for all units, preserving shared topology.
-    ///
-    /// Each arc (maximal chain of half-edges whose interior vertices have
-    /// out-degree exactly 2) is simplified once with Douglas-Peucker; adjacent
-    /// units share the identical simplified coordinates, eliminating gaps at
-    /// shared boundaries.
-    ///
-    /// At `tolerance == 0.0` the original geometries are cloned unchanged.
-    /// Units that collapse to fewer than 3 points after simplification are
-    /// represented by an empty `MultiPolygon`.
-    pub fn simplified_geometries(&self, tolerance: f64) -> Vec<MultiPolygon<f64>> {
-        if tolerance == 0.0 {
-            return self.all_geometries().to_vec();
-        }
+/// Pre-computed arc table for topology-preserving simplification.
+///
+/// Computed once per (Region, tolerance) pair; shared across all units
+/// during Step 3 reconstruction so the full table doesn't need to be
+/// rebuilt for each unit.
+struct ArcData {
+    arc_id:      Vec<usize>,
+    arc_fwd:     Vec<bool>,
+    arc_store:   Vec<Vec<Coord<f64>>>,
+    arc_by_start: Vec<usize>,
+}
 
-        let dcel = &self.dcel;
+impl ArcData {
+    fn build(dcel: &Dcel<Coord<f64>>, tolerance: f64) -> Self {
         let num_half_edges = dcel.num_half_edges();
 
-        // ── Step 1: vertex out-degree ─────────────────────────────────────────
         let mut out_degree: Vec<u32> = vec![0; dcel.num_vertices()];
         for i in 0..num_half_edges {
             out_degree[dcel.half_edge(HalfEdgeId(i as u32)).origin.0 as usize] += 1;
         }
 
-        // ── Step 2: walk arcs and simplify ────────────────────────────────────
-        //
-        // arc_id[he]     = canonical start half-edge index of the arc he belongs to
-        // arc_fwd[he]    = true if he is traversed forward in its canonical arc
-        // arc_store      = simplified coords per arc (indexed by arc_store_idx)
-        // arc_by_start   = arc_store_idx for a given canonical start he index
         let mut arc_id:      Vec<usize> = vec![usize::MAX; num_half_edges];
         let mut arc_fwd:     Vec<bool>  = vec![true;        num_half_edges];
         let mut arc_store:   Vec<Vec<Coord<f64>>> = Vec::new();
@@ -124,46 +114,122 @@ impl Region {
             arc_by_start[start_id] = idx;
         }
 
-        // ── Step 3: reconstruct unit geometries from simplified arcs ──────────
+        // `visited` and `out_degree` are dropped here.
+        ArcData { arc_id, arc_fwd, arc_store, arc_by_start }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+impl Region {
+    /// Call `callback` for each unit's simplified geometry, one at a time.
+    ///
+    /// More memory-efficient than [`simplified_geometries`] because it never
+    /// materialises the entire geometry array simultaneously.
+    ///
+    /// * At `tolerance == 0.0` the callback receives a reference into the
+    ///   cached geometry array — no copy is made.
+    /// * At `tolerance > 0.0` the arc table is built once (Steps 1–2), then
+    ///   each unit's `MultiPolygon` is constructed and passed to the callback
+    ///   before moving on to the next unit.
+    ///
+    /// The callback may return any `Result<(), E>`; the first error short-circuits
+    /// iteration and is returned to the caller.
+    pub fn for_each_simplified_geometry<E>(
+        &self,
+        tolerance: f64,
+        mut callback: impl FnMut(usize, &MultiPolygon<f64>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if tolerance == 0.0 {
+            for (i, mp) in self.all_geometries().iter().enumerate() {
+                callback(i, mp)?;
+            }
+            return Ok(());
+        }
+
+        let dcel = &self.dcel;
+        let ad = ArcData::build(dcel, tolerance);
+
+        for unit in self.unit_ids() {
+            let mp = reconstruct_unit(self, dcel, unit, &ad);
+            callback(unit.0 as usize, &mp)?;
+        }
+        Ok(())
+    }
+
+    /// Return simplified geometries for all units, preserving shared topology.
+    ///
+    /// Each arc (maximal chain of half-edges whose interior vertices have
+    /// out-degree exactly 2) is simplified once with Douglas-Peucker; adjacent
+    /// units share the identical simplified coordinates, eliminating gaps at
+    /// shared boundaries.
+    ///
+    /// At `tolerance == 0.0` the original geometries are cloned unchanged.
+    /// Units that collapse to fewer than 3 points after simplification are
+    /// represented by an empty `MultiPolygon`.
+    ///
+    /// Prefer [`for_each_simplified_geometry`] when memory is constrained,
+    /// as this method materialises every unit's geometry simultaneously.
+    pub fn simplified_geometries(&self, tolerance: f64) -> Vec<MultiPolygon<f64>> {
+        if tolerance == 0.0 {
+            return self.all_geometries().to_vec();
+        }
+
+        let dcel = &self.dcel;
+        let ad = ArcData::build(dcel, tolerance);
         let mut result: Vec<MultiPolygon<f64>> = Vec::with_capacity(self.num_units());
 
         for unit in self.unit_ids() {
-            let mut polygons: Vec<Polygon<f64>> = Vec::new();
-
-            for &face_id in self.unit_faces(unit) {
-                let face = dcel.face(face_id);
-                let primary_start = match face.half_edge {
-                    Some(he) => he,
-                    None => continue,
-                };
-
-                // Primary outer cycle + inner hole cycles (for donut-shaped units).
-                let mut cycle_starts: Vec<HalfEdgeId> = vec![primary_start];
-                cycle_starts.extend_from_slice(self.face_inner_cycle_starts(face_id));
-
-                let mut rings: Vec<LineString<f64>> = Vec::new();
-                for cycle_start in cycle_starts {
-                    let ring = collect_ring(
-                        dcel, cycle_start,
-                        &arc_id, &arc_fwd, &arc_store, &arc_by_start,
-                    );
-                    // Closed ring needs at least 3 distinct points + closing duplicate = 4 coords.
-                    if ring.len() >= 4 {
-                        rings.push(LineString::from(ring));
-                    }
-                }
-
-                if !rings.is_empty() {
-                    let exterior = rings.remove(0);
-                    polygons.push(Polygon::new(exterior, rings));
-                }
-            }
-
-            result.push(MultiPolygon(polygons));
+            result.push(reconstruct_unit(self, dcel, unit, &ad));
         }
-
         result
     }
+}
+
+// ---------------------------------------------------------------------------
+// Per-unit reconstruction (Step 3)
+// ---------------------------------------------------------------------------
+
+fn reconstruct_unit(
+    region: &Region,
+    dcel:   &Dcel<Coord<f64>>,
+    unit:   crate::UnitId,
+    ad:     &ArcData,
+) -> MultiPolygon<f64> {
+    let mut polygons: Vec<Polygon<f64>> = Vec::new();
+
+    for &face_id in region.unit_faces(unit) {
+        let face = dcel.face(face_id);
+        let primary_start = match face.half_edge {
+            Some(he) => he,
+            None => continue,
+        };
+
+        // Primary outer cycle + inner hole cycles (for donut-shaped units).
+        let mut cycle_starts: Vec<HalfEdgeId> = vec![primary_start];
+        cycle_starts.extend_from_slice(region.face_inner_cycle_starts(face_id));
+
+        let mut rings: Vec<LineString<f64>> = Vec::new();
+        for cycle_start in cycle_starts {
+            let ring = collect_ring(
+                dcel, cycle_start,
+                &ad.arc_id, &ad.arc_fwd, &ad.arc_store, &ad.arc_by_start,
+            );
+            // Closed ring needs at least 3 distinct points + closing duplicate = 4 coords.
+            if ring.len() >= 4 {
+                rings.push(LineString::from(ring));
+            }
+        }
+
+        if !rings.is_empty() {
+            let exterior = rings.remove(0);
+            polygons.push(Polygon::new(exterior, rings));
+        }
+    }
+
+    MultiPolygon(polygons)
 }
 
 // ---------------------------------------------------------------------------

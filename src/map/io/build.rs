@@ -200,20 +200,6 @@ impl MapLayer {
             .collect()
     }
 
-    /// Assign parent references from a provided geo_id → parent geo_id map.
-    fn assign_parents_from_map(
-        &mut self,
-        parent_ty: GeoType,
-        parent_map: HashMap<GeoId, GeoId>,
-    ) -> Result<()> {
-        self.geo_ids.iter().enumerate()
-            .try_for_each(|(i, geo_id)| {
-                parent_map.get(geo_id)
-                    .ok_or_else(|| anyhow!("No parent found for entity with geo_id: {:?}", geo_id))
-                    .map(|p| self.parents[i].set(parent_ty, Some(p.clone())))
-            })
-    }
-
     /// Assign VTD parent references from a crosswalk map, with a spatial fallback for any
     /// blocks absent from the crosswalk.
     ///
@@ -315,6 +301,62 @@ impl MapLayer {
             (GeoId::new_block("150039812001018"), GeoId::new_block("150039812001016")),
             (GeoId::new_block("150039812001021"), GeoId::new_block("150039812001018")),
             (GeoId::new_block("150039812001000"), GeoId::new_block("150039812001021")),
+            // Chugach Census Area, Alaska
+            (GeoId::new_block("020630002001316"), GeoId::new_block("020630003005430")),
+            // Kodiak Island Borough, Alaska
+            (GeoId::new_block("021500001002002"), GeoId::new_block("021220012001250")),
+            (GeoId::new_block("021500001002084"), GeoId::new_block("021220012001250")),
+            (GeoId::new_block("021500001001349"), GeoId::new_block("021500001001246")),
+            (GeoId::new_block("021500001001293"), GeoId::new_block("021640001001354")),
+            // Aleutians East Borough, Alaska
+            (GeoId::new_block("020130001003109"), GeoId::new_block("020130001003103")),
+            (GeoId::new_block("020130001002200"), GeoId::new_block("020130001002182")),
+            (GeoId::new_block("020130001001291"), GeoId::new_block("020130001001068")),
+            (GeoId::new_block("020130001001280"), GeoId::new_block("020130001002194")),
+            (GeoId::new_block("020130001001212"), GeoId::new_block("020130001001132")),
+            (GeoId::new_block("020130001001290"), GeoId::new_block("020130001001001")),
+            // Aleutians West Census Area, Alaska
+            (GeoId::new_block("020160001001475"), GeoId::new_block("020160001001242")),
+            (GeoId::new_block("020160001001345"), GeoId::new_block("020160001001242")),
+            (GeoId::new_block("020160001001000"), GeoId::new_block("020160001001242")),
+            (GeoId::new_block("020160001001297"), GeoId::new_block("020160001001242")),
+            (GeoId::new_block("020160001001302"), GeoId::new_block("020160001001237")),
+            (GeoId::new_block("020160001001350"), GeoId::new_block("020160001001310")),
+            (GeoId::new_block("020160001001429"), GeoId::new_block("020160001001351")),
+            (GeoId::new_block("020160001001391"), GeoId::new_block("020160001001432")),
+            (GeoId::new_block("020160001001137"), GeoId::new_block("020160001001390")),
+            (GeoId::new_block("020160001001439"), GeoId::new_block("020160001001051")),
+            (GeoId::new_block("020160001001472"), GeoId::new_block("020160001001051")),
+            (GeoId::new_block("020160001001435"), GeoId::new_block("020160001001177")),
+            (GeoId::new_block("020160001001334"), GeoId::new_block("020160001001187")),
+            (GeoId::new_block("020160001001317"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001447"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001469"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001275"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001293"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001312"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001315"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001320"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001348"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001364"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001393"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001427"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001454"), GeoId::new_block("020160001001182")),
+            (GeoId::new_block("020160001001463"), GeoId::new_block("020160001001182")),
+            // Dillingham Census Area, Alaska
+            (GeoId::new_block("020700001001241"), GeoId::new_block("020700001001059")),
+            (GeoId::new_block("020700001001268"), GeoId::new_block("020700001001059")),
+            // Bethel Census Area, Alaska
+            (GeoId::new_block("020500001001141"), GeoId::new_block("020500001001052")),
+            (GeoId::new_block("020500001001061"), GeoId::new_block("020500001001113")),
+            (GeoId::new_block("020500001001161"), GeoId::new_block("020500001001113")),
+            // Nome Census Area, Alaska
+            (GeoId::new_block("021800001001600"), GeoId::new_block("021800001001319")),
+            (GeoId::new_block("021800001001605"), GeoId::new_block("021800001001297")),
+            (GeoId::new_block("021800001001590"), GeoId::new_block("021800001001184")),
+            (GeoId::new_block("021800001001608"), GeoId::new_block("021800001001184")),
+            (GeoId::new_block("021800001001597"), GeoId::new_block("021800001001180")),
+            (GeoId::new_block("021800001001582"), GeoId::new_block("021800001001180")),
         ];
 
         let unit_pairs: Vec<(geograph::UnitId, geograph::UnitId)> = patches.iter()

@@ -3,7 +3,7 @@
 use std::{f64::consts::PI, io::Cursor};
 
 use anyhow::Result;
-use geo::Polygon;
+use geo::Polygon; // used by polygon_bounds and encode_poly_for_tile closure
 
 /// Convert longitude to Web Mercator X coordinate (in radians)
 pub(super) fn lon_to_mercator_x(lon: f64) -> f64 { lon.to_radians() }
@@ -225,7 +225,7 @@ pub(crate) fn write_to_pmtiles_bytes(
 ) -> Result<Vec<u8>> {
     use pmtiles2::{PMTiles, TileType, Compression as PmtilesCompression};
     use pmtiles2::util::tile_id;
-    use mvt::{Tile, GeomEncoder, GeomType};
+    use mvt::{Tile, GeomEncoder, GeomType, GeomData};
     use flate2::write::GzEncoder;
     use flate2::Compression as Flate2Compression;
     use std::io::Write;
@@ -282,10 +282,13 @@ pub(crate) fn write_to_pmtiles_bytes(
         tile_size_degrees / SIMPLIFICATION_DIVISOR
     }
 
-    // Maximum tiles a single polygon's bounding box may span at a given zoom level.
-    // Polygons exceeding this (e.g. huge open-water census blocks) are skipped —
-    // they are degenerate for redistricting and would clone the polygon tens of
-    // thousands of times, causing OOM on large states like Michigan.
+    // Maximum tiles a single polygon's bounding box may span along either axis at
+    // a given zoom level.  Polygons exceeding this (huge open-water or tundra
+    // census blocks) are skipped — they are degenerate for redistricting and
+    // would produce tens of thousands of tile copies, causing OOM on large states.
+    // At zoom 14 each tile ≈ 2.4 km, so 32 tiles ≈ 76 km; blocks wider than
+    // that are filtered.  They still appear at lower zoom levels where the tile
+    // size is larger than MAX_TILE_SPREAD × tile_km.
     const MAX_TILE_SPREAD: u64 = 64;
 
     // Create PMTiles writer
@@ -322,11 +325,51 @@ pub(crate) fn write_to_pmtiles_bytes(
     let extent_f = extent as f64;
     let buffer: f64 = 256.0;
 
+    // Helper: encode one polygon into MVT geometry bytes for a specific tile.
+    // Returns None if the polygon clips to fewer than 3 points.
+    let encode_poly_for_tile = |poly: &Polygon<f64>, zoom: u8, tile_x: u64, tile_y: u64| -> Result<Option<GeomData>> {
+        let mut encoder = GeomEncoder::new(GeomType::Polygon);
+
+        // Exterior ring
+        let ext_raw: Vec<(f64, f64)> = poly.exterior().coords()
+            .filter(|c| c.x.is_finite() && c.y.is_finite())
+            .map(|c| world_to_tile_coords(c.x, c.y, zoom, tile_x, tile_y, extent_f))
+            .collect();
+        let ext_clipped = clean_ring(
+            clip_ring_to_tile(&ext_raw, extent_f, buffer).into_iter()
+                .map(|(x, y)| (x.round(), y.round())).collect()
+        );
+        if ext_clipped.len() < 3 { return Ok(None); }
+        for (x, y) in &ext_clipped { encoder = encoder.point(*x, *y)?; }
+        encoder = encoder.complete()?;
+
+        // Interior rings
+        for interior in poly.interiors() {
+            let int_raw: Vec<(f64, f64)> = interior.coords()
+                .filter(|c| c.x.is_finite() && c.y.is_finite())
+                .map(|c| world_to_tile_coords(c.x, c.y, zoom, tile_x, tile_y, extent_f))
+                .collect();
+            let int_clipped = clean_ring(
+                clip_ring_to_tile(&int_raw, extent_f, buffer).into_iter()
+                    .map(|(x, y)| (x.round(), y.round())).collect()
+            );
+            if int_clipped.len() < 3 { continue; }
+            for (x, y) in &int_clipped { encoder = encoder.point(*x, *y)?; }
+            encoder = encoder.complete()?;
+        }
+
+        Ok(Some(encoder.encode()?))
+    };
+
     // Process one zoom level at a time so each zoom level's tile data is dropped
     // before the next is processed, bounding peak memory to a single zoom level.
+    //
+    // tile_coords -> layer_name -> [(feature_idx, encoded_geom_bytes)]
+    // Storing pre-encoded bytes (∼3 bytes/coord) rather than Polygon<f64> clones
+    // (∼16 bytes/coord) cuts per-tile memory by ~5×, which is critical for large
+    // states with complex geometries (Alaska, etc.).
     for zoom in global_min_zoom..=global_max_zoom {
-        // tile_coords -> layer_name -> [(idx, polygon)]
-        let mut zoom_tiles: HashMap<(u64, u64), HashMap<&str, Vec<(usize, Polygon<f64>)>>> = HashMap::new();
+        let mut zoom_tiles: HashMap<(u64, u64), HashMap<&str, Vec<(usize, GeomData)>>> = HashMap::new();
 
         for (layer_name, region, _geo_ids, min_zoom, max_zoom) in &layers {
             if zoom < *min_zoom || zoom > *max_zoom {
@@ -334,11 +377,10 @@ pub(crate) fn write_to_pmtiles_bytes(
             }
             let tolerance = calculate_tolerance_for_zoom(zoom, *max_zoom);
 
-            // Topology-preserving simplification: each shared arc is simplified
-            // exactly once, so adjacent units share identical boundary coordinates.
-            let simplified_geoms = region.simplified_geometries(tolerance);
-
-            for (idx, mp) in simplified_geoms.iter().enumerate() {
+            // Stream one unit at a time via callback — never materialises the
+            // full simplified-geometry array simultaneously.
+            let mut skipped_count = 0usize;
+            region.for_each_simplified_geometry(tolerance, |idx, mp| -> Result<()> {
                 for poly in &mp.0 {
                     let (poly_min_lon, poly_min_lat, poly_max_lon, poly_max_lat) = polygon_bounds(poly);
 
@@ -352,93 +394,51 @@ pub(crate) fn write_to_pmtiles_bytes(
                     let tile_min_y = lat_to_tile_y(poly_max_lat, zoom);
                     let tile_max_y = lat_to_tile_y(poly_min_lat, zoom);
 
-                    // Skip degenerate polygons whose bbox spans too many tiles
-                    // (open-water census blocks on the Great Lakes, etc.).
+                    // Skip polygons whose bbox spans too many tiles (huge open-water
+                    // or tundra census blocks) — they would OOM large states.
                     if tile_max_x.saturating_sub(tile_min_x) > MAX_TILE_SPREAD
                         || tile_max_y.saturating_sub(tile_min_y) > MAX_TILE_SPREAD
                     {
+                        skipped_count += 1;
+                        let _ = idx; // suppress unused-variable warning
                         continue;
                     }
 
                     for tile_x in tile_min_x..=tile_max_x {
                         for tile_y in tile_min_y..=tile_max_y {
-                            zoom_tiles
-                                .entry((tile_x, tile_y))
-                                .or_default()
-                                .entry(layer_name)
-                                .or_default()
-                                .push((idx, poly.clone()));
+                            // Clip and encode immediately — store bytes, not Polygon clones.
+                            if let Some(geom_bytes) = encode_poly_for_tile(poly, zoom, tile_x, tile_y)? {
+                                zoom_tiles
+                                    .entry((tile_x, tile_y))
+                                    .or_default()
+                                    .entry(layer_name)
+                                    .or_default()
+                                    .push((idx, geom_bytes));
+                            }
                         }
                     }
                 }
+                Ok(())
+            })?;
+            if skipped_count > 0 {
+                eprintln!(
+                    "[pmtiles] z{zoom} layer {layer_name}: skipped {skipped_count} polygon(s) \
+                     whose bbox exceeds MAX_TILE_SPREAD ({MAX_TILE_SPREAD} tiles) — \
+                     large open-water or rural blocks omitted at this zoom level"
+                );
             }
         }
 
         // Build and write all tiles for this zoom level, then drop zoom_tiles.
-        for ((tile_x, tile_y), layer_geoms) in zoom_tiles.iter() {
+        for ((tile_x, tile_y), layer_geoms) in zoom_tiles.into_iter() {
             let mut tile = Tile::new(extent);
 
-            for (layer_name, polygons) in layer_geoms.iter() {
+            for (layer_name, features) in layer_geoms.into_iter() {
                 let mut layer = tile.create_layer(layer_name);
 
-                for (idx, poly) in polygons {
-                    let mut encoder = GeomEncoder::new(GeomType::Polygon);
-
-                    // Process exterior ring
-                    let exterior_coords: Vec<_> = poly.exterior().coords().collect();
-                    if exterior_coords.len() < 3 {
-                        continue;
-                    }
-
-                    let exterior_tile_coords_raw: Vec<(f64, f64)> = exterior_coords.iter()
-                        .filter(|coord| coord.x.is_finite() && coord.y.is_finite())
-                        .map(|coord| world_to_tile_coords(coord.x, coord.y, zoom, *tile_x, *tile_y, extent_f))
-                        .collect();
-
-                    let exterior_clipped = clip_ring_to_tile(&exterior_tile_coords_raw, extent_f, buffer);
-                    let mut exterior_tile_coords: Vec<(f64, f64)> = exterior_clipped.iter()
-                        .map(|(x, y)| (x.round(), y.round()))
-                        .collect();
-                    exterior_tile_coords = clean_ring(exterior_tile_coords);
-                    if exterior_tile_coords.len() < 3 {
-                        continue;
-                    }
-
-                    for (x, y) in exterior_tile_coords.iter() {
-                        encoder = encoder.point(*x, *y)?;
-                    }
-                    encoder = encoder.complete()?;
-
-                    // Process interior rings
-                    for interior in poly.interiors() {
-                        let interior_coords: Vec<_> = interior.coords().collect();
-                        if interior_coords.len() < 3 {
-                            continue;
-                        }
-
-                        let interior_tile_coords_raw: Vec<(f64, f64)> = interior_coords.iter()
-                            .filter(|coord| coord.x.is_finite() && coord.y.is_finite())
-                            .map(|coord| world_to_tile_coords(coord.x, coord.y, zoom, *tile_x, *tile_y, extent_f))
-                            .collect();
-
-                        let interior_clipped = clip_ring_to_tile(&interior_tile_coords_raw, extent_f, buffer);
-                        let mut interior_tile_coords: Vec<(f64, f64)> = interior_clipped.iter()
-                            .map(|(x, y)| (x.round(), y.round()))
-                            .collect();
-                        interior_tile_coords = clean_ring(interior_tile_coords);
-                        if interior_tile_coords.len() < 3 {
-                            continue;
-                        }
-
-                        for (x, y) in interior_tile_coords.iter() {
-                            encoder = encoder.point(*x, *y)?;
-                        }
-                        encoder = encoder.complete()?;
-                    }
-
-                    let geom_data = encoder.encode()?;
+                for (idx, geom_data) in features {
                     let mut feature = layer.into_feature(geom_data);
-                    feature.set_id(*idx as u64);
+                    feature.set_id(idx as u64);
                     feature.add_tag_string("index", &idx.to_string());
                     layer = feature.into_layer();
                 }
@@ -452,10 +452,10 @@ pub(crate) fn write_to_pmtiles_bytes(
             gz.write_all(&tile_data)?;
             let compressed = gz.finish()?;
 
-            let tid = tile_id(zoom, *tile_x, *tile_y);
+            let tid = tile_id(zoom, tile_x, tile_y);
             pm.add_tile(tid, compressed)?;
         }
-        // zoom_tiles is dropped here, freeing all polygon clones for this zoom level.
+        // zoom_tiles is dropped here, freeing all encoded bytes for this zoom level.
     }
 
     // Write PMTiles to bytes

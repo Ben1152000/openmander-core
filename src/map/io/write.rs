@@ -188,6 +188,41 @@ impl Map {
             }
         }
 
+        // High-latitude states (above the Arctic Circle, ~66.5°N) have extremely
+        // complex coastal/tundra blocks that cause OOM at high zoom levels.
+        // Cap all layer max zooms to 12 for such states.
+        const POLAR_CIRCLE_LAT: f64 = 66.5;
+        const HIGH_LAT_MAX_ZOOM: u8 = 12;
+
+        let (state_min_lat, state_max_lat) = layer_info.iter()
+            .find(|(name, ..)| *name == "state")
+            .map(|(_, region, ..)| {
+                region.unit_ids()
+                    .flat_map(|unit| {
+                        region.geometry(unit).0.iter()
+                            .flat_map(|poly| poly.exterior().coords().map(|c| c.y))
+                            .collect::<Vec<_>>()
+                    })
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(mn, mx), y| (mn.min(y), mx.max(y)))
+            })
+            .unwrap_or((0.0, 0.0));
+
+        if state_max_lat > POLAR_CIRCLE_LAT || state_min_lat < -POLAR_CIRCLE_LAT {
+            let desc = if state_max_lat > POLAR_CIRCLE_LAT {
+                format!("above the Arctic Circle ({state_max_lat:.1}°N)")
+            } else {
+                format!("below the Antarctic Circle ({state_min_lat:.1}°S)")
+            };
+            eprintln!(
+                "[write_pack] state extends {desc} \
+                 — capping PMTiles max zoom to {HIGH_LAT_MAX_ZOOM} and raising min zoom by 2 for all layers"
+            );
+            for (_, _, min_zoom, max_zoom, _) in layer_info.iter_mut() {
+                *max_zoom = (*max_zoom).min(HIGH_LAT_MAX_ZOOM);
+                *min_zoom = (*min_zoom + 2).max(4);
+            }
+        }
+
         let pmtiles_layers: Vec<(&str, &geograph::Region, Option<&[String]>, u8, u8)> = layer_info.iter()
             .map(|(name, region, min_zoom, max_zoom, idx)| {
                 (*name, *region, Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)

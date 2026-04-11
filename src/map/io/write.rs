@@ -1,11 +1,10 @@
 use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result};
-use polars::{df, frame::DataFrame, prelude::DataFrameJoinOps};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    map::{GeoType, Map, MapLayer, ParentRefs, util},
+    map::{GeoType, Map, MapLayer, util},
     map::pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats},
 };
 
@@ -22,36 +21,13 @@ fn pmtiles_zoom_range_for_layer(ty: GeoType) -> (u8, u8) {
         GeoType::State  =>  (4, 14),
         GeoType::County =>  (4, 10),
         GeoType::Tract  =>  (4, 12),
-        GeoType::VTD    =>  (4, 14),  // Start at 4 to enable preloading
+        GeoType::VTD    =>  (4, 14),
         GeoType::Group  =>  (8, 12),
         GeoType::Block  => (10, 14),
     }
 }
 
 impl MapLayer {
-    /// Prepare entity data (with parent refs) for writing to a pack file.
-    fn pack_data(&self) -> Result<DataFrame> {
-        /// Helper to extract parent IDs as strings
-        fn get_parents(parents: &[ParentRefs], ty: GeoType) -> Vec<Option<&str>> {
-            parents.iter()
-                .map(|parents| parents.get(ty).map(|geo_id| geo_id.id()))
-                .collect()
-        }
-
-        let parents_df = df![
-            "geo_id" => self.geo_ids.iter().map(|geo_id| geo_id.id()).collect::<Vec<_>>(),
-            "parent_state" => get_parents(&self.parents, GeoType::State),
-            "parent_county" => get_parents(&self.parents, GeoType::County),
-            "parent_tract" => get_parents(&self.parents, GeoType::Tract),
-            "parent_group" => get_parents(&self.parents, GeoType::Group),
-            "parent_vtd" => get_parents(&self.parents, GeoType::VTD),
-        ]?;
-
-        self.unit_data
-            .inner_join(&parents_df, ["geo_id"], ["geo_id"])
-            .context("inner_join on 'geo_id' failed when preparing parquet")
-    }
-
     fn write_to_pack_sink_with_formats(
         &self,
         sink: &mut dyn PackSink,
@@ -63,21 +39,30 @@ impl MapLayer {
 
         let data_ext = match formats.data.as_str() {
             "parquet" => "parquet",
-            "csv" => "csv",
-            _ => return Err(anyhow::anyhow!("Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data)),
+            "csv"     => "csv",
+            _ => return Err(anyhow::anyhow!(
+                "Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data
+            )),
         };
         let data_file = format!("data/{layer_name}.{data_ext}");
 
         counts.insert(layer_name, self.geo_ids.len());
 
-        // data (parquet or csv)
         let data_bytes = match formats.data.as_str() {
+            "csv" => crate::io::csv::pack::write_pack_csv(
+                &self.geo_ids, &self.unit_names, &self.parents, &self.unit_weights,
+            )?,
             #[cfg(feature = "parquet")]
-            "parquet" => crate::io::parquet::write_parquet_bytes(&self.pack_data()?)?,
-            "csv" => crate::io::csv::write_csv_bytes(&self.pack_data()?)?,
+            "parquet" => crate::io::parquet::write_parquet_bytes(
+                &self.geo_ids, &self.unit_names, &self.parents, &self.unit_weights,
+            )?,
             #[cfg(not(feature = "parquet"))]
-            "parquet" => return Err(anyhow::anyhow!("Parquet format requires 'parquet' feature to be enabled")),
-            _ => return Err(anyhow::anyhow!("Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data)),
+            "parquet" => return Err(anyhow::anyhow!(
+                "Parquet format requires the 'parquet' feature to be enabled"
+            )),
+            _ => return Err(anyhow::anyhow!(
+                "Unsupported data format: {}. Use 'parquet' or 'csv'.", formats.data
+            )),
         };
         sink.put(&data_file, &data_bytes)?;
         hashes.insert(data_file, FileHash { sha256: sha256_bytes(&data_bytes) });
@@ -88,7 +73,9 @@ impl MapLayer {
         {
             let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
             geograph::io::write(&self.region, &mut gz)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+                .map_err(|e| anyhow::anyhow!(
+                    "Failed to serialize region for {layer_name}: {e:?}"
+                ))?;
             gz.finish().context("Failed to finish gzip encoding for region")?;
         }
         sink.put(&region_file, &region_bytes)?;
@@ -109,10 +96,8 @@ impl Map {
         for dir in ["data", "geom"] {
             util::ensure_dir_exists(&path.join(dir))?;
         }
-
         let mut sink = DiskPack::new(path);
         self.write_to_pack_sink_with_format(&mut sink, path, format)?;
-
         Ok(())
     }
 
@@ -122,31 +107,35 @@ impl Map {
     }
 
     /// Write pack into any [`PackSink`] with the specified format.
-    pub fn write_to_pack_sink_with_format(&self, sink: &mut dyn PackSink, pack_root_for_manifest: &Path, format: PackFormat) -> Result<()> {
+    pub fn write_to_pack_sink_with_format(
+        &self,
+        sink: &mut dyn PackSink,
+        pack_root_for_manifest: &Path,
+        format: PackFormat,
+    ) -> Result<()> {
         let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
 
         let formats = PackFormats::from_pack_format(format);
-        
-        // Special handling for PMTiles: write all layers to a single file
+
         #[cfg(feature = "pmtiles")]
         if format == PackFormat::Pmtiles {
-            return self.write_to_pack_sink_with_multilayer_pmtiles(sink, pack_root_for_manifest, &formats, &mut counts, &mut file_hashes);
+            return self.write_to_pack_sink_with_multilayer_pmtiles(
+                sink, pack_root_for_manifest, &formats, &mut counts, &mut file_hashes,
+            );
         }
-        
+
         for layer in self.layers_iter() {
             layer.write_to_pack_sink_with_formats(sink, &formats, &mut counts, &mut file_hashes)?;
         }
 
-        // Create manifest with format information
         let manifest = Manifest::new(pack_root_for_manifest, counts, file_hashes, formats);
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
         sink.put("manifest.json", &manifest_bytes)?;
 
         Ok(())
     }
-    
-    /// Write all layers to a single PMTiles file (geom/geometries.pmtiles)
+
     #[cfg(feature = "pmtiles")]
     fn write_to_pack_sink_with_multilayer_pmtiles(
         &self,
@@ -156,34 +145,32 @@ impl Map {
         counts: &mut BTreeMap<&'static str, usize>,
         file_hashes: &mut BTreeMap<String, FileHash>,
     ) -> Result<()> {
-        // Write data and region files for each layer
         for layer in self.layers_iter() {
             let layer_name = layer.ty().to_str();
             let data_file = format!("data/{layer_name}.csv");
 
             counts.insert(layer_name, layer.geo_ids.len());
 
-            // Write data file
-            let data_bytes = crate::io::csv::write_csv_bytes(&layer.pack_data()?)?;
+            let data_bytes = crate::io::csv::pack::write_pack_csv(
+                &layer.geo_ids, &layer.unit_names, &layer.parents, &layer.unit_weights,
+            )?;
             sink.put(&data_file, &data_bytes)?;
             file_hashes.insert(data_file.clone(), FileHash { sha256: sha256_bytes(&data_bytes) });
 
-            // Write region file
             let region_file = format!("geom/{layer_name}.region.gz");
             let mut region_bytes: Vec<u8> = Vec::new();
             {
                 let mut gz = flate2::write::GzEncoder::new(&mut region_bytes, flate2::Compression::best());
                 geograph::io::write(&layer.region, &mut gz)
-                    .map_err(|e| anyhow::anyhow!("Failed to serialize region for {layer_name}: {e:?}"))?;
+                    .map_err(|e| anyhow::anyhow!(
+                        "Failed to serialize region for {layer_name}: {e:?}"
+                    ))?;
                 gz.finish().context("Failed to finish gzip encoding for region")?;
             }
             sink.put(&region_file, &region_bytes)?;
             file_hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
         }
 
-        // Collect all layers for the combined multi-layer PMTiles file.
-        // Each layer's Region is passed directly so topology-preserving
-        // simplification can share arc coordinates across adjacent units.
         let mut geo_id_vecs: Vec<Vec<String>> = Vec::new();
         let mut layer_info: Vec<(&str, &geograph::Region, u8, u8, usize)> = Vec::new();
 
@@ -201,26 +188,28 @@ impl Map {
             }
         }
 
-        // Build the pmtiles_layers vec with references into owned data.
         let pmtiles_layers: Vec<(&str, &geograph::Region, Option<&[String]>, u8, u8)> = layer_info.iter()
             .map(|(name, region, min_zoom, max_zoom, idx)| {
                 (*name, *region, Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)
             })
             .collect();
-        
-        // Write single multi-layer PMTiles file
+
         if !pmtiles_layers.is_empty() {
             let geom_file = "geom/geometries.pmtiles";
             let geom_bytes = crate::io::pmtiles::write_to_pmtiles_bytes(pmtiles_layers)?;
             sink.put(geom_file, &geom_bytes)?;
             file_hashes.insert(geom_file.to_string(), FileHash { sha256: sha256_bytes(&geom_bytes) });
         }
-        
-        // Create manifest
-        let manifest = Manifest::new(pack_root_for_manifest, (*counts).clone(), (*file_hashes).clone(), (*formats).clone());
+
+        let manifest = Manifest::new(
+            pack_root_for_manifest,
+            (*counts).clone(),
+            (*file_hashes).clone(),
+            (*formats).clone(),
+        );
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
         sink.put("manifest.json", &manifest_bytes)?;
-        
+
         Ok(())
     }
 }

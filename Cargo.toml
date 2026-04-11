@@ -12,14 +12,16 @@ include = ["src/**", "Cargo.toml", "README.md", "LICENSE*"]
 [dependencies]
 anyhow = "1"
 ahash = "0.8"
+csv = "1.3"
 flate2 = "1"
 geo = "0.30"
 # NOTE: keep this version in sync with workspace.package.version when publishing
 geograph = { path = "crates/geograph", version = "0.2.0" }
 hex = "0.4"
 ndarray = { version = "0.15", features = ["rayon"] }
-polars = { version = "0.50", default-features = false, features = ["csv", "polars-ops", "json"] }
-rand = "0.9"
+# Polars is only needed for Parquet I/O (not CSV, not WASM).
+polars = { version = "0.50", default-features = false, features = ["parquet"], optional = true }
+rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -39,9 +41,9 @@ web-sys = { version = "0.3", features = ["console"], optional = true }
 [features]
 default = ["download", "parquet", "pmtiles"]
 # Network functionality for downloading packs from URLs
-download = ["reqwest", "polars/lazy"]
+download = ["reqwest"]
 # Parquet data format (disabled for WASM: zstd-sys/lz4-sys require C compilation)
-parquet = ["polars/parquet"]
+parquet = ["dep:polars"]
 # PMTiles geometry storage (WASM-compatible)
 pmtiles = ["dep:pmtiles2", "dep:mvt"]
 # Redirect println!/eprintln! to browser console (WASM bindings)

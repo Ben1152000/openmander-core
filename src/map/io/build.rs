@@ -1,7 +1,6 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
-use anyhow::{Context, Ok, Result, anyhow, bail, ensure};
-use polars::{frame::DataFrame, prelude::*, series::Series};
+use anyhow::{Context, Result, anyhow, bail};
 use shapefile::dbase::{FieldValue, Record};
 
 use crate::{
@@ -9,157 +8,214 @@ use crate::{
     map::{GeoId, GeoType, Map, MapLayer, util},
 };
 
-impl MapLayer {
-    /// Loads layer geometries and data from a given .shp file path.
-    fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<Self> {
-        let (shapes, records) = crate::io::shp::read_shapefile(path)?;
+/// Intermediate data for one layer during the build phase.
+///
+/// Replaces `unit_data: Option<DataFrame>`.  Numeric columns are separated by
+/// type to avoid mixed-type dispatch; string columns beyond `geo_ids` and
+/// `unit_names` are not stored (they become `parents` on `MapLayer`).
+pub(crate) struct BuildLayerData {
+    pub geo_ids:    Vec<String>,   // join key; mirrors MapLayer.geo_ids order
+    pub unit_names: Vec<String>,   // "name" column
+    pub i64_cols:   Vec<(String, Vec<i32>)>,
+    pub f64_cols:   Vec<(String, Vec<f64>)>,
+}
 
-        /// Convert a vector of records to a DataFrame (using TIGER/PL census format)
-        fn records_to_dataframe(records: Vec<Record>, ty: GeoType) -> Result<DataFrame> {
-            /// Get the value of a character field from a Record
-            fn get_character_field(record: &Record, field: &str) -> Result<String> {
-                match record.get(field) {
-                    Some(FieldValue::Character(Some(s))) => Ok(s.trim().to_string()),
-                    _ => bail!("missing or invalid character field: {}", field)
+/// Incoming block-level data (from a CSV/txt file or computed values).
+/// Contains an id column plus typed numeric columns.
+struct IncomingData {
+    id_col:   Vec<String>,   // GEOID or similar join key
+    i64_cols: Vec<(String, Vec<i32>)>,
+    f64_cols: Vec<(String, Vec<f64>)>,
+}
+
+impl BuildLayerData {
+    fn len(&self) -> usize { self.geo_ids.len() }
+
+    /// Append columns from `incoming` to this layer by inner-joining on geo_id.
+    ///
+    /// For each unit in self, looks up its geo_id in `incoming.id_col` and
+    /// copies the matching numeric values.  Units with no match are left as 0.
+    fn merge_data(&mut self, incoming: &IncomingData, id_col_name: &str) {
+        // Build lookup: incoming id → row index.
+        let id_to_row: HashMap<&str, usize> = incoming.id_col.iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_str(), i))
+            .collect();
+
+        let n = self.len();
+
+        for (name, values) in &incoming.i64_cols {
+            let mut col = vec![0i32; n];
+            for (row, geo_id) in self.geo_ids.iter().enumerate() {
+                if let Some(&src_row) = id_to_row.get(geo_id.as_str()) {
+                    col[row] = values[src_row];
                 }
             }
-
-            /// Get the value of a numeric field from a Record
-            fn get_numeric_field(record: &Record, field: &str) -> Result<f64> {
-                match record.get(field) {
-                    Some(FieldValue::Numeric(Some(n))) => Ok(*n),
-                    _ => bail!("missing or invalid numeric field: {}", field)
-                }
-            }
-
-            Ok(DataFrame::new(vec![
-                Column::new(
-                    "geo_id".into(),
-                    records.iter()
-                        .map(|record| get_character_field(record, "GEOID20"))
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Column::new(
-                    "name".into(),
-                    records.iter()
-                        .map(|record| match ty {
-                            GeoType::County | GeoType::Group => get_character_field(record, "NAMELSAD20"),
-                            _ => get_character_field(record, "NAME20"),
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Column::new(
-                    "centroid_lon".into(),
-                    records.iter()
-                        .map(|record| {
-                            let s = get_character_field(record, "INTPTLON20")?;
-                            Ok::<f64>(s.trim().parse()?)
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Column::new(
-                    "centroid_lat".into(),
-                    records.iter()
-                        .map(|record| {
-                            let s = get_character_field(record, "INTPTLAT20")?;
-                            Ok::<f64>(s.trim().parse()?)
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Column::new(
-                    "area_m2".into(),
-                    records.iter()
-                        .map(|record| Ok::<f64>(
-                            get_numeric_field(record, "ALAND20")? + get_numeric_field(record, "AWATER20")?
-                        ))
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Column::new(
-                    "land_m2".into(),
-                    records.iter()
-                        .map(|record| get_numeric_field(record, "ALAND20"))
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Column::new(
-                    "water_m2".into(),
-                    records.iter()
-                        .map(|record| get_numeric_field(record, "AWATER20"))
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-            ])?)
+            self.i64_cols.push((name.clone(), col));
         }
 
-        let df = records_to_dataframe(records, ty)?
-            .with_row_index("idx".into(), None)?;
+        for (name, values) in &incoming.f64_cols {
+            let mut col = vec![0.0f64; n];
+            for (row, geo_id) in self.geo_ids.iter().enumerate() {
+                if let Some(&src_row) = id_to_row.get(geo_id.as_str()) {
+                    col[row] = values[src_row];
+                }
+            }
+            self.f64_cols.push((name.clone(), col));
+        }
 
-        // Convert shapes from shapefile::Polygon to geo::MultiPolygon<f64> and build Region.
+        // Suppress unused variable warning when the caller provides id_col_name.
+        let _ = id_col_name;
+    }
+
+    /// Convert to `WeightMatrix` + `unit_names`, consuming self.
+    fn finalize(self) -> (Vec<String>, crate::graph::WeightMatrix) {
+        use ndarray::Array2;
+
+        let n = self.geo_ids.len();
+        let n_i64 = self.i64_cols.len();
+        let n_f64 = self.f64_cols.len();
+
+        let mut i64_data = Array2::<i32>::zeros((n, n_i64));
+        let mut f64_data = Array2::<f64>::zeros((n, n_f64));
+
+        for (c, (_, values)) in self.i64_cols.iter().enumerate() {
+            for (r, &v) in values.iter().enumerate() {
+                i64_data[(r, c)] = v;
+            }
+        }
+        for (c, (_, values)) in self.f64_cols.iter().enumerate() {
+            for (r, &v) in values.iter().enumerate() {
+                f64_data[(r, c)] = v;
+            }
+        }
+
+        let i64_series = self.i64_cols.into_iter().map(|(name, _)| name).collect();
+        let f64_series = self.f64_cols.into_iter().map(|(name, _)| name).collect();
+
+        let weights = crate::graph::WeightMatrix::from_arrays(i64_series, i64_data, f64_series, f64_data);
+        (self.unit_names, weights)
+    }
+}
+
+impl MapLayer {
+    /// Load layer geometries from a TIGER/PL shapefile, returning the layer and
+    /// its initial `BuildLayerData` (shapefile attribute columns only).
+    fn from_tiger_shapefile(ty: GeoType, path: &Path) -> Result<(Self, BuildLayerData)> {
+        let (shapes, records) = crate::io::shp::read_shapefile(path)?;
+
+        fn get_character_field(record: &Record, field: &str) -> Result<String> {
+            match record.get(field) {
+                Some(FieldValue::Character(Some(s))) => Ok(s.trim().to_string()),
+                _ => bail!("missing or invalid character field: {}", field),
+            }
+        }
+
+        fn get_numeric_field(record: &Record, field: &str) -> Result<f64> {
+            match record.get(field) {
+                Some(FieldValue::Numeric(Some(n))) => Ok(*n),
+                _ => bail!("missing or invalid numeric field: {}", field),
+            }
+        }
+
+        let n = records.len();
+        let mut geo_id_strs:     Vec<String> = Vec::with_capacity(n);
+        let mut unit_names:      Vec<String> = Vec::with_capacity(n);
+        let mut centroid_lons:   Vec<f64>    = Vec::with_capacity(n);
+        let mut centroid_lats:   Vec<f64>    = Vec::with_capacity(n);
+        let mut area_m2_vals:    Vec<f64>    = Vec::with_capacity(n);
+        let mut land_m2_vals:    Vec<f64>    = Vec::with_capacity(n);
+        let mut water_m2_vals:   Vec<f64>    = Vec::with_capacity(n);
+
+        for record in &records {
+            geo_id_strs.push(get_character_field(record, "GEOID20")?);
+            unit_names.push(match ty {
+                GeoType::County | GeoType::Group => get_character_field(record, "NAMELSAD20")?,
+                _ => get_character_field(record, "NAME20")?,
+            });
+            centroid_lons.push(get_character_field(record, "INTPTLON20")?.trim().parse()?);
+            centroid_lats.push(get_character_field(record, "INTPTLAT20")?.trim().parse()?);
+            let aland  = get_numeric_field(record, "ALAND20")?;
+            let awater = get_numeric_field(record, "AWATER20")?;
+            area_m2_vals.push(aland + awater);
+            land_m2_vals.push(aland);
+            water_m2_vals.push(awater);
+        }
+
         let multipolygons: Vec<geo::MultiPolygon<f64>> = shapes.into_iter()
             .map(crate::io::shp::shape_to_multipolygon)
             .collect::<Result<Vec<_>>>()
-            .with_context(|| format!("Error converting shapes to multipolygons in shapefile: {}", path.display()))?;
+            .with_context(|| format!(
+                "Error converting shapes to multipolygons in shapefile: {}",
+                path.display()
+            ))?;
 
         let region = geograph::Region::new(multipolygons, None)
             .map_err(|e| anyhow!("Region construction failed for {:?}: {}: {:?}", ty, path.display(), e))?;
 
-        let n = df.height();
-        let geo_ids: Vec<GeoId> = df.column("geo_id")?.str()?.into_no_null_iter()
-            .map(|val| GeoId::new(ty, val))
+        let geo_ids: Vec<GeoId> = geo_id_strs.iter()
+            .map(|s| GeoId::new(ty, s))
             .collect();
         let index = geo_ids.iter().enumerate()
-            .map(|(i, geo_id)| (geo_id.clone(), i as u32))
+            .map(|(i, g)| (g.clone(), i as u32))
             .collect();
         let parents = vec![ParentRefs::default(); n];
-        // Weights computed from the initial df; finalized after all data is merged.
-        let unit_weights = Arc::new(crate::graph::WeightMatrix::from_dataframe(&df));
 
-        Ok(Self::new(ty, geo_ids, index, parents, df, unit_weights, Arc::new(region)))
-    }
+        // Initial BuildLayerData: shapefile columns only.
+        let build_data = BuildLayerData {
+            geo_ids: geo_id_strs,
+            unit_names,
+            i64_cols: vec![],
+            f64_cols: vec![
+                ("centroid_lon".to_string(), centroid_lons),
+                ("centroid_lat".to_string(), centroid_lats),
+                ("area_m2".to_string(),      area_m2_vals),
+                ("land_m2".to_string(),      land_m2_vals),
+                ("water_m2".to_string(),     water_m2_vals),
+            ],
+        };
 
-    /// Recompute weights from the fully-merged unit_data. Called at the end of `build_pack`
-    /// after all demographic/election data has been merged in.
-    fn finalize_weights(&mut self) {
-        self.unit_weights = Arc::new(crate::graph::WeightMatrix::from_dataframe(&self.unit_data));
-    }
+        // Initial WeightMatrix from shapefile columns only (updated in finalize_build).
+        let (_, initial_weights) = BuildLayerData {
+            geo_ids: build_data.geo_ids.clone(),
+            unit_names: build_data.unit_names.clone(),
+            i64_cols: build_data.i64_cols.clone(),
+            f64_cols: build_data.f64_cols.clone(),
+        }.finalize();
 
-    /// Merge new dataframe into self.data, preserving geo_id
-    fn merge_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
-        // Assert size of dataframe matches self.data
-        ensure!(
-            df.height() == self.unit_data.height(),
-            "insert_data: size of dataframe ({:?}) does not match expected size: {:?}.",
-            df.height(), self.unit_data.height()
+        let layer = MapLayer::new(
+            ty, geo_ids, index, parents,
+            build_data.unit_names.clone(),
+            Arc::new(initial_weights),
+            Arc::new(region),
         );
 
-        // Assert id_col exists and has type String
-        df.column(id_col)
-            .with_context(|| format!("insert_data: missing id column {:?}", id_col))?
-            .str().with_context(|| format!("insert_data: id_col {:?} must be of type String", id_col))?;
-
-        self.unit_data = self.unit_data.inner_join(&df, ["geo_id"], [id_col])?
-            .sort(["idx"], SortMultipleOptions::default())?;
-
-        Ok(())
+        Ok((layer, build_data))
     }
 
-    /// Assign parent references for each entity in the layer, based on their truncated geo_id.
+    /// Assign parent references for each entity, based on their truncated geo_id.
     fn assign_parents(&mut self, parent_ty: GeoType) {
         self.geo_ids.iter().enumerate()
-            .map(|(i, geo_id)| self.parents[i].set(parent_ty,Some(geo_id.to_parent(parent_ty))))
+            .map(|(i, geo_id)| self.parents[i].set(parent_ty, Some(geo_id.to_parent(parent_ty))))
             .collect()
     }
 
-    /// Assign parent references for each entity in the layer, based on a provided map of geo_id to parent geo_id.
-    fn assign_parents_from_map(&mut self, parent_ty: GeoType, parent_map: HashMap<GeoId, GeoId>) -> Result<()> {
+    /// Assign parent references from a provided geo_id → parent geo_id map.
+    fn assign_parents_from_map(
+        &mut self,
+        parent_ty: GeoType,
+        parent_map: HashMap<GeoId, GeoId>,
+    ) -> Result<()> {
         self.geo_ids.iter().enumerate()
-            .map(|(i, geo_id)| Ok(parent_map.get(geo_id)
-                .ok_or_else(|| anyhow!("No parent found for entity with geo_id: {:?}", geo_id))
-                .map(|geo_id| self.parents[i].set(parent_ty, Some(geo_id.clone())))))
-            .collect::<Result<_>>()?
+            .map(|(i, geo_id)| {
+                Ok(parent_map.get(geo_id)
+                    .ok_or_else(|| anyhow!("No parent found for entity with geo_id: {:?}", geo_id))
+                    .map(|p| self.parents[i].set(parent_ty, Some(p.clone())))?)
+            })
+            .collect::<Result<_>>()
     }
 
-    /// Bake manual island-bridge patches into the block layer's Region before
-    /// adjacency extraction.  Forced pairs are stored in the Region's adjacency
-    /// matrix so they survive serialisation round-trips through `.region.gz`.
+    /// Bake manual island-bridge patches into the block Region.
     fn patch_region(&mut self) -> Result<()> {
         let patches = [
             // Washington County, Rhode Island
@@ -207,7 +263,6 @@ impl MapLayer {
             (GeoId::new_block("150019912000001"), GeoId::new_block("150099902000018")),
         ];
 
-        // Convert GeoId patches to UnitId pairs (skip any that aren't present in this state).
         let unit_pairs: Vec<(geograph::UnitId, geograph::UnitId)> = patches.iter()
             .filter_map(|(left, right)| {
                 let a = self.index.get(left).copied()?;
@@ -218,129 +273,162 @@ impl MapLayer {
 
         if unit_pairs.is_empty() { return Ok(()); }
 
-        // Clone the Region and rebuild with forced adjacencies.
         let region = (*self.region).clone();
         self.region = Arc::new(region.with_forced_adjacencies(&unit_pairs));
 
         Ok(())
     }
 
-    /// Compute outer perimeters from the layer's Region (Block layer only),
-    /// returning a DataFrame suitable for `merge_block_data`.
-    ///
-    /// The returned DataFrame has:
-    ///   - "GEOID" (String) – block IDs
-    ///   - "outer_perimeter_m" (f64) – outer perimeter length in meters
-    fn compute_outer_perimeters_from_region(&self) -> Result<DataFrame> {
+    /// Compute outer perimeters from the block Region.
+    fn compute_outer_perimeters_from_region(&self) -> IncomingData {
         let region = &*self.region;
-
+        let geo_ids: Vec<String> = self.geo_ids.iter()
+            .map(|g| g.id().to_string())
+            .collect();
         let outer_perimeters: Vec<f64> = (0..self.len())
             .map(|i| region.exterior_boundary_length(geograph::UnitId(i as u32)))
             .collect();
 
-        assert_eq!(outer_perimeters.len(), self.geo_ids.len(),
-            "compute_outer_perimeters_from_region: length mismatch (got {}, expected {})",
-            outer_perimeters.len(),
-            self.geo_ids.len(),
-        );
-
-        let geo_ids = self.geo_ids.iter()
-            .map(|gid| gid.id().to_string())
-            .collect::<Vec<_>>();
-
-        Ok(DataFrame::new(vec![
-            Column::new("GEOID".into(), geo_ids),
-            Column::new("outer_perimeter_m".into(), outer_perimeters),
-        ])?)
+        IncomingData {
+            id_col:   geo_ids,
+            i64_cols: vec![],
+            f64_cols: vec![("outer_perimeter_m".to_string(), outer_perimeters)],
+        }
     }
-
 }
 
 impl Map {
-    /// Aggregate a DataFrame from a child layer to a parent layer.
-    #[cfg(feature = "download")]
-    fn aggregate_data(&self, df: &DataFrame, id_col: &str, ty: GeoType, parent_ty: GeoType) -> Result<DataFrame> {
-        let layer = self.layer(ty)
-            .ok_or_else(|| anyhow!("[Map.aggregate_data] Missing layer {:?}", ty))?;
+    /// Aggregate `incoming` from `child_ty` up to `parent_ty` by summing numeric columns.
+    fn aggregate_data(
+        &self,
+        incoming: &IncomingData,
+        child_ty: GeoType,
+        parent_ty: GeoType,
+    ) -> Result<IncomingData> {
+        let layer = self.layer(child_ty)
+            .ok_or_else(|| anyhow!("[Map.aggregate_data] Missing layer {:?}", child_ty))?;
 
-        // Convert id_col in df to parent id using index and parents
-        let parent_ids = df.column(id_col)?.str()?.into_no_null_iter()
-            .map(|id| {
-                let &i = layer.index.get(&GeoId::new(ty, id))
-                    .ok_or_else(|| anyhow!("geoid {:?} not found in index", id))?;
-                Ok(layer.parents.get(i as usize)
-                    .ok_or_else(|| anyhow!("row {} out of bounds (parents len = {})", i, layer.parents.len()))?
-                    .get(parent_ty)
-                    .ok_or_else(|| anyhow!("parent reference {:?} not defined at row {}", parent_ty, i))?
-                    .id())
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Replace id column and aggregate all other columns
-        let mut new_df = df.clone();
-        new_df.replace(id_col, Series::new(id_col.into(), parent_ids))?;
-
-        Ok(new_df.lazy()
-            .group_by([col(id_col)])
-            .agg(df.get_column_names().iter()
-                .filter(|&&c| c != id_col)
-                .map(|&c| col(c.as_str()).sum().alias(c.as_str())) // keep original names
-                .collect::<Vec<_>>(),
-            )
-            .collect()?)
-    }
-
-    /// Merge block-level data into a given dataframe, aggregating on id_col.
-    #[cfg(feature = "download")]
-    fn merge_block_data(&mut self, df: DataFrame, id_col: &str) -> Result<()> {
-        for &ty in GeoType::ALL.iter().filter(|&&ty| ty != GeoType::Block) {
-            let aggregated = self.aggregate_data(&df, id_col, GeoType::Block, ty)?;
-            if let Some(layer) = self.layer_mut(ty) { layer.merge_data(aggregated, id_col)? }
+        // Map each incoming id to its parent geo_id.
+        let mut parent_ids: Vec<String> = Vec::with_capacity(incoming.id_col.len());
+        for id in &incoming.id_col {
+            let geo_id = GeoId::new(child_ty, id);
+            let &unit_idx = layer.index.get(&geo_id)
+                .ok_or_else(|| anyhow!("geo_id {:?} not found in {:?} index", id, child_ty))?;
+            let parent = layer.parents[unit_idx as usize]
+                .get(parent_ty)
+                .ok_or_else(|| anyhow!(
+                    "parent ref {:?} not set for geo_id {:?} in {:?}",
+                    parent_ty, id, child_ty
+                ))?;
+            parent_ids.push(parent.id().to_string());
         }
 
-        self.layer_mut(GeoType::Block)
-            .ok_or_else(|| anyhow!("[Map.merge_block_data] Missing layer {:?}", GeoType::Block))?
-            .merge_data(df, "GEOID")?;
+        // Group by parent_id and sum all numeric columns.
+        let mut parent_to_row: HashMap<String, usize> = HashMap::new();
+        let mut result_ids:  Vec<String>       = Vec::new();
+        let mut i64_sums:    Vec<Vec<i32>>     = vec![vec![]; incoming.i64_cols.len()];
+        let mut f64_sums:    Vec<Vec<f64>>     = vec![vec![]; incoming.f64_cols.len()];
+
+        for (row, parent_id) in parent_ids.iter().enumerate() {
+            let result_row = match parent_to_row.get(parent_id) {
+                Some(&r) => r,
+                None => {
+                    let r = result_ids.len();
+                    result_ids.push(parent_id.clone());
+                    parent_to_row.insert(parent_id.clone(), r);
+                    for s in i64_sums.iter_mut() { s.push(0); }
+                    for s in f64_sums.iter_mut() { s.push(0.0); }
+                    r
+                }
+            };
+            for (c, (_, vals)) in incoming.i64_cols.iter().enumerate() {
+                i64_sums[c][result_row] += vals[row];
+            }
+            for (c, (_, vals)) in incoming.f64_cols.iter().enumerate() {
+                f64_sums[c][result_row] += vals[row];
+            }
+        }
+
+        Ok(IncomingData {
+            id_col:   result_ids,
+            i64_cols: incoming.i64_cols.iter().zip(i64_sums)
+                .map(|((name, _), sums)| (name.clone(), sums))
+                .collect(),
+            f64_cols: incoming.f64_cols.iter().zip(f64_sums)
+                .map(|((name, _), sums)| (name.clone(), sums))
+                .collect(),
+        })
+    }
+
+    /// Merge block-level data into all layers, aggregating to higher levels.
+    fn merge_block_data(
+        &self,
+        build_data: &mut HashMap<GeoType, BuildLayerData>,
+        incoming: IncomingData,
+        id_col_name: &str,
+    ) -> Result<()> {
+        // Aggregate and merge into each non-block layer.
+        for &ty in GeoType::ALL.iter().filter(|&&ty| ty != GeoType::Block) {
+            if let Some(data) = build_data.get_mut(&ty) {
+                let aggregated = self.aggregate_data(&incoming, GeoType::Block, ty)?;
+                data.merge_data(&aggregated, id_col_name);
+            }
+        }
+
+        // Merge into the block layer directly.
+        if let Some(data) = build_data.get_mut(&GeoType::Block) {
+            data.merge_data(&incoming, id_col_name);
+        }
 
         Ok(())
     }
 
-    /// Build a map pack from the download files in `input_dir`
+    /// Build a map pack from the download files in `input_dir`.
     #[cfg(feature = "download")]
-    pub(crate) fn build_pack(input_dir: &Path, state_code: &str, fips: &str, has_vtd: bool, verbose: u8) -> Result<Self> {
+    pub(crate) fn build_pack(
+        input_dir: &Path,
+        state_code: &str,
+        fips: &str,
+        has_vtd: bool,
+        verbose: u8,
+    ) -> Result<Self> {
         util::require_dir_exists(input_dir)?;
 
         let mut map = Self::default();
+        let mut build_data: HashMap<GeoType, BuildLayerData> = HashMap::new();
 
-        // Load all layers from TIGER Census shapefiles.
-        if verbose > 0 { eprintln!("[build_pack] loading state shapes"); }
-        map.insert(MapLayer::from_tiger_shapefile(GeoType::State,
-            &input_dir.join(format!("tl_2020_{fips}_state20/tl_2020_{fips}_state20.shp")))?);
-
-        if verbose > 0 { eprintln!("[build_pack] loading county shapes"); }
-        map.insert(MapLayer::from_tiger_shapefile(GeoType::County,
-            &input_dir.join(format!("tl_2020_{fips}_county20/tl_2020_{fips}_county20.shp")))?);
-
-        if verbose > 0 { eprintln!("[build_pack] loading tract shapes"); }
-        map.insert(MapLayer::from_tiger_shapefile(GeoType::Tract,
-            &input_dir.join(format!("tl_2020_{fips}_tract20/tl_2020_{fips}_tract20.shp")))?);
-
-        if verbose > 0 { eprintln!("[build_pack] loading group shapes"); }
-        map.insert(MapLayer::from_tiger_shapefile(GeoType::Group,
-            &input_dir.join(format!("tl_2020_{fips}_bg20/tl_2020_{fips}_bg20.shp")))?);
-
-        // If the vtd data isn't available (CA, ME, OR, WY), skip this layer.
-        if verbose > 0 { eprintln!("[build_pack] loading vtd shapes"); }
-        if has_vtd {
-            map.insert(MapLayer::from_tiger_shapefile(GeoType::VTD,
-                &input_dir.join(format!("tl_2020_{fips}_vtd20/tl_2020_{fips}_vtd20.shp")))?);
+        macro_rules! load_layer {
+            ($ty:expr, $path:expr) => {{
+                if verbose > 0 { eprintln!("[build_pack] loading {} shapes", $ty.to_str()); }
+                let (layer, data) = MapLayer::from_tiger_shapefile($ty, &input_dir.join($path))?;
+                build_data.insert($ty, data);
+                map.insert(layer);
+            }};
         }
 
-        if verbose > 0 { eprintln!("[build_pack] loading block shapes"); }
-        map.insert(MapLayer::from_tiger_shapefile(GeoType::Block,
-            &input_dir.join(format!("tl_2020_{fips}_tabblock20/tl_2020_{fips}_tabblock20.shp")))?);
+        load_layer!(GeoType::State,
+            format!("tl_2020_{fips}_state20/tl_2020_{fips}_state20.shp"));
+        load_layer!(GeoType::County,
+            format!("tl_2020_{fips}_county20/tl_2020_{fips}_county20.shp"));
+        load_layer!(GeoType::Tract,
+            format!("tl_2020_{fips}_tract20/tl_2020_{fips}_tract20.shp"));
+        load_layer!(GeoType::Group,
+            format!("tl_2020_{fips}_bg20/tl_2020_{fips}_bg20.shp"));
 
-        // Compute parent references for all layers based on truncated geo_id.
+        if has_vtd {
+            if verbose > 0 { eprintln!("[build_pack] loading vtd shapes"); }
+            let (layer, data) = MapLayer::from_tiger_shapefile(
+                GeoType::VTD,
+                &input_dir.join(format!("tl_2020_{fips}_vtd20/tl_2020_{fips}_vtd20.shp")),
+            )?;
+            build_data.insert(GeoType::VTD, data);
+            map.insert(layer);
+        }
+
+        load_layer!(GeoType::Block,
+            format!("tl_2020_{fips}_tabblock20/tl_2020_{fips}_tabblock20.shp"));
+
+        // Compute parent references for all layers.
         if verbose > 0 { eprintln!("[build_pack] computing crosswalks"); }
         if let Some(layer) = map.layer_mut(GeoType::County) {
             layer.assign_parents(GeoType::State);
@@ -365,74 +453,209 @@ impl Map {
             layer.assign_parents(GeoType::Group);
         }
 
-        /// Convert a crosswalk DataFrame to a map of GeoIds
-        #[inline]
-        fn map_from_crosswalk_df(df: &DataFrame, geo_types: (GeoType, GeoType), col_names: (&str, &str)) -> Result<HashMap<GeoId, GeoId>> {
-            Ok(
-                df.column(col_names.0)?.str()?
-                    .into_iter()
-                    .zip(df.column(col_names.1)?.str()?)
-                    .filter_map(|(b, d)| Some((
-                        GeoId::new(geo_types.0, b?),
-                        GeoId::new(geo_types.1, &format!("{}{}", &b?[..5], d?)),
-                    )))
-                    .collect()
-            )
-        }
-
         if has_vtd {
             if verbose > 0 { eprintln!("[build_pack] loading block -> vtd crosswalks"); }
+            let crosswalk_path = input_dir.join(format!(
+                "BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt"
+            ));
+            let parent_map = read_crosswalk_txt(&crosswalk_path)?;
             if let Some(layer) = map.layer_mut(GeoType::Block) {
-                layer.assign_parents_from_map(
-                    GeoType::VTD,
-                    map_from_crosswalk_df(
-                        &crate::io::csv::read_pipe_delimited_txt(&input_dir.join(format!("BlockAssign_ST{fips}_{state_code}/BlockAssign_ST{fips}_{state_code}_VTD.txt")))?, 
-                        (GeoType::Block, GeoType::VTD), 
-                        ("BLOCKID", "DISTRICT")
-                    )?
-                )?;
+                layer.assign_parents_from_map(GeoType::VTD, parent_map)?;
             }
-        }
-
-        /// Convert GEOID column from i64 to String type
-        #[inline]
-        fn ensure_geoid_is_str(mut df: DataFrame) -> Result<DataFrame> {
-            if *df.column("GEOID")?.dtype() != DataType::String {
-                let geoid_str = df.column("GEOID")?.i64()?.into_iter()
-                    .map(|opt| opt.map(|v| format!("{:015}", v)))
-                    .collect::<StringChunked>();
-                df.replace("GEOID", geoid_str)?;
-            }
-            Ok(df)
         }
 
         if verbose > 0 { eprintln!("[build_pack] loading demographic data"); }
-        map.merge_block_data(ensure_geoid_is_str(crate::io::csv::read_csv(
-            &input_dir.join(format!("Demographic_Data_Block_{state_code}/demographic_data_block_{state_code}.v06.csv"))
-        )?)?, "GEOID")?;
+        let demo_path = input_dir.join(format!(
+            "Demographic_Data_Block_{state_code}/demographic_data_block_{state_code}.v06.csv"
+        ));
+        let demo_data = read_block_csv(&demo_path, "GEOID")?;
+        map.merge_block_data(&mut build_data, demo_data, "GEOID")?;
 
         if verbose > 0 { eprintln!("[build_pack] loading election data"); }
-        map.merge_block_data(ensure_geoid_is_str(crate::io::csv::read_csv(
-            &input_dir.join(format!("Election_Data_Block_{state_code}/election_data_block_{state_code}.v06.csv"))
-        )?)?, "GEOID")?;
+        let elec_path = input_dir.join(format!(
+            "Election_Data_Block_{state_code}/election_data_block_{state_code}.v06.csv"
+        ));
+        let elec_data = read_block_csv(&elec_path, "GEOID")?;
+        map.merge_block_data(&mut build_data, elec_data, "GEOID")?;
 
-        // Bake island-bridge patches into the block Region so they survive serialisation.
+        // Bake island-bridge patches.
         if verbose > 0 { eprintln!("[build_pack] patching island bridges"); }
         if let Some(block_layer) = map.layer_mut(GeoType::Block) {
             block_layer.patch_region()?;
         }
 
-        // Compute outer perimeters at the block level and aggregate to higher layers.
+        // Compute outer perimeters and merge.
         if verbose > 0 { eprintln!("[build_pack] computing outer perimeters"); }
-        if let Some(block_layer) = map.layer(GeoType::Block) {
-            map.merge_block_data(block_layer.compute_outer_perimeters_from_region()?, "GEOID")?;
-        }
+        let outer_perimeters = map.layer(GeoType::Block)
+            .ok_or_else(|| anyhow!("Missing block layer"))?
+            .compute_outer_perimeters_from_region();
+        map.merge_block_data(&mut build_data, outer_perimeters, "GEOID")?;
 
+        // Finalize: convert BuildLayerData → WeightMatrix + unit_names.
         if verbose > 0 { eprintln!("[build_pack] finalizing weights"); }
-        for layer in map.layers_iter_mut() {
-            layer.finalize_weights();
+        for (ty, data) in build_data.drain() {
+            let (unit_names, weights) = data.finalize();
+            if let Some(layer) = map.layer_mut(ty) {
+                layer.unit_names    = unit_names;
+                layer.unit_weights  = Arc::new(weights);
+            }
         }
 
         Ok(map)
     }
+}
+
+/// Read a block-level CSV (demographic or election data) into `IncomingData`.
+///
+/// Expects a header row with a GEOID column and any number of numeric columns.
+/// If GEOID looks like an integer (no leading zeros to preserve), it is
+/// zero-padded to 15 digits.
+#[cfg(feature = "download")]
+fn read_block_csv(path: &Path, id_col_name: &str) -> Result<IncomingData> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open CSV: {}", path.display()))?;
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(file);
+
+    let headers: Vec<String> = rdr
+        .headers()
+        .context("failed to read CSV headers")?
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    // Find the id column index.
+    let id_col_idx = headers.iter().position(|h| h == id_col_name)
+        .ok_or_else(|| anyhow!("CSV missing id column '{}'", id_col_name))?;
+
+    // Sniff numeric column types from the first data row.
+    let first_record = rdr.records().next()
+        .context("CSV has no data rows")?
+        .context("failed to read first CSV record")?;
+
+    enum ColKind { Id, I64, F64, Skip }
+
+    let col_kinds: Vec<ColKind> = headers.iter().enumerate().map(|(ci, _name)| {
+        if ci == id_col_idx {
+            return ColKind::Id;
+        }
+        let val = first_record.get(ci).unwrap_or("");
+        if val.is_empty() {
+            return ColKind::I64; // default to i64 for empty
+        }
+        // Try i64 first; if it fails or contains '.', use f64.
+        if val.contains('.') || val.contains('e') || val.contains('E') {
+            ColKind::F64
+        } else if val.parse::<i64>().is_ok() {
+            ColKind::I64
+        } else {
+            ColKind::Skip
+        }
+    }).collect();
+
+    let i64_col_indices: Vec<usize> = col_kinds.iter().enumerate()
+        .filter_map(|(ci, k)| if matches!(k, ColKind::I64) { Some(ci) } else { None })
+        .collect();
+    let f64_col_indices: Vec<usize> = col_kinds.iter().enumerate()
+        .filter_map(|(ci, k)| if matches!(k, ColKind::F64) { Some(ci) } else { None })
+        .collect();
+
+    let mut id_col:   Vec<String>              = Vec::new();
+    let mut i64_cols: Vec<(String, Vec<i32>)>  = i64_col_indices.iter()
+        .map(|&ci| (headers[ci].clone(), Vec::new()))
+        .collect();
+    let mut f64_cols: Vec<(String, Vec<f64>)>  = f64_col_indices.iter()
+        .map(|&ci| (headers[ci].clone(), Vec::new()))
+        .collect();
+
+    // Helper to zero-pad GEOID to 15 digits if it looks numeric.
+    let pad_geoid = |s: &str| -> String {
+        if s.len() < 15 && s.chars().all(|c| c.is_ascii_digit()) {
+            format!("{:0>15}", s)
+        } else {
+            s.to_string()
+        }
+    };
+
+    // Process the first record (already read for sniffing).
+    {
+        let id_val = first_record.get(id_col_idx).unwrap_or("");
+        id_col.push(pad_geoid(id_val));
+        for (out_idx, &ci) in i64_col_indices.iter().enumerate() {
+            let v = first_record.get(ci).unwrap_or("0");
+            i64_cols[out_idx].1.push(v.parse::<i32>().unwrap_or(0));
+        }
+        for (out_idx, &ci) in f64_col_indices.iter().enumerate() {
+            let v = first_record.get(ci).unwrap_or("0");
+            f64_cols[out_idx].1.push(v.parse::<f64>().unwrap_or(0.0));
+        }
+    }
+
+    // Process remaining records.
+    let mut record = csv::StringRecord::new();
+    while rdr.read_record(&mut record).context("failed to read CSV record")? {
+        let id_val = record.get(id_col_idx).unwrap_or("");
+        id_col.push(pad_geoid(id_val));
+        for (out_idx, &ci) in i64_col_indices.iter().enumerate() {
+            let v = record.get(ci).unwrap_or("0");
+            i64_cols[out_idx].1.push(v.parse::<i32>().unwrap_or(0));
+        }
+        for (out_idx, &ci) in f64_col_indices.iter().enumerate() {
+            let v = record.get(ci).unwrap_or("0");
+            f64_cols[out_idx].1.push(v.parse::<f64>().unwrap_or(0.0));
+        }
+    }
+
+    Ok(IncomingData { id_col, i64_cols, f64_cols })
+}
+
+/// Read a pipe-delimited VTD crosswalk file and return a block → VTD geo_id map.
+#[cfg(feature = "download")]
+fn read_crosswalk_txt(path: &Path) -> Result<HashMap<GeoId, GeoId>> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open crosswalk file: {}", path.display()))?;
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .delimiter(b'|')
+        .from_reader(file);
+
+    // The file has columns: BLOCKID (15-char block geo_id) and DISTRICT (VTD suffix)
+    // VTD geo_id = first 5 chars of BLOCKID (county FIPS) + DISTRICT
+    let blockid_col = "BLOCKID";
+    let district_col = "DISTRICT";
+
+    let headers: Vec<String> = rdr
+        .headers()
+        .context("failed to read crosswalk headers")?
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let blockid_idx = headers.iter().position(|h| h == blockid_col)
+        .ok_or_else(|| anyhow!("crosswalk missing '{}' column", blockid_col))?;
+    let district_idx = headers.iter().position(|h| h == district_col)
+        .ok_or_else(|| anyhow!("crosswalk missing '{}' column", district_col))?;
+
+    let mut map: HashMap<GeoId, GeoId> = HashMap::new();
+    let mut record = csv::StringRecord::new();
+
+    while rdr.read_record(&mut record).context("failed to read crosswalk record")? {
+        let block_str  = record.get(blockid_idx).unwrap_or("").trim();
+        let district_str = record.get(district_idx).unwrap_or("").trim();
+
+        if block_str.is_empty() || district_str.is_empty() {
+            continue;
+        }
+
+        let vtd_id = format!("{}{}", &block_str[..5], district_str);
+        map.insert(
+            GeoId::new(GeoType::Block, block_str),
+            GeoId::new(GeoType::VTD, &vtd_id),
+        );
+    }
+
+    Ok(map)
 }

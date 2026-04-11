@@ -10,6 +10,7 @@
 //! - `wkb` - Well-Known Binary format for hull geometry
 
 pub(crate) mod csv {
+    pub(crate) mod pack;
     mod read;
     mod write;
     pub(crate) use read::*;

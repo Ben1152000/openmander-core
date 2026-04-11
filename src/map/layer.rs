@@ -1,7 +1,6 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use geo::{MultiPolygon, Point};
-use polars::frame::DataFrame;
 
 use geograph::Region;
 
@@ -14,8 +13,8 @@ pub struct MapLayer {
     pub(super) geo_ids: Vec<GeoId>,
     pub(super) index: HashMap<GeoId, u32>,        // Map between geo_ids and per-level contiguous indices
     pub(super) parents: Vec<ParentRefs>,          // References to parent entities (higher level types)
-    pub(super) unit_data: DataFrame,              // Entity data (incl. name, centroid, geographic data, election data)
-    pub(super) unit_weights: Arc<WeightMatrix>,   // Demographic/election weights (extracted from unit_data)
+    pub(super) unit_names: Vec<String>,           // Human-readable name for each unit (e.g. "Block 1234")
+    pub(super) unit_weights: Arc<WeightMatrix>,   // Demographic/election weights
     pub(super) region: Arc<Region>,               // Planar map (geometry + adjacency + edge weights)
 }
 
@@ -26,11 +25,11 @@ impl MapLayer {
         geo_ids: Vec<GeoId>,
         index: HashMap<GeoId, u32>,
         parents: Vec<ParentRefs>,
-        unit_data: DataFrame,
+        unit_names: Vec<String>,
         unit_weights: Arc<WeightMatrix>,
         region: Arc<Region>,
     ) -> Self {
-        Self { ty, geo_ids, index, parents, unit_data, unit_weights, region }
+        Self { ty, geo_ids, index, parents, unit_names, unit_weights, region }
     }
 
     /// Get the number of entities in this layer.
@@ -51,8 +50,11 @@ impl MapLayer {
     /// Get a reference to the list of ParentRefs for each entity in this layer.
     #[inline] pub fn parents(&self) -> &Vec<ParentRefs> { &self.parents }
 
-    /// Get a reference to the DataFrame containing entity data for this layer.
-    #[inline] pub fn data(&self) -> &DataFrame { &self.unit_data }
+    /// Get a reference to the human-readable unit names for this layer.
+    #[inline] pub fn unit_names(&self) -> &Vec<String> { &self.unit_names }
+
+    /// Get a reference to the WeightMatrix for this layer.
+    #[inline] pub(crate) fn weights(&self) -> &WeightMatrix { &self.unit_weights }
 
     /// Get the union of all MultiPolygons in this layer into a single MultiPolygon.
     /// Note that this can be computationally expensive for large layers.
@@ -61,22 +63,12 @@ impl MapLayer {
         self.region.union_of(self.region.unit_ids())
     }
 
-    /// Get centroid lon/lat for each entity, preferring DataFrame columns if present, else computing from geometry.
+    /// Get centroid lon/lat for each entity from the WeightMatrix.
     pub fn centroids(&self) -> Vec<Point<f64>> {
-        if let (Some(lon_column), Some(lat_column)) = (
-            self.unit_data.column("centroid_lon").ok()
-                .and_then(|column| column.f64().ok()),
-            self.unit_data.column("centroid_lat").ok()
-                .and_then(|column| column.f64().ok())
-        ) {
-            assert_eq!(lon_column.len(), self.len(), "Expected centroid_lon length {} to match number of entities {}", lon_column.len(), self.len());
-            assert_eq!(lat_column.len(), self.len(), "Expected centroid_lat length {} to match number of entities {}", lat_column.len(), self.len());
-
-            return lon_column.into_iter().zip(lat_column)
-                .map(|(lon, lat)| Point::new(lon.unwrap_or(f64::NAN), lat.unwrap_or(f64::NAN)))
-                .collect()
-        }
-        vec![Point::new(f64::NAN, f64::NAN); self.len()]
+        (0..self.len()).map(|i| Point::new(
+            self.unit_weights.get_as_f64("centroid_lon", i).unwrap_or(f64::NAN),
+            self.unit_weights.get_as_f64("centroid_lat", i).unwrap_or(f64::NAN),
+        )).collect()
     }
 
     /// Get the unit graph for this layer.
@@ -96,7 +88,6 @@ impl fmt::Debug for MapLayer {
         f.debug_struct("MapLayer")
             .field("ty", &self.ty)
             .field("n", &self.geo_ids.len())
-            .field("data", &format_args!("{}x{}", self.unit_data.height(), self.unit_data.width()))
             .field("region_units", &self.region.num_units())
             .finish()
     }

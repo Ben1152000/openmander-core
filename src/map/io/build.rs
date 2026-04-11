@@ -282,42 +282,39 @@ impl MapLayer {
             // San Francisco County, California
             (GeoId::new_block("060759804011000"), GeoId::new_block("060759901000001")),
             // Ventura County, California
-            (GeoId::new_block("061119901000013"), GeoId::new_block("061119901000001")),
             (GeoId::new_block("061119901000013"), GeoId::new_block("061119901000008")),
-            (GeoId::new_block("061119901000013"), GeoId::new_block("061119901000011")),
-            (GeoId::new_block("061119901000013"), GeoId::new_block("060839900000034")),
+            (GeoId::new_block("060839900000034"), GeoId::new_block("061119901000008")),
+            (GeoId::new_block("061119901000011"), GeoId::new_block("060839900000034")),
             // Los Angeles County, California
-            (GeoId::new_block("060375991002000"), GeoId::new_block("060379903000006")),
-            (GeoId::new_block("060375991002000"), GeoId::new_block("060379903000007")),
             (GeoId::new_block("060375991002000"), GeoId::new_block("060379903000010")),
-            (GeoId::new_block("060375991002000"), GeoId::new_block("060375991001000")),
+            (GeoId::new_block("060375991001000"), GeoId::new_block("060375991002015")),
             // Fulton County, Kentucky
             (GeoId::new_block("210759602004105"), GeoId::new_block("210759602004000")),
             // New York County, New York
             (GeoId::new_block("360610001001000"), GeoId::new_block("360610005000003")),
             (GeoId::new_block("360610001001001"), GeoId::new_block("360610005000003")),
-            // Honolulu County, Hawaii
-            (GeoId::new_block("150039812001000"), GeoId::new_block("150039900010005")),
-            (GeoId::new_block("150039812001003"), GeoId::new_block("150039900010005")),
-            (GeoId::new_block("150039812001005"), GeoId::new_block("150039900010005")),
-            (GeoId::new_block("150039812001008"), GeoId::new_block("150039900010005")),
-            (GeoId::new_block("150039812001015"), GeoId::new_block("150039900010005")),
-            (GeoId::new_block("150039812001016"), GeoId::new_block("150039900010005")),
-            (GeoId::new_block("150039812001018"), GeoId::new_block("150039900010005")),
-            (GeoId::new_block("150039812001021"), GeoId::new_block("150039900010005")),
-            (GeoId::new_block("150039812001025"), GeoId::new_block("150039900010005")),
-            // Kauai County, Hawaii
-            (GeoId::new_block("150079902000001"), GeoId::new_block("150079901000014")),
-            (GeoId::new_block("150079903000002"), GeoId::new_block("150079901000014")),
-            // Maui County, Hawaii
-            (GeoId::new_block("150099900000006"), GeoId::new_block("150099902000009")),
-            (GeoId::new_block("150099912000003"), GeoId::new_block("150099902000009")),
-            // Kauai County & Honolulu County, Hawaii
-            (GeoId::new_block("150079901000008"), GeoId::new_block("150039900010005")),
-            // Maui County & Honolulu County, Hawaii
-            (GeoId::new_block("150099900000002"), GeoId::new_block("150039900010039")),
             // Hawaii County & Maui County, Hawaii
             (GeoId::new_block("150019912000001"), GeoId::new_block("150099902000018")),
+            // Maui County, Hawaii
+            (GeoId::new_block("150099902000009"), GeoId::new_block("150099900000006")),
+            (GeoId::new_block("150099912000001"), GeoId::new_block("150099900000007")),
+            // Maui County & Honolulu County, Hawaii
+            (GeoId::new_block("150099900000001"), GeoId::new_block("150039900010039")),
+            // Honolulu County & Kauai County, Hawaii
+            (GeoId::new_block("150079901000004"), GeoId::new_block("150039900010008")),
+            // Kauai County, Hawaii
+            (GeoId::new_block("150079902000001"), GeoId::new_block("150079901000014")),
+            (GeoId::new_block("150079903000002"), GeoId::new_block("150079902000001")),
+            // Northwestern Hawaiian Islands
+            (GeoId::new_block("150039812001003"), GeoId::new_block("150079903000002")),
+            (GeoId::new_block("150039812001005"), GeoId::new_block("150039812001003")),
+            (GeoId::new_block("150039812001008"), GeoId::new_block("150039812001005")),
+            (GeoId::new_block("150039812001025"), GeoId::new_block("150039812001008")),
+            (GeoId::new_block("150039812001015"), GeoId::new_block("150039812001025")),
+            (GeoId::new_block("150039812001016"), GeoId::new_block("150039812001015")),
+            (GeoId::new_block("150039812001018"), GeoId::new_block("150039812001016")),
+            (GeoId::new_block("150039812001021"), GeoId::new_block("150039812001018")),
+            (GeoId::new_block("150039812001000"), GeoId::new_block("150039812001021")),
         ];
 
         let unit_pairs: Vec<(geograph::UnitId, geograph::UnitId)> = patches.iter()
@@ -365,34 +362,34 @@ impl Map {
         let layer = self.layer(child_ty)
             .ok_or_else(|| anyhow!("[Map.aggregate_data] Missing layer {:?}", child_ty))?;
 
-        // Map each incoming id to its parent geo_id.
-        let mut parent_ids: Vec<String> = Vec::with_capacity(incoming.id_col.len());
-        for id in &incoming.id_col {
+        // Map each incoming id to its parent geo_id, then group and sum.
+        // Rows whose geo_id doesn't exist in the block index are skipped with a warning
+        // (Census election files sometimes contain null-block sentinel rows like "XXYY0000000000").
+        let mut parent_to_row: HashMap<String, usize> = HashMap::new();
+        let mut result_ids:  Vec<String>       = Vec::new();
+        let mut i64_sums:    Vec<Vec<i32>>     = vec![vec![]; incoming.i64_cols.len()];
+        let mut f64_sums:    Vec<Vec<f64>>     = vec![vec![]; incoming.f64_cols.len()];
+
+        for (row, id) in incoming.id_col.iter().enumerate() {
             let geo_id = GeoId::new(child_ty, id);
-            let &unit_idx = layer.index.get(&geo_id)
-                .ok_or_else(|| anyhow!("geo_id {:?} not found in {:?} index", id, child_ty))?;
+            let Some(&unit_idx) = layer.index.get(&geo_id) else {
+                eprintln!("[aggregate_data] skipping {:?} geo_id {:?} — not found in block index", child_ty, id);
+                continue;
+            };
             let parent = layer.parents[unit_idx as usize]
                 .get(parent_ty)
                 .ok_or_else(|| anyhow!(
                     "parent ref {:?} not set for geo_id {:?} in {:?}",
                     parent_ty, id, child_ty
                 ))?;
-            parent_ids.push(parent.id().to_string());
-        }
+            let parent_id = parent.id().to_string();
 
-        // Group by parent_id and sum all numeric columns.
-        let mut parent_to_row: HashMap<String, usize> = HashMap::new();
-        let mut result_ids:  Vec<String>       = Vec::new();
-        let mut i64_sums:    Vec<Vec<i32>>     = vec![vec![]; incoming.i64_cols.len()];
-        let mut f64_sums:    Vec<Vec<f64>>     = vec![vec![]; incoming.f64_cols.len()];
-
-        for (row, parent_id) in parent_ids.iter().enumerate() {
-            let result_row = match parent_to_row.get(parent_id) {
+            let result_row = match parent_to_row.get(&parent_id) {
                 Some(&r) => r,
                 None => {
                     let r = result_ids.len();
                     result_ids.push(parent_id.clone());
-                    parent_to_row.insert(parent_id.clone(), r);
+                    parent_to_row.insert(parent_id, r);
                     for s in i64_sums.iter_mut() { s.push(0); }
                     for s in f64_sums.iter_mut() { s.push(0.0); }
                     r

@@ -23,7 +23,7 @@ impl SpanningTree {
 
     /// Choose a random tree edge (parent[node], node), or None if |V| <= 1.
     pub fn random_edge(&self, rng: &mut impl rand::Rng) -> Option<(usize, usize)> {
-        use rand::seq::IndexedRandom;
+        use rand::seq::SliceRandom;
         if self.order.len() <= 1 { return None }
         let &u = self.order[1..].choose(rng)?;
         Some((self.parent[u].unwrap(), u))
@@ -156,7 +156,7 @@ impl Partition {
     /// Recombine two parts by merging them into one and then repartitioning.
     /// If the two parts are not contiguous, does nothing.
     pub(crate) fn recombine_parts(&mut self, a: u32, b: u32) {
-        let rng = &mut rand::rng();
+        let rng = &mut rand::thread_rng();
 
         // If the two part are not contiguous, do nothing.
         let Some(other) = self.merge_parts(a, b, true) else { return };

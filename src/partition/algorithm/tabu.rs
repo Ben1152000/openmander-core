@@ -28,7 +28,7 @@ impl Partition {
             "part_weights must contain series '{series}'"
         );
 
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
 
         // --- 1. Compute target part weight (same as anneal_balance) ---
         let part_values = (0..self.num_parts())
@@ -86,7 +86,7 @@ impl Partition {
                     continue;
                 }
 
-                let node = candidates[rng.random_range(0..candidates.len())];
+                let node = candidates[rng.gen_range(0..candidates.len())];
 
                 // Collect distinct destination parts from neighbors.
                 let mut dest_parts = self

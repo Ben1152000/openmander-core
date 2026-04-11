@@ -1,11 +1,11 @@
-use rand::{distr::{weighted::WeightedIndex, Distribution}, seq::{IndexedRandom, IteratorRandom}, Rng};
+use rand::{distributions::{weighted::WeightedIndex, Distribution}, seq::{SliceRandom, IteratorRandom}, Rng};
 
 use crate::partition::Partition;
 
 impl Partition {
     /// Select a random node from the map.
     pub(crate) fn random_node<R: Rng + ?Sized>(&self, rng: &mut R) -> usize {
-        rng.random_range(0..self.graph().node_count())
+        rng.gen_range(0..self.graph().node_count())
     }
 
     /// Select a random node from a given part.
@@ -23,14 +23,14 @@ impl Partition {
     /// Select a random unassigned node from the map that is on a part boundary.
     pub(crate) fn random_unassigned_boundary_node<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<usize> {
         let set = self.frontiers.get(0);
-        if set.is_empty() { None } else { Some(set[rng.random_range(0..set.len())]) }
+        if set.is_empty() { None } else { Some(set[rng.gen_range(0..set.len())]) }
     }
 
     /// Select a random neighbor of a given node.
     pub(crate) fn random_edge<R: Rng + ?Sized>(&self, node: usize, rng: &mut R) -> Option<usize> {
         assert!(node < self.graph().node_count(), "node {} out of range", node);
         if self.graph().degree(node) == 0 { return None }
-        Some(self.graph().edge(node, rng.random_range(0..self.graph().degree(node))).unwrap())
+        Some(self.graph().edge(node, rng.gen_range(0..self.graph().degree(node))).unwrap())
     }
 
     /// Select a random neighbor of a given node that is in the same part.
@@ -65,7 +65,7 @@ impl Partition {
 
     /// Randomly assign all nodes to contiguous parts.
     pub(crate) fn randomize(&mut self) {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         self.clear_assignments();
 
         // Seed parts with random starting nodes.

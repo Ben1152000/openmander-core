@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::{Rng, distributions::Distribution};
 
 use crate::{Objective, partition::Partition};
 
@@ -55,7 +55,7 @@ fn acceptance_probability(delta: f64, temp: f64) -> f64 {
 /// Metropolis acceptance criterion for simulated annealing in temperature space.
 /// Accept if `delta <= 0` or with probability `exp(-delta / T)`.
 fn accept_metropolis<R: Rng + ?Sized>(delta: f64, temp: f64, rng: &mut R) -> bool {
-    delta > EPSILON || rng.random::<f64>() < acceptance_probability(delta, temp)
+    delta > EPSILON || rand::distributions::Distribution::<f64>::sample(&rand::distributions::Standard, rng) < acceptance_probability(delta, temp)
 }
 
 impl Partition {
@@ -76,7 +76,7 @@ impl Partition {
         assert!(self.num_parts() > 2, "need at least two parts for anneal_balance");
         assert!(self.part_weights().contains(series), "part_weights must contain series '{series}'");
 
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
 
         // Compute target part weight (average over all parts).
         let part_values = (0..self.num_parts())
@@ -90,7 +90,7 @@ impl Partition {
 
             // Pick random node on part boundary (where part size > 1)
             let candidates = self.frontiers.get(src as usize);
-            let node = candidates[rng.random_range(0..candidates.len())];
+            let node = candidates[rng.gen_range(0..candidates.len())];
 
             // Pick random destination part (that neighbors node)
             let dest = self.random_neighboring_part(node, &mut rng).unwrap();
@@ -203,7 +203,7 @@ impl Partition {
         let first_objective = &objectives[0];
         let initial_score = first_objective.compute(self);
         let mut state = OptimizationState {
-            rng: rand::rng(),
+            rng: rand::thread_rng(),
             current_score: initial_score,
             current_iter: 0,
             best_score: initial_score,  // Initialize to actual score, not 0
@@ -398,7 +398,7 @@ impl Partition {
 
         // Pick random node on part boundary
         let candidates = self.frontiers.get(src as usize);
-        let node = candidates[state.rng.random_range(0..candidates.len())];
+        let node = candidates[state.rng.gen_range(0..candidates.len())];
 
         // Pick random destination part (that neighbors node)
         let dest = self.random_neighboring_part(node, &mut state.rng).unwrap();

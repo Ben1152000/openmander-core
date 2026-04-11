@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use rand::{distr::{weighted::WeightedIndex, Distribution}, Rng};
+use rand::{distributions::{weighted::WeightedIndex, Distribution}, Rng};
 
 use crate::partition::Partition;
 
@@ -29,7 +29,7 @@ impl Partition {
 
         let mut neighbors = HashSet::new();
         for _ in 0..samples {
-            let node = frontier[rng.random_range(0..frontier.len())];
+            let node = frontier[rng.gen_range(0..frontier.len())];
             neighbors.extend(self.graph().edges(node)
                 .map(|u| self.assignment(u))
                 .filter(|&p| p != 0 && p != part));
@@ -45,7 +45,7 @@ impl Partition {
         assert!(a < self.num_parts() && b < self.num_parts() && a != b,
             "a and b must be distinct parts in range [0, {})", self.num_parts());
 
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
 
         // Define src as the part with surplus weight.
         let a_total = self.part_weights().get_as_f64(series, a as usize).unwrap();
@@ -60,7 +60,7 @@ impl Partition {
         while remaining > 0.0 {
             // Pick a random candidate on the boundary of src.
             let candidates = self.frontiers.get(src as usize);
-            let node = candidates[rng.random_range(0..candidates.len())];
+            let node = candidates[rng.gen_range(0..candidates.len())];
 
             // Skip if not adjacent.
             if !(self.part_is_empty(dest) || self.node_borders_part(node, dest)) { continue }
@@ -93,7 +93,7 @@ impl Partition {
         assert!(self.unit_weights().contains(series),
             "series '{}' not found in node weights", series);
 
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
 
         let total = (1..self.num_parts())
             .map(|p| self.part_weights().get_as_f64(series, p as usize).unwrap())
@@ -129,7 +129,7 @@ impl Partition {
                 if let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
                     let frontier = self.frontiers.get(part as usize);
                     if !frontier.is_empty() {
-                        let node = frontier[rng.random_range(0..frontier.len())];
+                        let node = frontier[rng.gen_range(0..frontier.len())];
                         self.move_node_with_articulation(node, new_part);
                         self.equalize_parts(series, part, new_part, largest_deviation / 2.0);
                         return false;
@@ -140,7 +140,7 @@ impl Partition {
 
         let neighbors = self.sample_neighboring_parts(part, 8, &mut rng);
         if neighbors.is_empty() { return false; }
-        let other = neighbors[rng.random_range(0..neighbors.len())];
+        let other = neighbors[rng.gen_range(0..neighbors.len())];
         self.equalize_parts(series, part, other, largest_deviation / 2.0);
         false
     }
@@ -154,7 +154,7 @@ impl Partition {
         assert!(self.unit_weights().contains(series),
             "series '{}' not found in node weights", series);
 
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
 
         // Compute target population and tolerance band (ignoring unassigned part 0).
         let total = (1..self.num_parts())
@@ -200,7 +200,7 @@ impl Partition {
                 if let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
                     let frontier = self.frontiers.get(part as usize);
                     if !frontier.is_empty() {
-                        let node = frontier[rng.random_range(0..frontier.len())];
+                        let node = frontier[rng.gen_range(0..frontier.len())];
                         self.move_node_with_articulation(node, new_part);
                         self.equalize_parts(series, part, new_part, largest_deviation / 2.0);
                         continue;
@@ -214,7 +214,7 @@ impl Partition {
 
             // Pick random neighbor
             let neighbors = neighbors.into_iter().collect::<Vec<_>>();
-            let other = neighbors[rng.random_range(0..neighbors.len())];
+            let other = neighbors[rng.gen_range(0..neighbors.len())];
 
             self.equalize_parts(series, part, other, largest_deviation / 2.0);
         }

@@ -160,6 +160,7 @@ impl Plan {
     /// batch_size : int, optional
     ///     Batch size for cooling phases, also determines print frequency (default: 1000).
     #[pyo3(signature = (objectives, max_iter, phase_start_probs, phase_end_probs, phase_cooling_rates, init_temp=1.0, early_stop_iters=100000, temp_search_batch_size=1000, batch_size=1000))]
+    #[allow(clippy::too_many_arguments)]
     pub fn anneal<'py>(&mut self,
         py: Python<'py>,
         objectives: Vec<Bound<'py, crate::Objective>>,

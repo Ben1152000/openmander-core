@@ -1,6 +1,7 @@
 use crate::partition::Partition;
 
 /// Cut-friendly spanning tree representation.
+#[allow(unused)]
 #[derive(Debug)]
 struct SpanningTree {
     root: usize,
@@ -10,6 +11,7 @@ struct SpanningTree {
     size: Vec<Option<usize>>,   // subtree sizes, or None if node not in tree.
 }
 
+#[allow(unused)]
 impl SpanningTree {
     #[inline] pub fn in_tree(&self, node: usize) -> bool { self.parent[node].is_some() }
 

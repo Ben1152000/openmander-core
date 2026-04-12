@@ -2,6 +2,15 @@ use crate::map::{GeoType, MapLayer};
 
 use anyhow::{anyhow, Result};
 
+/// Per-unit geometry statistics returned by [`Map::geometry_stats`].
+pub struct GeometryStats {
+    pub geo_id:      String,
+    pub unit_idx:    usize,
+    /// Number of interior holes per polygon in the unit's MultiPolygon.
+    pub holes:       Vec<usize>,
+    pub is_exterior: bool,
+}
+
 /// Map struct that contains geographic data and geometries for redistricting.
 #[derive(Debug, Default)]
 pub struct Map {
@@ -57,7 +66,7 @@ impl Map {
     /// Return per-unit geometry statistics for a given layer.
     ///
     /// Each entry is `(geo_id, idx, num_polygons, holes_per_polygon, is_exterior)`.
-    pub fn geometry_stats(&self, ty: GeoType) -> Result<Vec<(String, usize, Vec<usize>, bool)>> {
+    pub fn geometry_stats(&self, ty: GeoType) -> Result<Vec<GeometryStats>> {
         let map_layer = self.layer(ty)
             .ok_or_else(|| anyhow!("Layer {:?} not present in this map.", ty))?;
         let region = map_layer.region();
@@ -66,13 +75,14 @@ impl Map {
         let stats = region.unit_ids().map(|uid| {
             let geom = region.geometry(uid);
             let idx = uid.0 as usize;
-            let geo_id_str = geo_ids.get(idx).map(|g| g.id().to_string()).unwrap_or_default();
-            let holes: Vec<usize> = geom.0.iter().map(|poly| poly.interiors().len()).collect();
-            let is_ext = region.is_exterior(uid);
-            (geo_id_str, idx, holes, is_ext)
+            GeometryStats {
+                geo_id:      geo_ids.get(idx).map(|g| g.id().to_string()).unwrap_or_default(),
+                unit_idx:    idx,
+                holes:       geom.0.iter().map(|poly| poly.interiors().len()).collect(),
+                is_exterior: region.is_exterior(uid),
+            }
         }).collect();
 
         Ok(stats)
     }
-
 }

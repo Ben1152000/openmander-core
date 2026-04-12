@@ -125,8 +125,7 @@ impl Partition {
             if let Some((neighbor, _)) = neighbors.iter()
                 .map(|&p| (p, self.part_weights().get_as_f64(series, p as usize).unwrap()))
                 .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-            {
-                if let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
+                && let Some(new_part) = self.merge_parts(neighbor, smallest, false) {
                     let frontier = self.frontiers.get(part as usize);
                     if !frontier.is_empty() {
                         let node = frontier[rng.gen_range(0..frontier.len())];
@@ -135,7 +134,6 @@ impl Partition {
                         return false;
                     }
                 }
-            }
         }
 
         let neighbors = self.sample_neighboring_parts(part, 8, &mut rng);

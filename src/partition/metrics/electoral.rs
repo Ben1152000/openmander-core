@@ -29,10 +29,10 @@ impl Partition {
     }
 
     /// Seats–votes proportionality / partisan fairness metric.
-    #[allow(unused_variables)]
+    #[allow(unused)]
     pub(crate) fn proportionality(&self, dem_series: &str, rep_series: &str) -> Vec<f64> { todo!() }
 
     /// Partisan bias metric.
-    #[allow(unused_variables)]
+    #[allow(unused)]
     pub(crate) fn partisan_bias(&self, dem_series: &str, rep_series: &str) -> Vec<f64> { todo!(); }
 }

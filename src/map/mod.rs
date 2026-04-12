@@ -2,6 +2,7 @@ mod geo_id;
 mod geo_ty;
 mod io;
 mod layer;
+#[allow(clippy::module_inception)]
 mod map;
 mod parent;
 mod util;

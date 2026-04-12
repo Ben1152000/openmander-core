@@ -54,6 +54,7 @@ impl MapLayer {
     #[inline] pub fn unit_names(&self) -> &Vec<String> { &self.unit_names }
 
     /// Get a reference to the WeightMatrix for this layer.
+    #[allow(unused)]
     #[inline] pub(crate) fn weights(&self) -> &WeightMatrix { &self.unit_weights }
 
     /// Get the union of all MultiPolygons in this layer into a single MultiPolygon.

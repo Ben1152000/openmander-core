@@ -30,7 +30,7 @@ impl Partition {
         (1.0 - self.absolute_population_deviation(part, pop_series)).min(1.0)
     }
 
-    /// Compute the minority opportunity metric for a given partition.
+    #[allow(unused)]
     pub(crate) fn minority_opportunity(&self, part: u32, pop_series: &str, min_series: &str) -> f64 {
         let total = self.part_total(pop_series, part);
         if total == 0.0 { 0.0 } else { self.part_total(min_series, part) / total }

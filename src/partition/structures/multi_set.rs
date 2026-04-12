@@ -5,6 +5,7 @@ pub(crate) struct MultiSet {
     index: Vec<Option<(usize, usize)>>, // index[e] = Some((set, pos)) if e is in sets[set][pos]
 }
 
+#[allow(unused)]
 impl MultiSet {
     /// Create an empty MultiSet with `num_sets` sets and a universe of `num_elems` elements.
     pub(crate) fn new(num_sets: usize, num_elems: usize) -> Self {

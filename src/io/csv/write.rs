@@ -15,7 +15,7 @@ pub(crate) fn write_plan_assignments(assignments: &[(GeoId, u32)], path: &Path) 
     let mut wtr = csv::Writer::from_writer(file);
     wtr.write_record(["geo_id", "district"])?;
     for (geo_id, district) in assignments.iter().filter(|(_, d)| *d != 0) {
-        wtr.write_record(&[geo_id.id(), &district.to_string()])?;
+        wtr.write_record([geo_id.id(), &district.to_string()])?;
     }
     wtr.flush()?;
     Ok(())
@@ -28,7 +28,7 @@ pub(crate) fn write_plan_assignments_string(assignments: &[(GeoId, u32)]) -> Res
         let mut wtr = csv::Writer::from_writer(&mut out);
         wtr.write_record(["geo_id", "district"])?;
         for (geo_id, district) in assignments.iter().filter(|(_, d)| *d != 0) {
-            wtr.write_record(&[geo_id.id(), &district.to_string()])?;
+            wtr.write_record([geo_id.id(), &district.to_string()])?;
         }
         wtr.flush()?;
     }

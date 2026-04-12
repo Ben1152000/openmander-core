@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{collections::{HashMap, HashSet}, str::FromStr, sync::Arc};
 
 use anyhow::{Result};
 
@@ -126,6 +126,7 @@ impl Plan {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn anneal(
         &mut self,
         objectives: &[Objective],
@@ -174,8 +175,7 @@ impl Plan {
             district <= self.num_districts,
             "district {} out of range [0, {}]", district, self.num_districts
         );
-        let ty = GeoType::from_str(layer)
-            .ok_or_else(|| anyhow::anyhow!("unknown layer '{}'", layer))?;
+        let ty = GeoType::from_str(layer)?;
 
         let base = self.map.base()?;
 
@@ -212,8 +212,7 @@ impl Plan {
             "district {} out of range [0, {}]", district, self.num_districts
         );
         if geo_ids.is_empty() { return Ok(()); }
-        let ty = GeoType::from_str(layer)
-            .ok_or_else(|| anyhow::anyhow!("unknown layer '{}'", layer))?;
+        let ty = GeoType::from_str(layer)?;
 
         let id_set: std::collections::HashSet<&str> = geo_ids.iter().copied().collect();
         let base = self.map.base()?;

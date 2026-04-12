@@ -241,7 +241,6 @@ pub(crate) fn write_pack_csv(
     parents:    &[ParentRefs],
     weights:    &WeightMatrix,
 ) -> Result<Vec<u8>> {
-    let n = geo_ids.len();
     let i64_names = weights.int_series_names();
     let f64_names = weights.f64_series_names();
 
@@ -262,9 +261,9 @@ pub(crate) fn write_pack_csv(
         // One row per unit.
         let mut record = csv::StringRecord::new();
 
-        for i in 0..n {
+        for (i, geo_id) in geo_ids.iter().enumerate() {
             record.clear();
-            record.push_field(geo_ids[i].id());
+            record.push_field(geo_id.id());
             record.push_field(unit_names.get(i).map(|s| s.as_str()).unwrap_or(""));
 
             let i64_row = weights.int_row(i);
@@ -278,8 +277,7 @@ pub(crate) fn write_pack_csv(
             }
 
             for &(_, ty) in PARENT_COL_TYPES {
-                let val = parents
-                    .get(i)
+                let val = parents.get(i)
                     .and_then(|p| p.get(ty))
                     .map(|g| g.id())
                     .unwrap_or("");

@@ -81,7 +81,7 @@ impl Partition {
         self.parts.assignments().iter().map(|&p| p as u32).collect()
     }
 
-    /// Get all nodes belonging to a given part.
+    #[allow(unused)]
     pub(crate) fn part_nodes(&self, part: u32) -> Vec<usize> {
         self.parts.assignments()
             .iter()
@@ -120,12 +120,14 @@ impl Partition {
     }
 
     /// Get the set of frontier edges for a given part.
+    #[allow(unused)]
     pub(crate) fn frontier_edges(&self, part: u32) -> &[usize] {
         self.frontier_edges.get(part as usize)
     }
 
     /// Get the (source, target) node pairs for all frontier edges of a given part.
     /// Each edge is a directed half-edge from a node in `part` to a node in a different part.
+    #[allow(unused)]
     pub(crate) fn frontier_edge_endpoints(&self, part: u32) -> Vec<(usize, usize)> {
         self.frontier_edges.get(part as usize)
             .iter()
@@ -136,6 +138,7 @@ impl Partition {
     /// Verify that frontier edges are consistent with current assignments.
     /// Returns true if all frontier edges are correctly tracked.
     #[cfg(debug_assertions)]
+    #[allow(unused)]
     pub(crate) fn verify_frontier_edges(&self) -> bool {
         use std::collections::HashSet;
 
@@ -182,6 +185,7 @@ impl Partition {
 
     /// Walk the frontier nodes of a part in order, forming a cycle.
     /// Returns a list of frontier nodes in traversal order, or empty if the frontier is not a simple cycle.
+    #[allow(unused)]
     pub(crate) fn frontier_cycle(&self, part: u32) -> Vec<usize> {
         use std::collections::{HashMap, HashSet};
 
@@ -322,6 +326,7 @@ impl Partition {
     pub(super) fn part_weights(&self) -> &WeightMatrix { self.part_graph.node_weights() }
 
     /// Get a mutable reference to the part weights matrix.
+    #[allow(unused)]
     pub(super) fn part_weights_mut(&mut self) -> &mut WeightMatrix { self.part_graph.node_weights_mut() }
 
     /// Update part weight totals for a single node move (from prev to next part).

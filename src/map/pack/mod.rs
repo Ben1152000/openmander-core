@@ -2,6 +2,7 @@
 mod download;
 mod format;
 mod manifest;
+#[allow(clippy::module_inception)]
 mod pack;
 mod source;
 

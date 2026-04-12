@@ -1,3 +1,4 @@
+use std::{fmt, str::FromStr};
 
 /// Geographic entity types, ordered from largest to smallest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,21 +39,31 @@ impl GeoType {
             GeoType::Block  => "block",
         }
     }
+}
 
-    /// Create a GeoType from a string representation.
-    #[inline]
-    pub fn from_str(string: &str) -> Option<GeoType> {
-        match string.to_lowercase().as_str() {
-            "state"  => Some(GeoType::State),
-            "county" => Some(GeoType::County),
-            "tract"  => Some(GeoType::Tract),
-            "group"  => Some(GeoType::Group),
-            "vtd"    => Some(GeoType::VTD),
-            "block"  => Some(GeoType::Block),
-            _ => None,
+impl FromStr for GeoType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "state"  => Ok(GeoType::State),
+            "county" => Ok(GeoType::County),
+            "tract"  => Ok(GeoType::Tract),
+            "group"  => Ok(GeoType::Group),
+            "vtd"    => Ok(GeoType::VTD),
+            "block"  => Ok(GeoType::Block),
+            _ => Err(anyhow::anyhow!("unknown layer '{}'", s)),
         }
     }
+}
 
+impl fmt::Display for GeoType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.to_str())
+    }
+}
+
+impl GeoType {
     /// Get the expected length of the GEOID string for this GeoType.
     #[inline]
     pub(super) fn id_len(&self) -> usize {

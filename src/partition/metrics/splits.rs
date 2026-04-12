@@ -1,6 +1,6 @@
 use crate::partition::Partition;
 
 impl Partition {
-    /// Compute the number of county splits in the partition.
+    #[allow(unused)]
     pub(crate) fn county_splits(&self) -> Vec<usize> { todo!(); }
 }

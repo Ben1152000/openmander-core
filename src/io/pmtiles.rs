@@ -5,6 +5,15 @@ use std::{f64::consts::PI, io::Cursor};
 use anyhow::Result;
 use geo::Polygon; // used by polygon_bounds and encode_poly_for_tile closure
 
+/// One layer's worth of data to encode into a PMTiles file.
+pub(crate) struct PmtilesLayer<'a> {
+    pub name:     &'a str,
+    pub region:   &'a geograph::Region,
+    pub min_zoom: u8,
+    pub max_zoom: u8,
+}
+
+
 /// Convert longitude to Web Mercator X coordinate (in radians)
 pub(super) fn lon_to_mercator_x(lon: f64) -> f64 { lon.to_radians() }
 
@@ -221,7 +230,7 @@ fn polygon_bounds(poly: &Polygon<f64>) -> (f64, f64, f64, f64) {
 /// Returns: PMTiles file as bytes
 #[cfg(feature = "pmtiles")]
 pub(crate) fn write_to_pmtiles_bytes(
-    layers: Vec<(&str, &geograph::Region, Option<&[String]>, u8, u8)>
+    layers: Vec<PmtilesLayer<'_>>
 ) -> Result<Vec<u8>> {
     use pmtiles2::{PMTiles, TileType, Compression as PmtilesCompression};
     use pmtiles2::util::tile_id;
@@ -243,12 +252,12 @@ pub(crate) fn write_to_pmtiles_bytes(
     let mut global_min_zoom = u8::MAX;
     let mut global_max_zoom = u8::MIN;
 
-    for (_, region, _, min_zoom, max_zoom) in &layers {
-        global_min_zoom = global_min_zoom.min(*min_zoom);
-        global_max_zoom = global_max_zoom.max(*max_zoom);
+    for layer in &layers {
+        global_min_zoom = global_min_zoom.min(layer.min_zoom);
+        global_max_zoom = global_max_zoom.max(layer.max_zoom);
 
-        for unit in region.unit_ids() {
-            for poly in &region.geometry(unit).0 {
+        for unit in layer.region.unit_ids() {
+            for poly in &layer.region.geometry(unit).0 {
                 let (pmin_lon, pmin_lat, pmax_lon, pmax_lat) = polygon_bounds(poly);
                 if pmin_lon.is_finite() && pmin_lat.is_finite()
                     && pmax_lon.is_finite() && pmax_lat.is_finite()
@@ -311,12 +320,12 @@ pub(crate) fn write_to_pmtiles_bytes(
     pm.meta_data.insert("minzoom".into(), serde_json::json!(global_min_zoom));
     pm.meta_data.insert("maxzoom".into(), serde_json::json!(global_max_zoom));
 
-    let vector_layers: Vec<_> = layers.iter().map(|(layer_name, _, _, min_zoom, max_zoom)| {
+    let vector_layers: Vec<_> = layers.iter().map(|layer| {
         serde_json::json!({
-            "id": layer_name,
+            "id": layer.name,
             "fields": {"index": "String"},
-            "minzoom": min_zoom,
-            "maxzoom": max_zoom
+            "minzoom": layer.min_zoom,
+            "maxzoom": layer.max_zoom
         })
     }).collect();
     pm.meta_data.insert("vector_layers".into(), serde_json::json!(vector_layers));
@@ -368,14 +377,19 @@ pub(crate) fn write_to_pmtiles_bytes(
     // Storing pre-encoded bytes (∼3 bytes/coord) rather than Polygon<f64> clones
     // (∼16 bytes/coord) cuts per-tile memory by ~5×, which is critical for large
     // states with complex geometries (Alaska, etc.).
-    for zoom in global_min_zoom..=global_max_zoom {
-        let mut zoom_tiles: HashMap<(u64, u64), HashMap<&str, Vec<(usize, GeomData)>>> = HashMap::new();
+    /// Per-zoom accumulator: tile coords → layer name → [(feature_idx, encoded geom bytes)].
+    type TileAccumulator<'a> = HashMap<(u64, u64), HashMap<&'a str, Vec<(usize, GeomData)>>>;
 
-        for (layer_name, region, _geo_ids, min_zoom, max_zoom) in &layers {
-            if zoom < *min_zoom || zoom > *max_zoom {
+    for zoom in global_min_zoom..=global_max_zoom {
+        let mut zoom_tiles: TileAccumulator<'_> = HashMap::new();
+
+        for layer in &layers {
+            let (layer_name, region, min_zoom, max_zoom) =
+                (layer.name, layer.region, layer.min_zoom, layer.max_zoom);
+            if zoom < min_zoom || zoom > max_zoom {
                 continue;
             }
-            let tolerance = calculate_tolerance_for_zoom(zoom, *max_zoom);
+            let tolerance = calculate_tolerance_for_zoom(zoom, max_zoom);
 
             // Stream one unit at a time via callback — never materialises the
             // full simplified-geometry array simultaneously.

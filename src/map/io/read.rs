@@ -70,10 +70,10 @@ fn read_layer_from_pack_source_with_formats(
 }
 
 /// Detect the data format from file extensions in the pack.
-fn detect_formats_from_files(src: &dyn PackSource) -> PackFormats {
+fn detect_formats_from_files(_src: &dyn PackSource) -> PackFormats {
     #[cfg(feature = "parquet")]
     for ty in GeoType::ALL {
-        if src.has(&format!("data/{}.parquet", ty.to_str())) {
+        if _src.has(&format!("data/{}.parquet", ty.to_str())) {
             return PackFormats { data: "parquet".to_string() };
         }
     }
@@ -148,19 +148,14 @@ impl Map {
         util::require_dir_exists(path)?;
         let src = DiskPack::new(path);
 
-        if src.has("manifest.json") {
-            match Manifest::from_pack_source(&src) {
-                Ok(manifest) => {
-                    let manifest_formats = manifest.formats();
-                    let formats = if manifest_formats.data == PackFormats::default().data {
-                        detect_formats_from_files(&src)
-                    } else {
-                        manifest_formats.clone()
-                    };
-                    return read_map_from_pack_source_with_formats(&src, &formats);
-                }
-                Err(_) => {}
-            }
+        if src.has("manifest.json") && let Ok(manifest) = Manifest::from_pack_source(&src) {
+            let manifest_formats = manifest.formats();
+            let formats = if manifest_formats.data == PackFormats::default().data {
+                detect_formats_from_files(&src)
+            } else {
+                manifest_formats.clone()
+            };
+            return read_map_from_pack_source_with_formats(&src, &formats);
         }
 
         let formats = detect_formats_from_files(&src);

@@ -30,6 +30,7 @@ pub(crate) struct CsvTable {
     pub rows:    Vec<Vec<String>>,
 }
 
+#[allow(unused)]
 impl CsvTable {
     pub fn height(&self) -> usize { self.rows.len() }
 

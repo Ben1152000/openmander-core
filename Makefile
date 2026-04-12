@@ -31,6 +31,7 @@ MODE            ?= release          # 'release' or 'dev'
 TARGET          ?=                  # e.g. universal2-apple-darwin, x86_64-apple-darwin, aarch64-apple-darwin
 WASM_TARGET     ?= web               # wasm-pack target: web, bundler, nodejs, no-modules
 WASM_OUT_DIR    ?= $(APP_DIR)/wasm/pkg
+NO_CLIPPY     ?=                  # set to any value to skip clippy (e.g. make all NO_CLIPPY=1)
 
 # -------- platform tweaks (macOS/Linux vs Windows) --------
 VENV_BIN := $(VENV)/bin
@@ -57,15 +58,15 @@ WASM_OUT        := $(WASM_BINDINGS_DIR)/pkg
 
 .PHONY: all venv python-deps python-dev python-wheel python-test python-otool \
         wasm wasm-copy wasm-clean \
-        test clippy openmander-test geograph geograph-test \
+        test clippy clippy-wasm openmander-test geograph geograph-test \
         clean clean-all print-vars help prepare-target check-wasm-pack
 
 # ============================================================================
 # Build All
 # ============================================================================
 
-# Build all bindings (Python and WASM)
-all: python-dev wasm-copy
+# Build all bindings (Python and WASM), with clippy by default
+all: $(if $(NO_CLIPPY),,clippy) python-dev $(if $(NO_CLIPPY),,clippy-wasm) wasm-copy
 	@echo "✅ All bindings built successfully!"
 
 # ============================================================================
@@ -79,6 +80,10 @@ test: clippy
 # Run clippy lints across the workspace
 clippy:
 	cargo clippy --all-features --all-targets -- -D warnings
+
+# Run clippy lints for the WASM target
+clippy-wasm: check-wasm-pack
+	cargo clippy --target wasm32-unknown-unknown -p openmander-wasm -- -D warnings
 
 # Per-crate test targets
 openmander-test:
@@ -203,6 +208,7 @@ help:
 	@echo 'Rust Tests:'
 	@echo '  test               Run clippy then all Rust tests (workspace-wide)'
 	@echo '  clippy             Run clippy lints across the workspace'
+	@echo '  clippy-wasm        Run clippy lints for the WASM target'
 	@echo '  openmander-test    Run tests for the openmander crate'
 	@echo '  geograph-test      Run tests for the geograph crate'
 	@echo ''
@@ -215,7 +221,7 @@ help:
 	@echo '  wasm-clean         Remove WASM build artifacts'
 	@echo ''
 	@echo 'Common:'
-	@echo '  all                Build all bindings (Python + WASM with copy)'
+	@echo '  all                Build all bindings (Python + WASM with copy), runs clippy first'
 	@echo '  venv               Create virtualenv'
 	@echo '  clean              Remove venv, wheels, WASM artifacts, and Cargo build artifacts'
 	@echo '  clean-all          Also remove egg/dist-info directories'
@@ -226,9 +232,11 @@ help:
 	@echo '  TARGET             Rust target for Python bindings (e.g., universal2-apple-darwin)'
 	@echo '  WASM_TARGET        wasm-pack target: web (default), bundler, nodejs, no-modules'
 	@echo '  APP_DIR            Directory for openmander-app (default: ../openmander-app)'
+	@echo '  NO_CLIPPY        Set to any value to skip clippy in `make all` (e.g. NO_CLIPPY=1)'
 	@echo ''
 	@echo 'Examples:'
-	@echo '  make all                            # Build all bindings (Python + WASM)'
+	@echo '  make all                            # Build all bindings (Python + WASM, with clippy)'
+	@echo '  make all NO_CLIPPY=1              # Build all bindings without clippy'
 	@echo '  make all MODE=dev                   # Debug build all bindings'
 	@echo '  make python-dev                     # Release build Python bindings'
 	@echo '  make python-dev MODE=dev            # Debug build Python bindings'

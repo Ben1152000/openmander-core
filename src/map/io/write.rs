@@ -7,6 +7,8 @@ use crate::{
     map::{GeoType, Map, MapLayer, util},
     map::pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats},
 };
+#[cfg(feature = "pmtiles")]
+use crate::io::pmtiles::{PmtilesLayer, write_to_pmtiles_bytes};
 
 /// Computes the SHA-256 hash of the given bytes and returns it as a hex string.
 fn sha256_bytes(bytes: &[u8]) -> String {
@@ -171,20 +173,18 @@ impl Map {
             file_hashes.insert(region_file, FileHash { sha256: sha256_bytes(&region_bytes) });
         }
 
-        let mut geo_id_vecs: Vec<Vec<String>> = Vec::new();
-        let mut layer_info: Vec<(&str, &geograph::Region, u8, u8, usize)> = Vec::new();
+        let mut pmtiles_layers: Vec<PmtilesLayer<'_>> = Vec::new();
 
         for layer in self.layers_iter() {
             let region = &*layer.region;
             if region.num_units() > 0 {
-                let layer_name = layer.ty().to_str();
                 let (min_zoom, max_zoom) = pmtiles_zoom_range_for_layer(layer.ty());
-                let geo_ids: Vec<String> = layer.geo_ids.iter()
-                    .map(|g| g.id().to_string())
-                    .collect();
-                let idx = geo_id_vecs.len();
-                geo_id_vecs.push(geo_ids);
-                layer_info.push((layer_name, region, min_zoom, max_zoom, idx));
+                pmtiles_layers.push(PmtilesLayer {
+                    name: layer.ty().to_str(),
+                    region,
+                    min_zoom,
+                    max_zoom,
+                });
             }
         }
 
@@ -194,12 +194,12 @@ impl Map {
         const POLAR_CIRCLE_LAT: f64 = 66.5;
         const HIGH_LAT_MAX_ZOOM: u8 = 12;
 
-        let (state_min_lat, state_max_lat) = layer_info.iter()
-            .find(|(name, ..)| *name == "state")
-            .map(|(_, region, ..)| {
-                region.unit_ids()
+        let (state_min_lat, state_max_lat) = pmtiles_layers.iter()
+            .find(|l| l.name == "state")
+            .map(|l| {
+                l.region.unit_ids()
                     .flat_map(|unit| {
-                        region.geometry(unit).0.iter()
+                        l.region.geometry(unit).0.iter()
                             .flat_map(|poly| poly.exterior().coords().map(|c| c.y))
                             .collect::<Vec<_>>()
                     })
@@ -217,21 +217,15 @@ impl Map {
                 "[write_pack] state extends {desc} \
                  — capping PMTiles max zoom to {HIGH_LAT_MAX_ZOOM} and raising min zoom by 2 for all layers"
             );
-            for (_, _, min_zoom, max_zoom, _) in layer_info.iter_mut() {
-                *max_zoom = (*max_zoom).min(HIGH_LAT_MAX_ZOOM);
-                *min_zoom = (*min_zoom + 2).max(4);
+            for layer in pmtiles_layers.iter_mut() {
+                layer.max_zoom = layer.max_zoom.min(HIGH_LAT_MAX_ZOOM);
+                layer.min_zoom = (layer.min_zoom + 2).max(4);
             }
         }
 
-        let pmtiles_layers: Vec<(&str, &geograph::Region, Option<&[String]>, u8, u8)> = layer_info.iter()
-            .map(|(name, region, min_zoom, max_zoom, idx)| {
-                (*name, *region, Some(geo_id_vecs[*idx].as_slice()), *min_zoom, *max_zoom)
-            })
-            .collect();
-
         if !pmtiles_layers.is_empty() {
             let geom_file = "geom/geometries.pmtiles";
-            let geom_bytes = crate::io::pmtiles::write_to_pmtiles_bytes(pmtiles_layers)?;
+            let geom_bytes = write_to_pmtiles_bytes(pmtiles_layers)?;
             sink.put(geom_file, &geom_bytes)?;
             file_hashes.insert(geom_file.to_string(), FileHash { sha256: sha256_bytes(&geom_bytes) });
         }

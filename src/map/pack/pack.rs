@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "download")]
+use std::path::PathBuf;
 
 use anyhow::Result;
 
@@ -104,5 +106,5 @@ pub fn download_pack(state_code: &str, path: &Path, verbose: u8) -> Result<PathB
 }
 
 /// Validate the contents of a map pack at `pack_path`.
-#[allow(dead_code, unused_variables)]
+#[allow(unused)]
 pub fn validate_pack(pack_path: &Path, verbose: u8) -> Result<()> { todo!()}

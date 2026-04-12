@@ -1,30 +1,21 @@
 use std::str::FromStr;
+
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 /// Pack file format for data and geometry storage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PackFormat {
     /// Parquet format (requires parquet feature, not available for WASM)
+    #[cfg_attr(feature = "parquet", default)]
     Parquet,
     /// PMTiles format for geometry storage (WASM-compatible, requires pmtiles feature)
+    #[cfg_attr(not(feature = "parquet"), default)]
     Pmtiles,
 }
 
 impl PackFormat {
-    /// Default format (parquet if available, otherwise pmtiles)
-    pub fn default() -> Self {
-        #[cfg(feature = "parquet")]
-        {
-            Self::Parquet
-        }
-        #[cfg(not(feature = "parquet"))]
-        {
-            Self::Pmtiles
-        }
-    }
-
     /// Get file extension for data files
     pub fn data_extension(&self) -> &'static str {
         match self {
@@ -34,11 +25,6 @@ impl PackFormat {
     }
 }
 
-impl Default for PackFormat {
-    fn default() -> Self {
-        Self::default()
-    }
-}
 
 impl FromStr for PackFormat {
     type Err = anyhow::Error;

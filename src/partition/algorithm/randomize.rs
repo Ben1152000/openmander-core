@@ -2,6 +2,7 @@ use rand::{distributions::{weighted::WeightedIndex, Distribution}, seq::{SliceRa
 
 use crate::partition::Partition;
 
+#[allow(unused)]
 impl Partition {
     /// Select a random node from the map.
     pub(crate) fn random_node<R: Rng + ?Sized>(&self, rng: &mut R) -> usize {

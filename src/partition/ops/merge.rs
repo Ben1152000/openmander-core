@@ -13,7 +13,7 @@ impl Partition {
             return self.merge_parts(source, target, check)
         }
 
-        if !self.part_borders_part(target, source) { return None } // parts must be adjacent
+        if check && !self.part_borders_part(target, source) { return None } // parts must be adjacent
 
         // Update assignments.
         for u in 0..self.graph().node_count() {

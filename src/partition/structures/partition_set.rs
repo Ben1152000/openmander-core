@@ -6,6 +6,7 @@ pub(crate) struct PartitionSet {
     position: Vec<usize>    // position[e] = i when sets[s][i] is e
 }
 
+#[allow(unused)]
 impl PartitionSet {
     /// Create a MultiSet with `num_sets` sets and `num_elems` elements,
     /// initially assigning all elements to set 0.

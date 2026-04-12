@@ -46,6 +46,7 @@ impl UnitGraph {
     }
 
     /// Get the (source, target) pair for a directed edge index.
+    #[allow(unused)]
     pub(crate) fn edge_endpoints(&self, edge_idx: usize) -> Option<(usize, usize)> {
         self.0.adjacency()
             .edge_at(edge_idx)
@@ -53,6 +54,7 @@ impl UnitGraph {
     }
 
     /// Get the ith neighbor of a node.
+    #[allow(unused)]
     #[inline]
     pub(crate) fn edge(&self, node: usize, i: usize) -> Option<usize> {
         self.0.adjacency()

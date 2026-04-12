@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use anyhow::{anyhow, Result};
 use js_sys::{Object, Reflect, Uint8Array};
@@ -33,10 +33,5 @@ pub(crate) fn js_files_to_mempack(files: JsValue) -> Result<openmander_core::Mem
 
 pub(crate) fn parse_layer(layer: Option<String>) -> Result<openmander_core::GeoType> {
     let layer = layer.as_deref().unwrap_or("block");
-    openmander_core::GeoType::from_str(layer).ok_or_else(|| {
-        anyhow!(
-            "Unknown layer {:?}. Expected one of: state, county, tract, group, vtd, block",
-            layer
-        )
-    })
+    openmander_core::GeoType::from_str(layer)
 }

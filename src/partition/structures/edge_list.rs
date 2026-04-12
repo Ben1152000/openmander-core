@@ -20,6 +20,7 @@ pub(crate) struct FrontierEdgeList {
     loc: Vec<Option<(usize, usize)>>, // loc[he] = Some((part, pos))
 }
 
+#[allow(unused)]
 impl FrontierEdgeList {
     /// Create an empty frontier list with `num_parts` parts and `num_edges` edges in the graph.
     pub(crate) fn new(num_parts: usize, num_edges: usize) -> Self {

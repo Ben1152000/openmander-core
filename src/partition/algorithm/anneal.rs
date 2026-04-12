@@ -1,4 +1,4 @@
-use rand::{Rng, distributions::Distribution};
+use rand::{Rng, distributions::{Distribution, Standard}};
 
 use crate::{Objective, partition::Partition};
 
@@ -11,7 +11,7 @@ struct OptimizationParams {
     pub batch_size: usize,
 }
 
-struct OptimizationState<Rng: rand::Rng> {
+struct OptimizationState<Rng> {
     pub rng: Rng,
     pub current_score: f64,
     pub current_iter: usize,
@@ -55,7 +55,7 @@ fn acceptance_probability(delta: f64, temp: f64) -> f64 {
 /// Metropolis acceptance criterion for simulated annealing in temperature space.
 /// Accept if `delta <= 0` or with probability `exp(-delta / T)`.
 fn accept_metropolis<R: Rng + ?Sized>(delta: f64, temp: f64, rng: &mut R) -> bool {
-    delta > EPSILON || rand::distributions::Distribution::<f64>::sample(&rand::distributions::Standard, rng) < acceptance_probability(delta, temp)
+    delta > EPSILON || Distribution::<f64>::sample(&Standard, rng) < acceptance_probability(delta, temp)
 }
 
 impl Partition {
@@ -168,6 +168,7 @@ impl Partition {
     /// - `early_stop_iters`: Stop phase after this many iterations without improvement (when end_prob is None)
     /// - `temp_search_batch_size`: Batch size for temperature tuning steps
     /// - `batch_size`: Batch size for cooling phases
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn anneal(&mut self,
         objectives: &[Objective],
         max_iter: usize,
@@ -448,7 +449,7 @@ impl Partition {
         (accept, delta)
     }
 
-    /// Print progress information (for phase 3 where we don't have rolling window)
+    #[allow(unused)]
     fn print_progress(
         &self,
         objective: &Objective,
@@ -473,7 +474,7 @@ impl Partition {
         );
     }
 
-    /// Print progress information with average probability over rolling window
+    #[allow(unused)]
     fn print_progress_with_avg_prob(
         &self,
         objective: &Objective,

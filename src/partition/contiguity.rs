@@ -181,7 +181,7 @@ impl Partition {
         true
     }
 
-    /// Find all connected components (as node lists) inside district `part`.
+    #[allow(unused)]
     pub(crate) fn find_components(&self, part: u32) -> Vec<Vec<usize>> {
         let mut components = Vec::new();
 
@@ -207,6 +207,7 @@ impl Partition {
     }
 
     /// Check if if every real district `(1..num_parts)` is contiguous.
+    #[allow(unused)]
     pub(crate) fn check_contiguity(&self) -> bool {
         (1..self.num_parts()).all(|part| self.find_components(part).len() <= 1)
     }
@@ -217,6 +218,7 @@ impl Partition {
     /// keep its largest component and move each smaller component to the
     /// best neighboring district (by summed shared-perimeter weight).
     /// Returns true if any changes were made.
+    #[allow(unused)]
     pub(crate) fn ensure_contiguity(&mut self) -> bool {
         let mut changed = false;
 
@@ -292,7 +294,7 @@ impl Partition {
         // Use the reusable scratch_component buffer (invariant: all entries are usize::MAX).
         // We reset only the cells we touch before returning.
         self.scratch_component[node] = usize::MAX.wrapping_sub(1); // mark removed (≠ MAX, ≠ any index)
-        for i in 0..neighbors.len() { self.scratch_component[neighbors[i]] = i }
+        for (i, &neighbor) in neighbors.iter().enumerate() { self.scratch_component[neighbor] = i }
 
         // One queue per component seed (each neighbor).
         let mut queues = neighbors.iter()

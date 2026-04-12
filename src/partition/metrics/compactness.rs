@@ -40,17 +40,17 @@ impl Partition {
     /// Compute the Reock compactness score for a part (0 to 1).
     /// Formula: area(part) / area(minimum_bounding_circle(part))
     /// If the minimum bounding circle area is zero, returns infinity.
-    #[allow(unused_variables)]
+    #[allow(unused)]
     pub(crate) fn reock(&self, part: u32) -> f64 { todo!() }
 
     /// Get the moment of a part (defined as the sum of the square weighted
     /// distance from the population center).
-    #[allow(unused_variables)]
+    #[allow(unused)]
     pub(crate) fn moment(&self, part: u32) -> f64 { todo!() }
 
     /// Compute the convex hull compactness score for a part (0 to 1).
     /// Formula: area(part) / area(convex_hull(part))
     /// If the convex hull area is zero, returns infinity.
-    #[allow(unused_variables)]
+    #[allow(unused)]
     pub(crate) fn convex_hull(&self, part: u32) -> f64 { todo!() }
 }

@@ -44,14 +44,10 @@ pub(crate) fn read_parquet_bytes(bytes: &[u8]) -> Result<ParsedPackCsv> {
     // Extract parent refs.
     let mut parents = vec![ParentRefs::default(); n];
     for &(col_name, ty) in PARENT_COL_TYPES {
-        if let Ok(col) = df.column(col_name) {
-            if let Ok(str_col) = col.str() {
-                for (i, val) in str_col.into_iter().enumerate() {
-                    if let Some(s) = val {
-                        if !s.is_empty() {
-                            parents[i].set(ty, Some(GeoId::new(ty, s)));
-                        }
-                    }
+        if let Ok(col) = df.column(col_name) && let Ok(str_col) = col.str() {
+            for (i, val) in str_col.into_iter().enumerate() {
+                if let Some(s) = val && !s.is_empty() {
+                    parents[i].set(ty, Some(GeoId::new(ty, s)));
                 }
             }
         }

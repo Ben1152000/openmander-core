@@ -136,6 +136,20 @@ Example layout:
   manifest.json     # schema & provenance
 ```
 
+### Data Sources (Provenance)
+
+- Dave’s Redistricting App (DRA). 2020. *Block-Level Demographic Data & Election Results (v06).*  
+  Available at: `https://data.dra2020.net/file/dra-block-data/`.  
+  Accessed September 12, 2025.
+
+- U.S. Census Bureau. 2020. *TIGER/Line Shapefiles: 2020 Census PL 94-171 (Redistricting), State.*  
+  Available at: `https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/`.  
+  Accessed September 12, 2025.
+
+- U.S. Census Bureau. 2020. *2020 Census Block Assignment Files (BAF), State.*  
+  Available at: `https://www2.census.gov/geo/docs/maps-data/data/baf2020/`.  
+  Accessed September 12, 2025.
+
 ## License
 
 License: TBD (*You got a loicense for that?*)

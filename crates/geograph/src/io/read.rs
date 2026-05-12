@@ -49,7 +49,11 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         return Err(IoError::InvalidData("num_half_edges must be even".into()));
     }
 
+    println!("[Region] Header: {} vertices, {} half-edges, {} faces, {} units",
+        num_vertices, num_half_edges, num_faces, num_units);
+
     // ---- Vertices ----
+    println!("[Region] Reading vertices...");
     let mut vertices: Vec<Vertex<Coord<f64>>> = Vec::with_capacity(num_vertices);
     for _ in 0..num_vertices {
         let lon = decode_coord(read_i32(reader)?);
@@ -58,6 +62,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     }
 
     // ---- HalfEdges ----
+    println!("[Region] Reading half-edges...");
     let mut half_edges: Vec<HalfEdge> = Vec::with_capacity(num_half_edges);
     for e in 0..num_half_edges {
         let origin = read_u32(reader)?;
@@ -78,6 +83,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         });
     }
 
+    println!("[Region] Back-filling vertex pointers...");
     // Back-fill vertex → half-edge pointers.
     for (e, half_edge) in half_edges.iter().enumerate() {
         let v = half_edge.origin.0 as usize;
@@ -87,6 +93,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     }
 
     // ---- Faces ----
+    println!("[Region] Reading faces...");
     let mut faces: Vec<Face> = Vec::with_capacity(num_faces);
     for _ in 0..num_faces {
         let raw = read_u32(reader)?;
@@ -102,6 +109,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     }
 
     // ---- FaceToUnit ----
+    println!("[Region] Reading face-to-unit map...");
     let mut face_to_unit: Vec<UnitId> = Vec::with_capacity(num_faces);
     for _ in 0..num_faces {
         let raw = read_u32(reader)?;
@@ -116,6 +124,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     }
 
     // ---- UnitCache ----
+    println!("[Region] Reading unit cache...");
     let mut area      = Vec::with_capacity(num_units);
     let mut perimeter = Vec::with_capacity(num_units);
     for _ in 0..num_units {
@@ -124,6 +133,7 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     }
 
     // ---- EdgeLengths ----
+    println!("[Region] Reading edge lengths...");
     let num_edges = num_half_edges / 2;
     let mut edge_length = Vec::with_capacity(num_edges);
     for _ in 0..num_edges {
@@ -131,15 +141,18 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     }
 
     // ---- Adjacency CSR ----
+    println!("[Region] Reading adjacency CSRs...");
     // Read the stored Rook CSR.  It may contain forced pairs (island bridges)
     // that are not present in the DCEL geometry; those must be preserved.
     let adjacent_stored = read_csr(reader, num_units)?;
     let touching = read_csr(reader, num_units)?;
 
     // ---- Rebuild DCEL ----
+    println!("[Region] Rebuilding DCEL...");
     let dcel = Dcel { vertices, half_edges, faces };
 
     // ---- Rebuild Rook adjacency: DCEL-derived weights + forced pairs from stored CSR ----
+    println!("[Region] Rebuilding rook adjacency...");
     // Build the natural adjacency from the DCEL (correct shared-boundary weights).
     let adjacent_natural = crate::region::adj::build_adjacent(&dcel, &face_to_unit, &edge_length, num_units);
     // Any pair in the stored CSR that is absent from the DCEL-derived matrix is a
@@ -157,9 +170,12 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
     let adjacent = adjacent_natural.with_extra_edges(&forced_pairs);
 
     // ---- Derive remaining cache fields ----
+    println!("[Region] Computing exterior boundary lengths...");
     let exterior_boundary_length =
         compute_exterior_boundary_length(&dcel, &face_to_unit, &edge_length, num_units);
+    println!("[Region] Computing centroids...");
     let centroid = compute_centroids(&dcel, &face_to_unit, num_units);
+    println!("[Region] Computing bounds...");
     let bounds = compute_bounds(&dcel, &face_to_unit, num_units);
     let bounds_all  = {
         let mut rect = bounds[0];
@@ -171,10 +187,15 @@ pub fn read(reader: &mut impl Read) -> Result<Region, IoError> {
         }
         rect
     };
+    println!("[Region] Computing is_exterior...");
     let is_exterior = compute_is_exterior(&dcel, &face_to_unit, num_units);
+    println!("[Region] Building R-tree...");
     let rtree = SpatialIndex::new(&bounds);
+    println!("[Region] Computing unit-to-faces index...");
     let (unit_to_faces_offsets, unit_to_faces_data) = crate::region::build::compute_unit_to_faces(&face_to_unit, num_units);
+    println!("[Region] Computing face inner cycles...");
     let face_inner_cycles = crate::region::build::compute_face_inner_cycles(&dcel);
+    println!("[Region] Done");
 
     let region = Region {
         dcel,

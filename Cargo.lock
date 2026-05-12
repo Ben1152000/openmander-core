@@ -967,6 +967,7 @@ dependencies = [
  "ahash",
  "geo",
  "rstar",
+ "web-sys",
 ]
 
 [[package]]

@@ -47,7 +47,7 @@ parquet = ["dep:polars"]
 # PMTiles geometry storage (WASM-compatible)
 pmtiles = ["dep:pmtiles2", "dep:mvt"]
 # Redirect println!/eprintln! to browser console (WASM bindings)
-wasm-console = ["dep:web-sys"]
+wasm-console = ["dep:web-sys", "geograph/wasm-console"]
 
 [workspace]
 members = ["crates/geograph", "bindings/python", "bindings/wasm"]

@@ -402,7 +402,9 @@ impl Partition {
         let node = candidates[state.rng.gen_range(0..candidates.len())];
 
         // Pick random destination part (that neighbors node)
-        let dest = self.random_neighboring_part(node, &mut state.rng).unwrap();
+        let Some(dest) = self.random_neighboring_part(node, &mut state.rng) else {
+            return (false, 0.0);
+        };
 
         // Collect articulation bundle (if necessary to maintain contiguity)
         let bundle = if !self.check_node_contiguity(node, dest) { 
@@ -447,6 +449,73 @@ impl Partition {
 
         state.current_iter += 1;
         (accept, delta)
+    }
+
+    /// Run `chunk_size` annealing iterations at the given temperature with geometric cooling.
+    /// Returns the temperature after applying cooling.
+    /// No temperature tuning is performed — the caller controls the schedule.
+    /// Tune temperature via binary search until average acceptance probability reaches `target_prob`.
+    /// Returns the tuned temperature. The partition state evolves (not restored).
+    pub(crate) fn tune_temperature(
+        &mut self,
+        objective: &Objective,
+        target_prob: f64,
+        init_temp: f64,
+        batch_size: usize,
+    ) -> f64 {
+        assert!(self.parts.get(0).is_empty(), "part 0 (unassigned) must be empty");
+        assert!(self.num_parts() > 2, "need at least two parts for annealing");
+
+        let score = objective.compute(self);
+        let mut state = OptimizationState {
+            rng: rand::thread_rng(),
+            current_score: score,
+            current_iter: 0,
+            best_score: score,
+            best_assignments: vec![],
+            best_iter: 0,
+            temperature: init_temp,
+        };
+        let params = OptimizationParams {
+            max_iter: usize::MAX,
+            init_temp,
+            cooling_rate: 0.0,
+            early_stop_iters: 0,
+            temp_search_batch_size: batch_size,
+            batch_size,
+        };
+        self.tune_initial_temperature(objective, &params, &mut state, target_prob);
+        state.temperature
+    }
+
+    /// Run one cooling chunk: `chunk_size` iterations at `temperature`, apply `cooling_rate`, return
+    /// `(new_temp, avg_prob, any_accepted)`. Caller is responsible for stopping logic.
+    pub(crate) fn anneal_raw_chunk(
+        &mut self,
+        objective: &Objective,
+        temperature: f64,
+        cooling_rate: f64,
+        chunk_size: usize,
+    ) -> (f64, f64, bool) {
+        assert!(self.parts.get(0).is_empty(), "part 0 (unassigned) must be empty");
+        assert!(self.num_parts() > 2, "need at least two parts for annealing");
+        assert!(chunk_size > 0, "chunk_size must be > 0");
+
+        let score = objective.compute(self);
+        let mut state = OptimizationState {
+            rng: rand::thread_rng(),
+            current_score: score,
+            current_iter: 0,
+            best_score: score,
+            best_assignments: vec![],
+            best_iter: 0,
+            temperature,
+        };
+
+        let (any_accepted, avg_prob, final_prob) = self.anneal_batch(objective, &mut state, chunk_size);
+        let new_temp = state.temperature * (1.0 - cooling_rate);
+        self.print_progress_with_avg_prob_and_curr(objective, avg_prob, final_prob, &state, "Anneal");
+        (new_temp, avg_prob, any_accepted)
     }
 
     #[allow(unused)]

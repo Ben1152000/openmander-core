@@ -58,6 +58,7 @@ fn read_layer_from_pack_source_with_formats(
     } else {
         format!("geom/{layer_name}.region")
     };
+    println!("[Map]   Deserializing region: {}", region_file);
     let region = {
         let mut stream = src.open_read(&region_file)
             .with_context(|| format!("Pack missing required region file: {}", region_file))?;
@@ -65,6 +66,7 @@ fn read_layer_from_pack_source_with_formats(
     }.map_err(|e| anyhow::anyhow!(
         "Failed to deserialize region for {layer_name}: {e:?}"
     ))?;
+    println!("[Map]   Region deserialized: {} units", region.num_units());
 
     Ok(MapLayer::new(ty, geo_ids, index, parents, unit_names, unit_weights, Arc::new(region)))
 }

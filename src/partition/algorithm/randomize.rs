@@ -65,7 +65,7 @@ impl Partition {
     }
 
     /// Randomly assign all nodes to contiguous parts.
-    pub(crate) fn randomize(&mut self) {
+    pub(crate) fn random_seed_fill(&mut self) {
         let mut rng = rand::thread_rng();
         self.clear_assignments();
 
@@ -78,5 +78,88 @@ impl Partition {
         while let Some(u) = self.random_unassigned_boundary_node(&mut rng) {
             self.move_node(u, self.random_neighboring_part(u, &mut rng).unwrap(), false);
         }
+    }
+
+    /// Assign all nodes to districts by building a minimum spanning tree weighted to prefer
+    /// intra-county edges, then greedily cutting subtrees from the leaves inward.
+    ///
+    /// `series`     — weight series used to size districts (e.g. `"T_20_CENS_Total"`).
+    /// `county_ids` — per-node county index (dense, 0-based). Edges crossing county boundaries
+    ///                receive a weight penalty of 1.0, making them less likely to appear in the MST.
+    pub(crate) fn random_minimize_county_splits(&mut self, series: &str, vtd_ids: &[u32], county_ids: &[u32]) {
+        use crate::partition::structures::SpanningTree;
+
+        self.clear_assignments();
+
+        let n = self.num_nodes();
+        let num_districts = (self.num_parts() - 1) as usize; // excludes unassigned part 0
+        let mut rng = rand::thread_rng();
+
+        // Steps 1 & 2: random edge weights with penalties for boundary-crossing edges.
+        // +1 for precinct (VTD) crossings, +2 for county crossings (cumulative).
+        let mut weighted_adj = vec![Vec::new(); n];
+        for u in 0..n {
+            for v in self.graph().edges(u) {
+                let vtd_penalty    = if vtd_ids[u]    != vtd_ids[v]    { 1.0 } else { 0.0 };
+                let county_penalty = if county_ids[u]  != county_ids[v] { 2.0 } else { 0.0 };
+                weighted_adj[u].push((v, rng.gen_range(0.0..1.0) + vtd_penalty + county_penalty));
+            }
+        }
+
+        // Step 3: build MST over the entire graph.
+        let tree = SpanningTree::minimum_spanning_tree((0..n).collect(), n, &weighted_adj);
+
+        let total  = self.region_total(series);
+        let target = total / num_districts as f64;
+
+        // Step 4a: bottom-up accumulation — compute subtree populations once.
+        let mut subtree_pop: Vec<f64> = (0..n)
+            .map(|u| self.unit_weights().get_as_f64(series, u).unwrap_or(0.0))
+            .collect();
+        for u in tree.non_root_nodes_bottom_up() {
+            let p = tree.parent_of(u).unwrap();
+            subtree_pop[p] += subtree_pop[u];
+        }
+
+        let mut assignments = vec![0u32; n];
+
+        // Step 4b: cut one district at a time.
+        // Each iteration finds the subtree whose population is closest to `target` without
+        // exceeding it, assigns it, then walks up the tree subtracting the cut population
+        // from each ancestor — O(depth) work per cut instead of a full re-traversal.
+        for district in 1..num_districts as u32 {
+            // Best candidate: unassigned non-root node with subtree_pop ≤ target, maximised.
+            let best = tree.non_root_nodes_bottom_up()
+                .filter(|&u| assignments[u] == 0 && subtree_pop[u] <= target)
+                .max_by(|&a, &b| {
+                    subtree_pop[a].partial_cmp(&subtree_pop[b]).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+            let u = match best {
+                Some(u) => u,
+                None => break, // remaining population fits in one district
+            };
+
+            // Assign the subtree; skip nodes already assigned by earlier cuts.
+            for &node in tree.subtree_nodes(u).unwrap() {
+                if assignments[node] == 0 { assignments[node] = district; }
+            }
+
+            // Propagate the cut upward: subtract `target` (not the actual subtree population)
+            // from every ancestor so that underapproximations do not compound across cuts.
+            let mut cur = u;
+            while let Some(p) = tree.parent_of(cur) {
+                subtree_pop[p] -= target;
+                cur = p;
+            }
+        }
+
+        // Step 5: everything still unassigned belongs to the final district.
+        let last = num_districts as u32;
+        for a in &mut assignments {
+            if *a == 0 { *a = last; }
+        }
+
+        self.set_assignments(assignments);
     }
 }

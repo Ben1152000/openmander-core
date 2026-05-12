@@ -181,6 +181,53 @@ impl Partition {
         true
     }
 
+    /// Check whether district `part` remains contiguous after removing `removed`.
+    ///
+    /// Unlike `check_subgraph_contiguity`, the removed nodes are not required to
+    /// form a connected subgraph — they may be scattered singletons.  Only the
+    /// *remaining* nodes of `part` need to be connected.
+    ///
+    /// Single-node removals are already verified by `check_node_contiguity` during
+    /// candidate enumeration; call this only when removing 2+ nodes simultaneously.
+    pub(crate) fn contiguous_after_removal(&self, part: u32, removed: &[usize]) -> bool {
+        let removed_set: HashSet<usize> = removed.iter().copied().collect();
+
+        // Use the direct node list for this part (O(district_size), not O(n_total)).
+        let part_nodes = self.parts.get(part as usize);
+
+        // Find a starting node in `part` that is not being removed.
+        let start = part_nodes.iter().copied()
+            .find(|&u| !removed_set.contains(&u));
+
+        let start = match start {
+            Some(s) => s,
+            None => return removed_set.is_empty(),
+        };
+
+        // Count non-removed nodes in `part` (O(district_size)).
+        let remaining = part_nodes.len()
+            - part_nodes.iter().filter(|u| removed_set.contains(u)).count();
+
+        // BFS within `part`, skipping removed nodes.
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        visited.insert(start);
+        queue.push_back(start);
+        while let Some(u) = queue.pop_front() {
+            for v in self.unit_graph.edges(u) {
+                if self.assignment(v) == part
+                    && !removed_set.contains(&v)
+                    && visited.insert(v)
+                {
+                    queue.push_back(v);
+                }
+            }
+        }
+
+        // Contiguous iff all non-removed nodes in `part` were reached.
+        visited.len() == remaining
+    }
+
     #[allow(unused)]
     pub(crate) fn find_components(&self, part: u32) -> Vec<Vec<usize>> {
         let mut components = Vec::new();

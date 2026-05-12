@@ -106,6 +106,17 @@ impl Plan {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Randomize partition using a minimum spanning tree that minimizes county splits.
+    ///
+    /// Parameters
+    /// ----------
+    /// series : str
+    ///     Weight series used to size districts (e.g. ``"T_20_CENS_Total"``).
+    pub fn randomize_minimize_county_splits(&mut self, series: &str) -> PyResult<()> {
+        self.inner.randomize_minimize_county_splits(series)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Equalize a weight series across districts using greedy swaps
     pub fn equalize<'py>(&mut self, py: Python<'py>, series: &str, tolerance: f64, max_iter: usize) -> PyResult<()> {
         py.allow_threads(||
@@ -215,6 +226,17 @@ impl Plan {
             self.inner.recombine(a, b)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         )
+    }
+
+    /// Run exact population equalization.
+    ///
+    /// Returns a tuple ``(blocks_moved, fallback_edges)`` where
+    /// ``blocks_moved`` is the number of census blocks reassigned and
+    /// ``fallback_edges`` is the number of spanning-tree edges for which no
+    /// ILP solution was found (boundary left unchanged).
+    pub fn equalize_exact(&mut self, series: &str) -> PyResult<(usize, usize)> {
+        self.inner.equalize_exact(series)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Load assignments from a CSV path (same validation as Rust `load_csv`)

@@ -106,8 +106,81 @@ impl Plan {
 
     /// Randomize partition into contiguous districts.
     pub fn randomize(&mut self) -> Result<()> {
-        self.partition.randomize();
+        self.partition.random_seed_fill();
         Ok(())
+    }
+
+    /// Randomize partition using a minimum spanning tree that minimizes county splits.
+    ///
+    /// Builds an MST with random edge weights plus penalties for precinct- and county-crossing
+    /// edges, then greedily cuts subtrees from the leaves inward to form districts sized by `series`.
+    pub fn randomize_minimize_county_splits(&mut self, series: &str) -> Result<()> {
+        use std::collections::HashMap;
+        use crate::map::GeoType;
+
+        let base = self.map.base()?;
+        let parents = base.parents();
+
+        let make_ids = |ty: GeoType| {
+            let mut id_map: HashMap<&str, u32> = HashMap::new();
+            let mut next_id = 0u32;
+            parents.iter()
+                .map(|refs| {
+                    let key = refs.get(ty).map(|g| g.id()).unwrap_or("");
+                    *id_map.entry(key).or_insert_with(|| { let id = next_id; next_id += 1; id })
+                })
+                .collect::<Vec<u32>>()
+        };
+
+        let vtd_ids    = make_ids(GeoType::VTD);
+        let county_ids = make_ids(GeoType::County);
+
+        self.partition.random_minimize_county_splits(series, &vtd_ids, &county_ids);
+        Ok(())
+    }
+
+    /// Perform exact population equalization using ILP block swaps.
+    ///
+    /// Builds the equalization graph, solves for a consistent excess assignment,
+    /// and applies the resulting block transfers so every district reaches
+    /// exactly T or T+1 people.
+    ///
+    /// Returns `(blocks_moved, fallback_edges)` where `fallback_edges` is the
+    /// number of spanning-tree edges for which no ILP solution was found.
+    pub fn equalize_exact(&mut self, series: &str) -> Result<(usize, usize)> {
+        let base    = self.map.base()?;
+        let parents = base.parents();
+
+        let mut id_map: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+        let mut next_id = 0u32;
+        let county_ids: Vec<u32> = parents.iter()
+            .map(|refs| {
+                let key = refs.get(GeoType::County).map(|g| g.id()).unwrap_or("");
+                *id_map.entry(key).or_insert_with(|| { let id = next_id; next_id += 1; id })
+            })
+            .collect();
+
+        let stats = self.partition.equalize_exact(series, &county_ids);
+        Ok((stats.blocks_moved, stats.fallback_edges))
+    }
+
+    /// Build the equalization graph and spanning tree, print a structured
+    /// summary of all edges and feasible net_flows to stdout, and return a
+    /// one-line summary string.  Intended for development/debugging.
+    pub fn equalize_exact_debug(&mut self, series: &str) -> Result<String> {
+        let base    = self.map.base()?;
+        let parents = base.parents();
+
+        let mut id_map: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+        let mut next_id = 0u32;
+        let county_ids: Vec<u32> = parents.iter()
+            .map(|refs| {
+                let key = refs.get(GeoType::County).map(|g| g.id()).unwrap_or("");
+                *id_map.entry(key).or_insert_with(|| { let id = next_id; next_id += 1; id })
+            })
+            .collect();
+
+        Ok(self.partition.debug_equalization_graph(series, &county_ids))
     }
 
     /// Run one outer iteration of equalization. Returns `true` if all districts are within tolerance.
@@ -124,6 +197,27 @@ impl Plan {
     pub fn anneal_balance(&mut self, series: &str, max_iter: usize, initial_temp: f64, final_temp: f64, boundary_factor: f64) -> Result<()> {
         self.partition.anneal_balance(series, max_iter, initial_temp, final_temp, boundary_factor);
         Ok(())
+    }
+
+    pub fn tune_temperature(
+        &mut self,
+        objective: &Objective,
+        target_prob: f64,
+        init_temp: f64,
+        batch_size: usize,
+    ) -> f64 {
+        self.partition.tune_temperature(objective, target_prob, init_temp, batch_size)
+    }
+
+    /// Returns `(new_temp, avg_prob, any_accepted)`.
+    pub fn anneal_raw_chunk(
+        &mut self,
+        objective: &Objective,
+        temperature: f64,
+        cooling_rate: f64,
+        chunk_size: usize,
+    ) -> (f64, f64, bool) {
+        self.partition.anneal_raw_chunk(objective, temperature, cooling_rate, chunk_size)
     }
 
     #[allow(clippy::too_many_arguments)]

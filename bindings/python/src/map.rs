@@ -38,7 +38,7 @@ impl Map {
         let path = std::path::PathBuf::from(pack_dir);
         let map = if let Some(fmt_str) = format {
             let fmt = openmander_core::PackFormat::from_str(fmt_str)
-                .map_err(|e| PyValueError::new_err(format!("Invalid format: {}. Expected 'parquet' or 'json'", e)))?;
+                .map_err(|e| PyValueError::new_err(format!("Invalid format: {}. Expected 'parquet' or 'pmtiles'", e)))?;
             let src = openmander_core::DiskPack::new(&path);
             openmander_core::Map::read_from_pack_source(&src, fmt)
                 .map_err(|e| PyValueError::new_err(e.to_string()))?
@@ -63,7 +63,7 @@ impl Map {
         let path = std::path::PathBuf::from(pack_dir);
         if let Some(fmt_str) = format {
             let fmt = openmander_core::PackFormat::from_str(fmt_str)
-                .map_err(|e| PyValueError::new_err(format!("Invalid format: {}. Expected 'parquet' or 'json'", e)))?;
+                .map_err(|e| PyValueError::new_err(format!("Invalid format: {}. Expected 'parquet' or 'pmtiles'", e)))?;
             self.inner.write_to_pack_with_format(&path, fmt)
                 .map_err(|e| PyValueError::new_err(e.to_string()))?;
         } else {

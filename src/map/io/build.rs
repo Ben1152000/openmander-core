@@ -491,6 +491,7 @@ impl Map {
         util::require_dir_exists(input_dir)?;
 
         let mut map = Self::default();
+        map.state_abbr = Some(state_code.to_ascii_uppercase());
         let mut build_data: HashMap<GeoType, BuildLayerData> = HashMap::new();
 
         macro_rules! load_layer {

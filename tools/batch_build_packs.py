@@ -30,6 +30,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from build_pack import build_pack_for_state
 
+# Mirrors DATA_DIR / APP_DIR from build_pack.py / Makefile
+DATA_DIR = Path(__file__).parent.parent
+APP_DIR  = DATA_DIR.parent / "openmander-app"
+
 DEFAULT_STATE_CODES = [
     "AL", "AZ", "AR",       "CO", "CT", "DE", "FL", "GA", "ID",
     "IL", "IN", "IA", "KS", "KY", "LA",       "MD", "MA", "MI",
@@ -79,6 +83,12 @@ def main():
         rebuild="--force" in flags or "-f" in flags,
         split_size_mb=split_size_mb,
     )
+
+    # Create the public/packs symlink in openmander-app if it doesn't exist yet.
+    symlink_path = APP_DIR / "public" / "packs"
+    if APP_DIR.exists() and not symlink_path.exists():
+        symlink_path.symlink_to(DATA_DIR / "packs")
+        print(f"Created symlink: {symlink_path} -> {DATA_DIR / 'packs'}")
 
     print(f"Building {len(state_codes)} state(s) with up to {max_workers} workers")
     print(f"States: {', '.join(state_codes)}")

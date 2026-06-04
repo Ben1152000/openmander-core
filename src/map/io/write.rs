@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     map::{GeoType, Map, MapLayer, util},
-    map::pack::{DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats},
+    map::pack::{Bounds, DiskPack, FileHash, Manifest, PackSink, PackFormat, PackFormats},
 };
 #[cfg(feature = "pmtiles")]
 use crate::io::pmtiles::{PmtilesLayer, write_to_pmtiles_bytes};
@@ -88,6 +88,57 @@ impl MapLayer {
 }
 
 impl Map {
+    /// Look up the full state name and FIPS code from `state_abbr`, if set.
+    fn state_name_and_fips(&self) -> (Option<String>, Option<String>) {
+        let Some(abbr) = &self.state_abbr else { return (None, None) };
+        let name = util::state_abbr_to_name(abbr).map(|s| s.to_string());
+        let fips = util::state_abbr_to_fips(abbr).map(|s| s.to_string());
+        (name, fips)
+    }
+
+    /// Compute the bounding box from the state layer geometry.
+    ///
+    /// Handles antimeridian-crossing states (e.g. Alaska): if the naive longitude
+    /// spread exceeds 180°, positive longitudes are normalized by subtracting 360°
+    /// so they become values west of -180° (e.g. 173°E → -187°). MapLibre's
+    /// fitBounds accepts out-of-range longitudes and handles this correctly.
+    pub(crate) fn compute_bounds(&self) -> Option<Bounds> {
+        let state_layer = self.layers_iter().find(|l| l.ty() == GeoType::State)?;
+        let mut lons: Vec<f64> = Vec::new();
+        let mut min_lat = f64::INFINITY;
+        let mut max_lat = f64::NEG_INFINITY;
+
+        for unit in state_layer.region.unit_ids() {
+            for poly in &state_layer.region.geometry(unit).0 {
+                for coord in poly.exterior().coords() {
+                    if coord.x.is_finite() && coord.y.is_finite() {
+                        lons.push(coord.x);
+                        min_lat = min_lat.min(coord.y);
+                        max_lat = max_lat.max(coord.y);
+                    }
+                }
+            }
+        }
+
+        if lons.is_empty() { return None; }
+
+        let mut min_lon = lons.iter().cloned().fold(f64::INFINITY, f64::min);
+        let mut max_lon = lons.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+        // Antimeridian correction: a spread > 180° indicates the state crosses
+        // the antimeridian. Normalize by shifting positive longitudes west of -180°.
+        if max_lon - min_lon > 180.0 {
+            for lon in &mut lons {
+                if *lon > 0.0 { *lon -= 360.0; }
+            }
+            min_lon = lons.iter().cloned().fold(f64::INFINITY, f64::min);
+            max_lon = lons.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        }
+
+        let r = |v: f64| (v * 1e12).round() / 1e12;
+        Some(Bounds { west: r(min_lon), south: r(min_lat), east: r(max_lon), north: r(max_lat) })
+    }
+
     /// Write pack to disk directory using the default format.
     pub fn write_to_pack(&self, path: &Path) -> Result<()> {
         self.write_to_pack_with_format(path, PackFormat::default())
@@ -131,7 +182,8 @@ impl Map {
             layer.write_to_pack_sink_with_formats(sink, &formats, &mut counts, &mut file_hashes)?;
         }
 
-        let manifest = Manifest::new(pack_root_for_manifest, counts, file_hashes, formats);
+        let (name, fips) = self.state_name_and_fips();
+        let manifest = Manifest::new(pack_root_for_manifest, counts, file_hashes, formats, self.compute_bounds(), name, fips);
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
         sink.put("manifest.json", &manifest_bytes)?;
 
@@ -215,11 +267,10 @@ impl Map {
             };
             eprintln!(
                 "[write_pack] state extends {desc} \
-                 — capping PMTiles max zoom to {HIGH_LAT_MAX_ZOOM} and raising min zoom by 2 for all layers"
+                 — capping PMTiles max zoom to {HIGH_LAT_MAX_ZOOM} for all layers"
             );
             for layer in pmtiles_layers.iter_mut() {
                 layer.max_zoom = layer.max_zoom.min(HIGH_LAT_MAX_ZOOM);
-                layer.min_zoom = (layer.min_zoom + 2).max(4);
             }
         }
 
@@ -230,11 +281,15 @@ impl Map {
             file_hashes.insert(geom_file.to_string(), FileHash { sha256: sha256_bytes(&geom_bytes) });
         }
 
+        let (name, fips) = self.state_name_and_fips();
         let manifest = Manifest::new(
             pack_root_for_manifest,
             (*counts).clone(),
             (*file_hashes).clone(),
             (*formats).clone(),
+            self.compute_bounds(),
+            name,
+            fips,
         );
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
         sink.put("manifest.json", &manifest_bytes)?;

@@ -7,7 +7,7 @@ mod pack;
 mod source;
 
 pub use format::PackFormat;
-pub(crate) use manifest::{FileHash, Manifest, PackFormats};
+pub(crate) use manifest::{Bounds, FileHash, Manifest, PackFormats};
 pub use pack::validate_pack;
 pub use source::{PackSource, PackSink, DiskPack, MemPack};
 

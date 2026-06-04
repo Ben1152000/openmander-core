@@ -2,8 +2,7 @@
 """
 Build a state pack, convert it to PMTiles (webpack) format, and optionally copy it to the app.
 
-Downloads census data if needed, builds the parquet pack, converts to PMTiles,
-then copies the webpack into openmander-app/public/packs/.
+Downloads census data if needed, builds the parquet pack, then converts to PMTiles.
 
 Requires openmander to be installed in the current Python environment.
 
@@ -24,7 +23,6 @@ import shutil
 import sys
 import traceback
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
 
 import openmander
 
@@ -32,38 +30,6 @@ import openmander
 DATA_DIR = Path(__file__).parent.parent
 
 CHUNK_SIZE = 50 * 1024 * 1024  # 50 MiB
-
-
-def zip_pack(pack_dir: Path) -> Path:
-    """Zip pack_dir to pack_dir.zip (same location) and return the zip path."""
-    out_zip = pack_dir.parent / f"{pack_dir.name}.zip"
-    with ZipFile(out_zip, "w", compression=ZIP_DEFLATED, compresslevel=9) as zf:
-        for p in pack_dir.rglob("*"):
-            if p.is_file():
-                zf.write(p, Path(pack_dir.name) / p.relative_to(pack_dir))
-    return out_zip
-
-
-def update_repo_manifest(state_code: str, zip_path: Path) -> None:
-    """Update packs/manifest.json with the zip's path, sha256, and size."""
-    manifest_path = DATA_DIR / "packs" / "manifest.json"
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
-
-    h = hashlib.sha256()
-    with zip_path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-
-    version_key = f"{state_code}_2020"
-    manifest.setdefault(state_code, {})
-    manifest[state_code][version_key] = {
-        "path": f"{state_code}/{zip_path.name}",
-        "sha256": h.hexdigest(),
-        "size": zip_path.stat().st_size,
-    }
-
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
 def split_large_files(pack_dir: Path, chunk_size: int = CHUNK_SIZE) -> None:
@@ -146,14 +112,6 @@ def build_pack_for_state(
     else:
         print(f"\n[Step 1] Using existing pack: {original_pack_dir}")
 
-    # Step 1b: Zip the parquet pack and update packs/manifest.json
-    zip_path = state_dir / f"{state_code}_2020_pack.zip"
-    print(f"\n[Step 1b] Zipping pack -> {zip_path.name}...")
-    zip_path = zip_pack(original_pack_dir)
-    print(f"  Created {zip_path} ({zip_path.stat().st_size / 1024 / 1024:.1f} MiB)")
-    update_repo_manifest(state_code, zip_path)
-    print(f"  Updated packs/manifest.json")
-
     # Step 2: Convert parquet -> PMTiles
     pmtiles_pack_dir = state_dir / f"{state_code}_2020_webpack"
     print(f"\n[Step 2] Converting parquet -> PMTiles...")
@@ -169,10 +127,10 @@ def build_pack_for_state(
     print(f"  Verified PMTiles pack loads correctly")
 
     if do_split:
-        print(f"\n[Step 2b] Splitting large files (>{split_size_mb} MiB)...")
+        print(f"\n[Step 3] Splitting large files (>{split_size_mb} MiB)...")
         split_large_files(pmtiles_pack_dir, chunk_size)
     else:
-        print(f"\n[Step 2b] Skipping file splitting (--no-split)")
+        print(f"\n[Step 3] Skipping file splitting (--no-split)")
 
     print("\n" + "=" * 60)
     print(f"Done! Webpack written to: {pmtiles_pack_dir}")

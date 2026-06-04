@@ -36,13 +36,30 @@ impl PackFormats {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub(crate) struct Bounds {
+    pub west:  f64,
+    pub south: f64,
+    pub east:  f64,
+    pub north: f64,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Manifest {
     pack_id: String,
+    /// Full state name, e.g. "Colorado".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    /// Two-digit FIPS code, e.g. "08".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fips: Option<String>,
     version: String,
     crs: String,
     #[serde(default)]
     formats: PackFormats,
+    /// Bounding box in WGS84 degrees, derived from the state layer geometry at pack-build time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bounds: Option<Bounds>,
     levels: Vec<String>,
     counts: BTreeMap<String, usize>,
     files: BTreeMap<String, FileHash>,
@@ -54,18 +71,24 @@ impl Manifest {
         counts: BTreeMap<&'static str, usize>,
         files: BTreeMap<String, FileHash>,
         formats: PackFormats,
+        bounds: Option<Bounds>,
+        name: Option<String>,
+        fips: Option<String>,
     ) -> Self {
         Self {
             pack_id: path.file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown-pack")
                 .to_string(),
+            name,
+            fips,
             version: "2".into(),
             crs: "EPSG:4269".into(),
+            formats,
+            bounds,
             levels: GeoType::ALL.iter().map(|ty| ty.to_str().into()).collect(),
             counts: counts.into_iter().map(|(k, v)| (k.into(), v)).collect(),
             files,
-            formats,
         }
     }
 

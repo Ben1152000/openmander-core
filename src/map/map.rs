@@ -15,6 +15,7 @@ pub struct GeometryStats {
 #[derive(Debug, Default)]
 pub struct Map {
     layers: [Option<MapLayer>; GeoType::COUNT],
+    pub(crate) state_abbr: Option<String>,
 }
 
 impl Map {

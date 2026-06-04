@@ -45,7 +45,6 @@ pub(crate) fn extract_zip(zip_path: &Path, dest_dir: &Path, delete_after: bool) 
 }
 
 /// Two-letter postal code → full state name
-#[cfg(feature = "download")]
 pub(crate) fn state_abbr_to_name(state: &str) -> Option<&'static str> {
     match state {
         "AL" => Some("Alabama"),
@@ -105,7 +104,6 @@ pub(crate) fn state_abbr_to_name(state: &str) -> Option<&'static str> {
 }
 
 /// Two-letter postal code → FIPS code
-#[cfg(feature = "download")]
 pub(crate) fn state_abbr_to_fips(state: &str) -> Option<&'static str> {
     match state {
         "AL" => Some("01"),

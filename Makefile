@@ -27,6 +27,7 @@ VENV            ?= bindings/python/.venv
 BINDINGS_DIR    ?= bindings/python
 WASM_BINDINGS_DIR ?= bindings/wasm
 APP_DIR         ?= ../openmander-app
+PACKS_ROOT      ?= packs
 MODE            ?= release          # 'release' or 'dev'
 TARGET          ?=                  # e.g. universal2-apple-darwin, x86_64-apple-darwin, aarch64-apple-darwin
 WASM_TARGET     ?= web               # wasm-pack target: web, bundler, nodejs, no-modules
@@ -58,6 +59,7 @@ WASM_OUT        := $(WASM_BINDINGS_DIR)/pkg
 
 .PHONY: all venv python-deps python-dev python-wheel python-test python-otool \
         wasm wasm-copy wasm-clean \
+        packs-index \
         test clippy clippy-wasm openmander-test geograph geograph-test \
         clean clean-all print-vars help prepare-target check-wasm-pack
 
@@ -154,12 +156,22 @@ wasm: check-wasm-pack
 	cd $(WASM_BINDINGS_DIR) && \
 	$(WASM_PACK) build $(WASM_PROFILE) $(WASM_TARGET_FLAG) --out-dir pkg
 
-# Build WASM bindings and copy to openmander-app/wasm/pkg
-wasm-copy: wasm
+# Build WASM bindings and copy to openmander-app/wasm/pkg; also regenerate packs index
+wasm-copy: wasm packs-index
 	@echo "Copying WASM bindings to $(WASM_OUT_DIR)..."
 	@mkdir -p $(WASM_OUT_DIR)
 	@cp -r $(WASM_OUT)/* $(WASM_OUT_DIR)/
 	@echo "WASM bindings copied successfully!"
+
+# ============================================================================
+# Pack Index
+# ============================================================================
+
+# Generate packs.json from webpack pack manifests and copy to openmander-app/public/
+packs-index:
+	@echo "Generating packs.json..."
+	@$(PY) tools/generate_index.py $(PACKS_ROOT) $(APP_DIR)/public/packs.json
+	@echo "packs.json copied to $(APP_DIR)/public/"
 
 # Clean WASM build artifacts
 wasm-clean:
@@ -219,6 +231,9 @@ help:
 	@echo '  wasm               Build WASM bindings (MODE=release|dev, WASM_TARGET=web|bundler|nodejs|no-modules)'
 	@echo '  wasm-copy          Build WASM and copy to $(WASM_OUT_DIR)'
 	@echo '  wasm-clean         Remove WASM build artifacts'
+	@echo ''
+	@echo 'Pack Index:'
+	@echo '  packs-index        Generate packs.json and copy to $(APP_DIR)/public/ (PACKS_ROOT=...)'
 	@echo ''
 	@echo 'Common:'
 	@echo '  all                Build all bindings (Python + WASM with copy), runs clippy first'
